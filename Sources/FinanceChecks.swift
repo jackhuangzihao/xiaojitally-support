@@ -259,8 +259,8 @@ import SwiftData
         context.delete(task); try Store.save(context)
         try require(try FinanceStore.read(context) == value, "deleting task cannot cascade to entries")
         let old = value.entries[0]; var edit = old; edit.title = "Edited"
-        try FinanceStore.put(edit, expected: old, in: context)
-        try rejects("stale editor cannot overwrite newer entry") { try FinanceStore.put(old, expected: old, in: context) }
+        try FinanceStore.put(edit, expected: old, baseCurrency: "CNY", in: context)
+        try rejects("stale editor cannot overwrite newer entry") { try FinanceStore.put(old, expected: old, baseCurrency: "CNY", in: context) }
         let saved = try FinanceStore.read(context)
         try rejects("invalid update leaves stored ledger unchanged") { try FinanceStore.update(context) { $0.entries[0].amount = -100 } }
         try require(try FinanceStore.read(context) == saved, "validation fails before mutation")
@@ -895,6 +895,41 @@ import SwiftData
             UserDefaults.standard.set(cny.id.uuidString, forKey: "lastMoneyAccount")
             try require(ledger.entryDefaults(preferredBook: nil, preferredAccount: usd.id).account?.id == cny.id, "an explicit archived account cannot override an available remembered account")
         }
+        // Reporting-currency changes must not reinterpret posted amounts or saved budgets.
+        do {
+            var ledger = FinanceData.initial
+            try ledger.changeBaseCurrency(to: "USD", expected: "CNY")
+            try require(ledger.baseCurrency == "USD", "empty ledger permits reporting-currency change")
+            try rejects("stale currency picker cannot overwrite a newer selection") { try ledger.changeBaseCurrency(to: "AUD", expected: "CNY") }
+            let draft = MoneyBook(name: "Stale CNY budget", budget: 1000)
+            try rejects("stale new budget cannot become a USD budget") { try ledger.updateBook(draft, expected: nil, baseCurrency: "CNY") }
+            try require(!ledger.books.contains { $0.id == draft.id }, "rejected stale budget leaves books untouched")
+            var entry = MoneyEntry(); entry.title = "Stale posting"; entry.amount = 10; entry.baseAmount = 10
+            try rejects("stale entry cannot reinterpret its converted amount") { try ledger.updateEntry(entry, expected: nil, baseCurrency: "CNY") }
+            try require(ledger.entries.isEmpty, "rejected stale posting leaves entries untouched")
+            try ledger.updateBook(draft, expected: nil, baseCurrency: "USD")
+            let budgetLedger = ledger
+            try rejects("budget locks base currency even with no entries") { try ledger.changeBaseCurrency(to: "CNY", expected: "USD") }
+            try require(ledger == budgetLedger && ledger.books.last?.budget == 1000, "blocked currency change preserves budget denomination")
+            ledger.books[ledger.books.count - 1].archived = true
+            try require(!ledger.canChangeBaseCurrency, "archived budgets retain their reporting currency")
+            ledger.books[ledger.books.count - 1].budget = nil
+            try ledger.changeBaseCurrency(to: "CNY", expected: "USD")
+            try ledger.updateEntry(entry, expected: nil, baseCurrency: "CNY")
+            ledger.entries[0].deletedAt = Date()
+            try rejects("deleted entries still lock currency for safe restoration") { try ledger.changeBaseCurrency(to: "USD", expected: "CNY") }
+            var source = FinanceData.initial
+            source.accounts = [MoneyAccount(name: "USD", currency: "USD")]
+            entry.accountID = source.accounts[0].id
+            var updated = source; updated.accounts[0].currency = "AUD"
+            try rejects("external account currency change cannot reinterpret a draft's actual amount") { try updated.requireEntryCurrencies(entry, from: source) }
+            updated = source; updated.accounts[0].name = "Renamed"
+            try updated.requireEntryCurrencies(entry, from: source)
+            try require(updated.accounts[0].name == "Renamed", "unrelated account rename keeps draft amounts valid")
+            let before = try FinanceStore.read(context)
+            try rejects("shared update cannot bypass currency safety") { try FinanceStore.update(context) { $0.baseCurrency = "USD" } }
+            try require(try FinanceStore.read(context) == before, "rejected currency switch never changes stored bytes")
+        }
         // Net worth aggregates each original currency before conversion, and never hides missing quotes.
         do {
             var ledger = FinanceData.initial
@@ -924,6 +959,12 @@ import SwiftData
             var transfer = MoneyEntry(); transfer.title = "Exchange"; transfer.kind = .transfer; transfer.bookID = ledger.books[0].id
             transfer.currency = "USD"; transfer.accountID = dollar.id; transfer.amount = 1; transfer.accountAmount = 1; transfer.fee = Decimal(string: "0.1")!; transfer.baseFee = Decimal(string: "0.7")!
             transfer.destinationID = cash.id; transfer.destinationAmount = 7; ledger.entries = [transfer]; try ledger.validate()
+            let balances = ledger.accountBalances()
+            try require(ledger.accounts.allSatisfy { balances[$0.id] == ledger.balance($0.id) }, "one-pass asset balances match per-account history including transfers")
+            try require(ledger.assetSummary(accountBalances: balances).total == ledger.assetSummary().total, "shared balances preserve currency aggregation and rounding")
+            let selected = [cash, dollar]
+            var subset = ledger; subset.accounts = selected
+            try require(ledger.assetSummary(accountBalances: balances, accounts: selected).total == subset.assetSummary().total, "group subtotal uses shared balances without excluding transfer counterparts")
             try require(ledger.assetSummary().total == Decimal(string: "159.31") && ledger.assetSummary().balances["USD"] == Decimal(string: "8.9"), "asset balances include both transfer sides and source fee exactly once")
             ledger.entries[0].deletedAt = at
             try require(ledger.assetSummary().total == Decimal(string: "160.01"), "deleted transfer is excluded from both asset sides")
@@ -950,6 +991,11 @@ import SwiftData
             func date(_ day: Int) -> Date { calendar.date(from: DateComponents(year: 2026, month: 9, day: day, hour: 12))! }
             let now = date(27)
             let history = RateHistory(days: ["2026-09-25": ["EUR": 1, "USD": 2, "CNY": 14], "2026-09-28": ["EUR": 1, "USD": 2, "CNY": 18]], fetchedAt: now)
+            let narrow = RateHistory(days: ["2026-09-28": ["EUR": 1, "USD": 2, "CNY": 20]], fetchedAt: now.addingTimeInterval(60))
+            let merged = history.merging(narrow)
+            try require(merged.days["2026-09-25"] == history.days["2026-09-25"] && merged.days["2026-09-28"]?["CNY"] == 20, "short-range refresh keeps earlier rate coverage and replaces newer quotes")
+            try require(merged.merging(history) == merged, "late stale history cannot replace newer quote or freshness")
+            try require(history.merging(narrow) == narrow.merging(history), "concurrent history completion order has the same merged result")
             var lateCache = history
             lateCache.fetchedAt = calendar.date(bySettingHour: 23, minute: 0, second: 0, of: date(26))!
             let afterMidnight = calendar.date(bySettingHour: 0, minute: 10, second: 0, of: now)!
@@ -1029,4 +1075,30 @@ import SwiftData
         print("FINANCE PASS: \(checks) checks — accounts, books, transfers, refunds, FX, backup and persistence")
         return checks
     }
+    /// Compare the actual old asset-page scans with the shared snapshot. Never opens user data.
+    static func performance() throws {
+        var ledger = FinanceData.initial
+        ledger.accounts = (0..<100).map { MoneyAccount(name: "Account \($0)", opening: Decimal($0 * 100), archived: $0 % 9 == 0) }
+        ledger.entries = (0..<5000).map { index in
+            var entry = MoneyEntry(); entry.amount = 10; entry.accountAmount = 10; entry.baseAmount = 10
+            entry.accountID = ledger.accounts[index % 100].id
+            switch index % 5 {
+            case 0: entry.kind = .transfer; entry.destinationID = ledger.accounts[(index + 1) % 100].id; entry.destinationAmount = 10; entry.fee = 1
+            case 1: entry.kind = .income
+            case 2: entry.kind = .refund
+            case 3: entry.kind = .adjustment; entry.accountAmount = -10
+            default: break
+            }
+            if index % 7 == 0 { entry.deletedAt = Date() }
+            return entry
+        }
+        let start = ProcessInfo.processInfo.systemUptime
+        let expected = Dictionary(uniqueKeysWithValues: ledger.accounts.map { ($0.id, ledger.balance($0.id)) })
+        let scanned = ProcessInfo.processInfo.systemUptime
+        let balances = ledger.accountBalances()
+        let aggregated = ProcessInfo.processInfo.systemUptime
+        guard balances == expected else { throw TaskBackup.invalid("Asset aggregation differs from account history") }
+        print(String(format: "PERF assets 100 accounts / 5000 entries: repeated scans %.1f ms; one pass %.1f ms", (scanned - start) * 1000, (aggregated - scanned) * 1000))
+    }
+
 }

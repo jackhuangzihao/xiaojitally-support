@@ -832,15 +832,20 @@ enum Dates {
     }
 }
 
-/// A one-time, consistent SQLite snapshot before opening the cloud-ready local schema.
+/// A consistent SQLite snapshot before opening each new schema generation.
 /// SQLite's backup API includes committed WAL data even while another connection is open.
 /// This is a local rollback artifact, not a sync queue or a replacement for portable JSON backups.
 enum StoreUpgradeSnapshot {
-    static func prepare(_ source: URL) throws -> URL? {
+    // Bump for a persisted-schema change, not for every app build. Keep prior generations.
+    static let generation = "schema-v1"
+    static func prepare(_ source: URL, generation: String = StoreUpgradeSnapshot.generation) throws -> URL? {
+        guard !generation.isEmpty, generation.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 }) else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
         let files = FileManager.default
         guard files.fileExists(atPath: source.path) else { return nil }
         let directory = source.deletingLastPathComponent().appendingPathComponent("SchemaBackups", isDirectory: true)
-        let destination = directory.appendingPathComponent(source.lastPathComponent + ".before-feedback-v2.sqlite")
+        let destination = directory.appendingPathComponent(source.lastPathComponent + ".before-" + generation + ".sqlite")
         if files.fileExists(atPath: destination.path) { return destination }
         do {
             try files.createDirectory(at: directory, withIntermediateDirectories: true)

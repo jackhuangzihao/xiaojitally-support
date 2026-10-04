@@ -674,7 +674,6 @@ struct ContentView: View {
     @State private var showAllEarlier = false
     @State private var phoneOverdueExpanded = true
     @State private var undoDeletedIDs: [UUID] = []
-    @State private var collapsedSubtasks: Set<UUID> = []
     @State private var search = ""
     @State private var locatedTask: UUID?
     @State private var locateRequest = UUID()
@@ -1513,31 +1512,13 @@ struct ContentView: View {
               ExpandableNotes(notes: task.notes).padding(.leading, 44)
           }
           if !task.subtasks.isEmpty {
-              DisclosureGroup(isExpanded: Binding(get: { !collapsedSubtasks.contains(task.id) }, set: { expanded in
-                  if expanded { collapsedSubtasks.remove(task.id) } else { collapsedSubtasks.insert(task.id) }
-              })) {
-                  VStack(alignment: .leading, spacing: 0) {
-                      ForEach(task.subtasks) { subtask in
-                          Button {
-                              _ = commit {
-                                  var updated = task.subtasks
-                                  if let index = updated.firstIndex(where: { $0.id == subtask.id }) {
-                                      updated[index].isDone.toggle(); task.subtasks = updated
-                                  }
-                              }
-                          } label: {
-                              HStack(alignment: .top, spacing: 8) {
-                                  Image(systemName: subtask.isDone ? "checkmark.square.fill" : "square")
-                                      .foregroundStyle(subtask.isDone ? Color.accentColor : .secondary)
-                                  Text(subtask.title).strikethrough(subtask.isDone).multilineTextAlignment(.leading)
-                                      .foregroundStyle(subtask.isDone ? .secondary : .primary)
-                              }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                          }.buttonStyle(.plain).disabled(selection == .trash)
-                              .accessibilityLabel("\(subtask.isDone ? L("取消完成子任务", "Mark subtask incomplete") : L("完成子任务", "Complete subtask"))：\(subtask.title)")
+              RegularTaskSubtasks(task: task, disabled: selection == .trash) { id in
+                  _ = commit {
+                      var updated = task.subtasks
+                      if let index = updated.firstIndex(where: { $0.id == id }) {
+                          updated[index].isDone.toggle(); task.subtasks = updated
                       }
-                  }.padding(.top, 4)
-              } label: {
-                  Text(L("子任务 \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)", "Subtasks \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)")).font(.caption).foregroundStyle(.secondary)
+                  }
               }.padding(.leading, 44)
           }
         }.padding(.vertical, isPhone ? 4 : 10).padding(.bottom, isPhone ? 2 : 6).overlay(alignment: .bottom) { Rectangle().fill(.separator).frame(height: 1) }
@@ -2226,6 +2207,37 @@ private struct CalendarWeekTitleField: View {
             }
             .onChange(of: value) { _, value in if !focused && draft == original { draft = value; original = value } }
             .onDisappear { commit(); if syncPaused { syncPaused = false; CloudSync.shared.editing(false) } }
+    }
+}
+
+/// Expanding one row must not invalidate the root task query, groups or calendar.
+private struct RegularTaskSubtasks: View {
+    let task: TaskItem
+    let disabled: Bool
+    let toggle: (UUID) -> Void
+    @State private var expanded = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { value in
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) { expanded = value }
+        })) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(task.subtasks) { subtask in
+                    Button { toggle(subtask.id) } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: subtask.isDone ? "checkmark.square.fill" : "square")
+                                .foregroundStyle(subtask.isDone ? Color.accentColor : .secondary)
+                            Text(subtask.title).strikethrough(subtask.isDone).multilineTextAlignment(.leading)
+                                .foregroundStyle(subtask.isDone ? .secondary : .primary)
+                        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                    }.buttonStyle(.plain).disabled(disabled)
+                        .accessibilityLabel("\(subtask.isDone ? L("取消完成子任务", "Mark subtask incomplete") : L("完成子任务", "Complete subtask"))：\(subtask.title)")
+                }
+            }.padding(.top, 4)
+        } label: {
+            Text(L("子任务 \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)", "Subtasks \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)")).font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -3575,7 +3587,8 @@ struct TimelineDrop: DropDelegate {
         exit()
         guard provider.canLoadObject(ofClass: NSString.self) else { return false }
         _ = provider.loadObject(ofClass: NSString.self) { object, _ in
-            DispatchQueue.main.async { if let value = object as? String { receive(value, point) } else { exit() } }
+            let value = object as? String
+            DispatchQueue.main.async { if let value { receive(value, point) } else { exit() } }
         }
         return true
     }

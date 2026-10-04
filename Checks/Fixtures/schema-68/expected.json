@@ -1,0 +1,303 @@
+{
+  "createdAt" : 1791158400000,
+  "finance" : {
+    "accounts" : [
+      {
+        "archived" : false,
+        "bankName" : "Fixture Bank",
+        "currency" : "CNY",
+        "id" : "68000000-0000-4000-8000-000000000020",
+        "name" : "Fixture CNY account",
+        "opening" : 1000,
+        "type" : "debit"
+      },
+      {
+        "archived" : false,
+        "bankName" : "Fixture Bank",
+        "currency" : "USD",
+        "emoji" : "💳",
+        "id" : "68000000-0000-4000-8000-000000000021",
+        "name" : "Fixture USD account",
+        "opening" : 100,
+        "type" : "debit"
+      }
+    ],
+    "baseCurrency" : "CNY",
+    "books" : [
+      {
+        "archived" : false,
+        "budget" : 500,
+        "defaultAccountID" : "68000000-0000-4000-8000-000000000021",
+        "emoji" : "🏠",
+        "id" : "68000000-0000-4000-8000-000000000030",
+        "name" : "Fixture book"
+      }
+    ],
+    "categories" : [
+      {
+        "archived" : false,
+        "color" : "orange",
+        "id" : "68000000-0000-4000-8000-000000000040",
+        "income" : false,
+        "name" : "Fixture food",
+        "symbol" : "fork.knife"
+      },
+      {
+        "archived" : false,
+        "id" : "68000000-0000-4000-8000-000000000041",
+        "income" : false,
+        "name" : "Fixture coffee",
+        "parentID" : "68000000-0000-4000-8000-000000000040",
+        "symbol" : "cup.and.saucer"
+      }
+    ],
+    "entries" : [
+      {
+        "accountAmount" : 10,
+        "accountID" : "68000000-0000-4000-8000-000000000021",
+        "amount" : 10,
+        "baseAmount" : 71,
+        "bookID" : "68000000-0000-4000-8000-000000000030",
+        "categoryID" : "68000000-0000-4000-8000-000000000041",
+        "currency" : "USD",
+        "date" : 1791158400000,
+        "destinationAmount" : 0,
+        "fee" : 0,
+        "id" : "68000000-0000-4000-8000-000000000050",
+        "kind" : "expense",
+        "notes" : "Synthetic receipt",
+        "rateNote" : "Fixture posted rate",
+        "tags" : "fixture",
+        "taskID" : "68000000-0000-4000-8000-000000000010",
+        "title" : "Fixture purchase"
+      },
+      {
+        "accountAmount" : 2,
+        "accountID" : "68000000-0000-4000-8000-000000000021",
+        "amount" : 2,
+        "baseAmount" : 14.2,
+        "bookID" : "68000000-0000-4000-8000-000000000030",
+        "categoryID" : "68000000-0000-4000-8000-000000000041",
+        "currency" : "USD",
+        "date" : 1791162000000,
+        "destinationAmount" : 0,
+        "fee" : 0,
+        "id" : "68000000-0000-4000-8000-000000000051",
+        "kind" : "refund",
+        "notes" : "Synthetic receipt",
+        "rateNote" : "Fixture posted rate",
+        "refundOf" : "68000000-0000-4000-8000-000000000050",
+        "tags" : "fixture",
+        "taskID" : "68000000-0000-4000-8000-000000000010",
+        "title" : "Fixture refund"
+      },
+      {
+        "accountAmount" : 71,
+        "accountID" : "68000000-0000-4000-8000-000000000020",
+        "amount" : 71,
+        "baseFee" : 1,
+        "bookID" : "68000000-0000-4000-8000-000000000030",
+        "currency" : "CNY",
+        "date" : 1791158400000,
+        "destinationAmount" : 10,
+        "destinationID" : "68000000-0000-4000-8000-000000000021",
+        "fee" : 1,
+        "id" : "68000000-0000-4000-8000-000000000052",
+        "kind" : "transfer",
+        "notes" : "",
+        "rateNote" : "",
+        "tags" : "",
+        "title" : "Fixture transfer"
+      },
+      {
+        "accountAmount" : 5,
+        "accountID" : "68000000-0000-4000-8000-000000000021",
+        "amount" : 5,
+        "bookID" : "68000000-0000-4000-8000-000000000030",
+        "categoryID" : "68000000-0000-4000-8000-000000000041",
+        "currency" : "USD",
+        "date" : 1791158400000,
+        "destinationAmount" : 0,
+        "fee" : 0,
+        "id" : "68000000-0000-4000-8000-000000000053",
+        "kind" : "expense",
+        "notes" : "Synthetic receipt",
+        "rateNote" : "Fixture posted rate",
+        "tags" : "fixture",
+        "taskID" : "68000000-0000-4000-8000-000000000010",
+        "title" : "Fixture missing conversion"
+      },
+      {
+        "accountAmount" : 10,
+        "accountID" : "68000000-0000-4000-8000-000000000021",
+        "amount" : 10,
+        "baseAmount" : 71,
+        "bookID" : "68000000-0000-4000-8000-000000000030",
+        "categoryID" : "68000000-0000-4000-8000-000000000041",
+        "currency" : "USD",
+        "date" : 1791158400000,
+        "deletedAt" : 1791165600000,
+        "deletionBatchID" : "68000000-0000-4000-8000-000000000060",
+        "destinationAmount" : 0,
+        "fee" : 0,
+        "id" : "68000000-0000-4000-8000-000000000054",
+        "kind" : "expense",
+        "notes" : "Synthetic receipt",
+        "rateNote" : "Fixture posted rate",
+        "tags" : "fixture",
+        "taskID" : "68000000-0000-4000-8000-000000000010",
+        "title" : "Fixture deleted entry"
+      }
+    ],
+    "rates" : [
+      {
+        "base" : "USD",
+        "date" : "2026-10-05",
+        "fetchedAt" : 1791158400000,
+        "quote" : "CNY",
+        "rate" : 7.1,
+        "source" : "Manual"
+      }
+    ],
+    "version" : 1
+  },
+  "format" : "jianshi-backup",
+  "lists" : [
+    {
+      "colorHex" : "33AA66",
+      "createdAt" : 1791158400000,
+      "id" : "68000000-0000-4000-8000-000000000002",
+      "name" : "Fixture · Project",
+      "parentID" : "68000000-0000-4000-8000-000000000001",
+      "sortOrder" : 3
+    },
+    {
+      "colorHex" : "AA3344",
+      "createdAt" : 1791158400000,
+      "emoji" : "📚",
+      "id" : "68000000-0000-4000-8000-000000000001",
+      "name" : "Fixture · Work",
+      "sortOrder" : 2
+    },
+    {
+      "colorHex" : "4466AA",
+      "createdAt" : 1791158400000,
+      "id" : "68000000-0000-4000-8000-000000000003",
+      "name" : "Fixture · Home",
+      "sortOrder" : 4
+    }
+  ],
+  "tasks" : [
+    {
+      "createdAt" : 1791158400000,
+      "deletedAt" : 1791162000000,
+      "dueHasTime" : false,
+      "hasTime" : false,
+      "id" : "68000000-0000-4000-8000-000000000011",
+      "isDone" : false,
+      "listID" : "68000000-0000-4000-8000-000000000003",
+      "notes" : "",
+      "priority" : 0,
+      "reminderKind" : "legacy",
+      "reminderNeedsAttention" : false,
+      "repeatAnchorDay" : 0,
+      "repeatRule" : "none",
+      "scheduledAt" : 1791158400000,
+      "subtasks" : [
+
+      ],
+      "title" : "Fixture · deleted"
+    },
+    {
+      "createdAt" : 1791277200000,
+      "dueAt" : 1791288000000,
+      "dueHasTime" : true,
+      "endAt" : 1791280800000,
+      "hasTime" : true,
+      "id" : "27749841-CF28-61C5-5908-C442925A2716",
+      "isDone" : false,
+      "listID" : "68000000-0000-4000-8000-000000000002",
+      "notes" : "Synthetic 中文 note\nLine two",
+      "priority" : 2,
+      "reminderAt" : 1791276600000,
+      "reminderKind" : "tenMinutes",
+      "reminderNeedsAttention" : false,
+      "repeatAnchorDay" : 5,
+      "repeatRule" : "daily",
+      "repeatUntil" : 1791763200000,
+      "scheduledAt" : 1791277200000,
+      "subtasks" : [
+        {
+          "id" : "7B40696D-52D9-E918-AAAC-AC5146910F0A",
+          "isDone" : false,
+          "title" : "Fixture complete step"
+        },
+        {
+          "id" : "DE4E93BC-27E4-79B7-9986-B0BCF54FD099",
+          "isDone" : false,
+          "title" : "Fixture open step"
+        }
+      ],
+      "title" : "Fixture · scheduled repeat"
+    },
+    {
+      "createdAt" : 1791158400000,
+      "dueHasTime" : false,
+      "hasTime" : false,
+      "id" : "68000000-0000-4000-8000-000000000012",
+      "isDone" : false,
+      "listID" : "68000000-0000-4000-8000-000000000001",
+      "notes" : "",
+      "priority" : 0,
+      "reminderKind" : "legacy",
+      "reminderNeedsAttention" : false,
+      "repeatAnchorDay" : 0,
+      "repeatRule" : "none",
+      "subtasks" : [
+
+      ],
+      "title" : "Fixture · undated"
+    },
+    {
+      "completedAt" : 1791194400000,
+      "createdAt" : 1791158400000,
+      "dueAt" : 1791201600000,
+      "dueHasTime" : true,
+      "endAt" : 1791194400000,
+      "hasTime" : true,
+      "id" : "68000000-0000-4000-8000-000000000010",
+      "isDone" : true,
+      "listID" : "68000000-0000-4000-8000-000000000002",
+      "nextOccurrenceID" : "27749841-CF28-61C5-5908-C442925A2716",
+      "notes" : "Synthetic 中文 note\nLine two",
+      "priority" : 2,
+      "reminderAt" : 1791190200000,
+      "reminderKind" : "tenMinutes",
+      "reminderNeedsAttention" : false,
+      "repeatAnchorDay" : 5,
+      "repeatRule" : "daily",
+      "repeatUntil" : 1791763200000,
+      "scheduledAt" : 1791190800000,
+      "subtasks" : [
+        {
+          "id" : "68000000-0000-4000-8000-000000000100",
+          "isDone" : true,
+          "title" : "Fixture complete step"
+        },
+        {
+          "id" : "68000000-0000-4000-8000-000000000101",
+          "isDone" : false,
+          "title" : "Fixture open step"
+        }
+      ],
+      "title" : "Fixture · scheduled repeat"
+    }
+  ],
+  "version" : 7,
+  "weekTitles" : [
+    {
+      "title" : "Fixture week",
+      "week" : "2026-10-05"
+    }
+  ]
+}

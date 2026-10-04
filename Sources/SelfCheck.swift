@@ -871,6 +871,12 @@ import AppKit
             item.title = "Later edit"; try Store.save(context)
             try require(try StoreUpgradeSnapshot.prepare(url) == snapshot && Data(contentsOf: snapshot) == originalSnapshot,
                         "Subsequent opens retain the original pre-upgrade copy")
+            let nextSnapshot = try StoreUpgradeSnapshot.prepare(url, generation: "schema-next-check")!
+            let nextCopy = try Store.make(url: nextSnapshot)
+            try require(try nextCopy.mainContext.fetch(FetchDescriptor<TaskItem>()).first?.title == "Later edit",
+                        "A new schema generation captures the most recently committed data")
+            try require(nextSnapshot != snapshot && (try Data(contentsOf: snapshot)) == originalSnapshot,
+                        "New schema snapshots preserve earlier generations for recovery")
             context.delete(list); try Store.save(context)
             let reopened = try Store.make(url: url)
             let retained = try reopened.mainContext.fetch(FetchDescriptor<TaskItem>())
@@ -2274,6 +2280,31 @@ import AppKit
             _ = try StoreUpgradeSnapshot.prepare(source)
             let migrated = try Store.make(url: source)
             let before = try TaskBackup.capture(migrated.mainContext)
+            @MainActor func checkSyncState(_ context: ModelContext) throws {
+                let environment = ProcessInfo.processInfo.environment
+                guard let statePath = environment["JIANSHI_MIGRATION_CLOUD_STATE"],
+                      let baselinePath = environment["JIANSHI_MIGRATION_CLOUD_BASELINE"] else { return }
+                struct ExpectedState: Decodable {
+                    let enabled: Bool
+                    let account: String
+                    let lastSyncMilliseconds: Double
+                    let baselineSHA256: String
+                }
+                let expected = try JSONDecoder().decode(ExpectedState.self, from: Data(contentsOf: URL(fileURLWithPath: statePath)))
+                let baseline = try Data(contentsOf: URL(fileURLWithPath: baselinePath))
+                let states = try context.fetch(FetchDescriptor<CloudSyncState>())
+                try require(states.count == 1, "Frozen migration preserves exactly one sync state")
+                guard let state = states.first else { return }
+                let enabled = state.enabled, account = state.account
+                let lastSync = state.lastSync, savedBaseline = state.baseline
+                try require(enabled == expected.enabled && account == expected.account,
+                            "Frozen migration preserves sync consent and account binding")
+                try require(lastSync.map { abs($0.timeIntervalSince1970 * 1000 - expected.lastSyncMilliseconds) < 1 } == true,
+                            "Frozen migration preserves last successful sync time")
+                try require(savedBaseline == baseline && CloudMerge.digest(baseline) == expected.baselineSHA256,
+                            "Frozen migration preserves the exact conflict merge baseline")
+            }
+            try checkSyncState(migrated.mainContext)
             if let expectedPath = ProcessInfo.processInfo.environment["JIANSHI_MIGRATION_EXPECTED"] {
                 let expected = try TaskBackup.decode(Data(contentsOf: URL(fileURLWithPath: expectedPath)))
                 try require(try BackupFiles.contentData(before) == BackupFiles.contentData(expected),
@@ -2282,9 +2313,13 @@ import AppKit
             try Store.save(migrated.mainContext)
             let reopened = try Store.make(url: URL(fileURLWithPath: path))
             let after = try TaskBackup.capture(reopened.mainContext)
+            try require(try BackupFiles.contentData(before) == BackupFiles.contentData(after),
+                        "Frozen migration preserves task, list, week title and finance data after save and reopen")
+            try checkSyncState(reopened.mainContext)
             try require(Set(before.tasks.map(\.id)) == Set(after.tasks.map(\.id)) && Set(before.lists.map(\.id)) == Set(after.lists.map(\.id)), "Migration preserves all task and list identities")
             try require(Set(after.lists.compactMap { $0.colorHex?.uppercased() }).count == after.lists.count, "Migrated store has distinct list colors")
         }
+        checkCount += try EditingChecks.run()
         checkCount += try FinanceChecks.run()
         checkCount += try CloudMerge.check()
         print("PASS: \(checkCount) checks — calendar, boundaries, persistent reload, subtasks, edit, completion, deletion, restore, rollback")
@@ -2355,6 +2390,7 @@ import AppKit
                 guard try FinanceStore.read(context) == money else { throw TaskBackup.invalid("Cached ledger read changed entries") }
             }
         }
+        try FinanceChecks.performance()
         print("PERF PASS: 5000-task and 5000-entry save, layout, search, preview and backup restore")
     }
 }

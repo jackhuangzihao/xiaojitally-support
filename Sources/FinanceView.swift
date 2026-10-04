@@ -19,6 +19,37 @@ struct AppSectionPicker: View {
 
 // MARK: - Shared pieces
 
+/// Only the ranking reads this observable property during rendering. Opening a row
+/// doesn't recompute FinanceHome's charts, filtered entries or asset summaries.
+@Observable private final class MoneyRankingExpansion { var key: MoneyCategoryKey? }
+private struct MoneyRanking<Row: View, Detail: View>: View {
+    let rows: [MoneyCategoryTotal]
+    let expansion: MoneyRankingExpansion
+    @ViewBuilder var row: (MoneyCategoryTotal) -> Row
+    @ViewBuilder var detail: (MoneyCategoryTotal) -> Detail
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(L("点一个分类，看它每个月的变化", "Click a category to see it month by month")).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 8)
+            ForEach(rows) { item in
+                let open = expansion.key == item.id
+                MoneyHover { hovering in
+                    Button {
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { expansion.key = open ? nil : item.id }
+                    } label: {
+                        HStack(spacing: 12) {
+                            row(item)
+                            Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                        }.padding(.vertical, 8).padding(.horizontal, 10).contentShape(Rectangle())
+                            .background(RoundedRectangle(cornerRadius: 10).fill(hovering || open ? Color.primary.opacity(0.05) : .clear))
+                    }.buttonStyle(.plain)
+                }
+                if open { detail(item) }
+            }
+        }.background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.035)))
+    }
+}
+
 extension MoneyColor {
     static func color(_ key: String) -> Color {
         switch key {
@@ -436,11 +467,11 @@ struct FinanceHome: View {
     @AppStorage("moneyStatsCurrency") private var statsCurrencyRaw = ""
     @State private var entriesCurrencyRaw = ""
     @AppStorage("moneyStatsCalendar") private var statsCalendar = false
-    @State private var expandedKey: MoneyCategoryKey?
+    @State private var rankingExpansion = MoneyRankingExpansion()
     /// Where Statistics was when one of its bars, days or categories opened the entry list.
     private struct StatsPlace { var anchor: Date; var period: MoneyPeriod; var income: Bool; var expanded: MoneyCategoryKey?; var billRange: MoneyDateRange }
     @State private var statsReturn: StatsPlace?
-    @State private var rateHistory: RateHistory? = RateHistoryStore.cached
+    @State private var rateHistory: RateHistory?
     @State private var loadingRates = false
     @State private var refreshing = false
     @State private var rateRefreshError: String?
@@ -1203,7 +1234,7 @@ struct FinanceHome: View {
     }
     private func loadRates(since: Date, currency: String? = nil) async {
         guard (currency ?? statsCurrency) != data.baseCurrency else { return }
-        if rateHistory == nil { rateHistory = RateHistoryStore.cached }
+        if rateHistory == nil { rateHistory = await RateHistoryStore.cached }
         loadingRates = true
         if let history = try? await RateHistoryStore.load(since: since) { rateHistory = history }
         loadingRates = false
@@ -1426,11 +1457,11 @@ struct FinanceHome: View {
         }
     }
     private func rememberStats() {
-        statsReturn = StatsPlace(anchor: anchor, period: period, income: statsIncome, expanded: expandedKey, billRange: dateRange)
+        statsReturn = StatsPlace(anchor: anchor, period: period, income: statsIncome, expanded: rankingExpansion.key, billRange: dateRange)
     }
     private func backToStats(_ place: StatsPlace) {
         drilldown = nil; dateRange = place.billRange
-        anchor = place.anchor; period = place.period; statsIncome = place.income; expandedKey = place.expanded
+        anchor = place.anchor; period = place.period; statsIncome = place.income; rankingExpansion.key = place.expanded
         selection = "stats"
     }
     private func openBucket(_ date: Date, unit: Calendar.Component) {
@@ -1459,41 +1490,31 @@ struct FinanceHome: View {
         let top = rows.map { abs($0.total) }.max() ?? 1
         let sum = rows.map(\.total).filter { $0 > 0 }.reduce(0, +)
         let complete = rows.allSatisfy { $0.summary.complete }
-        return VStack(alignment: .leading, spacing: 2) {
-            Text(L("点一个分类，看它每个月的变化", "Click a category to see it month by month")).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 8)
-            ForEach(rows) { row in
-                let category: MoneyCategory? = { if case .category(let id) = row.id { return data.category(id) }; return nil }()
-                let tint = data.tint(category)
-                let open = expandedKey == row.id
-                MoneyHover { hovering in
-                Button { withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { expandedKey = open ? nil : row.id } } label: {
-                    HStack(spacing: 12) {
-                        MoneyIcon(symbol: category?.symbol ?? (row.id == .fees ? "arrow.left.arrow.right" : "tag"), emoji: category?.emoji, tint: tint, size: 32)
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 6) {
-                                Text(breakdownLabel(row.id))
-                                if complete && sum > 0 && row.total > 0 && !hidden { Text("\(Int((double(row.total / sum) * 100).rounded()))%").font(.caption).foregroundStyle(.secondary) }
-                                Text(L("\(row.count + row.missing) 笔", "\(row.count + row.missing)")).font(.caption).foregroundStyle(.tertiary)
-                                Spacer()
-                                Text(totalDisplay(row.summary, currency: statsCurrency, subtotal: true)).monospacedDigit().foregroundStyle(row.missing > 0 ? Color.orange : row.total < 0 ? .green : .primary)
-                            }
-                            if row.missing > 0 {
-                                Text(L("\(row.missing) 笔待折算", "\(row.missing) unconverted")).font(.caption).foregroundStyle(.orange)
-                            } else {
-                                MoneyBar(value: top > 0 ? double(abs(row.total) / top) : 0, tint: row.total < 0 ? .green : tint)
-                            }
-                        }
-                        Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                    }.padding(.vertical, 8).padding(.horizontal, 10).contentShape(Rectangle())
-                    .background(RoundedRectangle(cornerRadius: 10).fill(hovering || open ? Color.primary.opacity(0.05) : .clear))
-                }.buttonStyle(.plain)
-                }
-                if open {
-                    subcategoryRanking(row.id)
-                    categoryHistory(row.id, tint: tint)
+        return MoneyRanking(rows: rows, expansion: rankingExpansion) { row in
+            let category: MoneyCategory? = { if case .category(let id) = row.id { return data.category(id) }; return nil }()
+            let tint = data.tint(category)
+            HStack(spacing: 12) {
+                MoneyIcon(symbol: category?.symbol ?? (row.id == .fees ? "arrow.left.arrow.right" : "tag"), emoji: category?.emoji, tint: tint, size: 32)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text(breakdownLabel(row.id))
+                        if complete && sum > 0 && row.total > 0 && !hidden { Text("\(Int((double(row.total / sum) * 100).rounded()))%").font(.caption).foregroundStyle(.secondary) }
+                        Text(L("\(row.count + row.missing) 笔", "\(row.count + row.missing)")).font(.caption).foregroundStyle(.tertiary)
+                        Spacer()
+                        Text(totalDisplay(row.summary, currency: statsCurrency, subtotal: true)).monospacedDigit().foregroundStyle(row.missing > 0 ? Color.orange : row.total < 0 ? .green : .primary)
+                    }
+                    if row.missing > 0 {
+                        Text(L("\(row.missing) 笔待折算", "\(row.missing) unconverted")).font(.caption).foregroundStyle(.orange)
+                    } else {
+                        MoneyBar(value: top > 0 ? double(abs(row.total) / top) : 0, tint: row.total < 0 ? .green : tint)
+                    }
                 }
             }
-        }.background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.035)))
+        } detail: { row in
+            let category: MoneyCategory? = { if case .category(let id) = row.id { return data.category(id) }; return nil }()
+            subcategoryRanking(row.id)
+            categoryHistory(row.id, tint: data.tint(category))
+        }
     }
     @ViewBuilder private func subcategoryRanking(_ key: MoneyCategoryKey) -> some View {
         if case .category(let id) = key, let id {
@@ -1601,7 +1622,8 @@ struct FinanceHome: View {
     private var assetCurrencies: [String] { Set(data.accounts.map(\.currency)).filter { $0 != "CNY" }.sorted() }
     private var selectedForeignCurrency: String? { assetCurrencies.contains(foreignCurrency) ? foreignCurrency : assetCurrencies.first }
     private var assetsPage: some View {
-        let summary = data.assetSummary(in: "CNY")
+        let balances = data.accountBalances()
+        let summary = data.assetSummary(in: "CNY", accountBalances: balances)
         let groups = MoneyAccountType.allCases.map { type in AccountGroup(type: type, accounts: data.accounts.filter { $0.resolvedType == type && !$0.archived }) }.filter { !$0.accounts.isEmpty }
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -1681,11 +1703,11 @@ struct FinanceHome: View {
                             Text(group.type.label).font(.subheadline.weight(.semibold))
                             Text("\(accounts.count)").font(.caption).foregroundStyle(.secondary)
                             Spacer()
-                            if let subtotal = subtotal(accounts) { Text(display(subtotal, "CNY")).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+                            if let subtotal = data.assetSummary(in: "CNY", accountBalances: balances, accounts: accounts).total { Text(display(subtotal, "CNY")).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
                         }.padding(.horizontal, 4)
                         VStack(spacing: 0) {
                             ForEach(accounts) { account in
-                                accountRow(account)
+                                accountRow(account, balance: balances[account.id, default: 0])
                                 if account.id != accounts.last?.id { Divider().padding(.leading, 58) }
                             }
                         }.background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
@@ -1693,7 +1715,7 @@ struct FinanceHome: View {
                 }
                 if data.accounts.contains(where: \.archived) {
                     DisclosureGroup(L("已归档账户", "Archived accounts"), isExpanded: $showArchivedAccounts) {
-                        VStack(spacing: 0) { ForEach(data.accounts.filter(\.archived)) { accountRow($0) } }
+                        VStack(spacing: 0) { ForEach(data.accounts.filter(\.archived)) { accountRow($0, balance: balances[$0.id, default: 0]) } }
                         Text(L("归档只隐藏入口，余额仍计入总资产。", "Archiving hides these accounts; their balances remain in net worth."))
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -1725,10 +1747,6 @@ struct FinanceHome: View {
             await updateAssetRates()
         }
     }
-    private func subtotal(_ accounts: [MoneyAccount]) -> Decimal? {
-        var subset = data; subset.accounts = accounts
-        return subset.assetSummary(in: "CNY").total
-    }
     private func rateLine(_ summary: MoneyAssetSummary) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if !summary.rateDates.isEmpty {
@@ -1758,8 +1776,7 @@ struct FinanceHome: View {
             }.font(.callout).frame(minHeight: compact ? 44 : 24)
         }
     }
-    private func accountRow(_ account: MoneyAccount) -> some View {
-        let balance = data.balance(account.id)
+    private func accountRow(_ account: MoneyAccount, balance: Decimal) -> some View {
         let foreign = account.currency != "CNY"
         return Button { showAccount(account.id) } label: {
             HStack(spacing: 12) {
@@ -1816,9 +1833,13 @@ struct FinanceHome: View {
             Section { categoryGrid(income: false) } header: { Text(L("支出分类", "Spending categories")) }
             Section { categoryGrid(income: true) } header: { Text(L("收入分类", "Income categories")) }
             Section {
-                Picker(L("统计币种", "Reporting currency"), selection: Binding(get: { data.baseCurrency }, set: { currency in mutate { $0.baseCurrency = currency } })) {
+                Picker(L("统计币种", "Reporting currency"), selection: Binding(get: { data.baseCurrency }, set: { currency in mutate { try $0.changeBaseCurrency(to: currency, expected: data.baseCurrency) } })) {
                     CurrencyPickerItems()
-                }.disabled(!data.entries.isEmpty)
+                }.disabled(!data.canChangeBaseCurrency)
+                if !data.canChangeBaseCurrency {
+                    Text(L("已有账单或预算，统计币种已锁定。预算可清空后重设；查看其他币种请使用统计页面的显示币种。", "Entries or budgets lock the reporting currency. Clear budgets before changing it, or choose a display currency in Statistics."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text(L("历史折算金额与预算使用此本位币。账单显示可跟随常用账户；资产总额折合人民币。", "Recorded conversions and budgets use this base currency. Entries can follow the default account; net worth is shown in CNY.")).font(.caption).foregroundStyle(.secondary)
             } header: { Text(L("统计币种", "Reporting currency")) }
             Section {
@@ -2185,7 +2206,7 @@ private struct FinanceConversionPreview: View {
         .frame(minWidth: 460, idealWidth: 540, minHeight: 460, idealHeight: 600)
         #endif
         .task {
-            var history = RateHistoryStore.cached
+            var history = await RateHistoryStore.cached
             let first = ledger.missingConversionEntries.map(\.date).filter { $0 <= Date() }.min()
             if let first {
                 do { history = try await RateHistoryStore.load(since: first) }
@@ -2314,6 +2335,7 @@ private struct FinanceRateEditor: View {
 
 struct EntityRequest: Identifiable { var id = UUID(); var kind: FinanceEntityKind; var existingID: UUID?; var income = false; var parentID: UUID? = nil }
 struct FinanceEntityDraft {
+    var original: FinanceData
     var kind: FinanceEntityKind
     var id: UUID?
     var name: String, currency: String, opening: String, symbol: String
@@ -2340,7 +2362,7 @@ struct FinanceEntityEditor: View {
     @FocusState private var textFocused: Bool
     let kind: FinanceEntityKind
     let id: UUID?
-    let original: FinanceData
+    @State private var original: FinanceData
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
@@ -2364,7 +2386,7 @@ struct FinanceEntityEditor: View {
     @State private var reconciliation: MoneyEntry?
     @State private var error: String?
     init(kind: FinanceEntityKind, id: UUID? = nil, income: Bool = false, parentID: UUID? = nil, data: FinanceData) {
-        self.kind = kind; self.id = id; original = data
+        self.kind = kind; self.id = id; _original = State(initialValue: data)
         let account = data.accounts.first { $0.id == id }, book = data.books.first { $0.id == id }, category = data.categories.first { $0.id == id }
         _name = State(initialValue: kind == .account ? account?.name ?? "" : kind == .book ? book?.name ?? "" : category?.label ?? "")
         _currency = State(initialValue: account?.currency ?? data.baseCurrency); _opening = State(initialValue: Money.text(account?.opening ?? 0))
@@ -2550,6 +2572,7 @@ struct FinanceEntityEditor: View {
         }
         .onAppear {
             if let kept = drafts.financeEntity, kept.kind == kind, kept.id == id {
+                original = kept.original
                 name = kept.name; currency = kept.currency; opening = kept.opening; symbol = kept.symbol; archived = kept.archived; accountID = kept.accountID
                 emoji = kept.emoji; bankName = kept.bankName; assetRate = kept.assetRate; parentID = kept.parentID; income = kept.income; if !kept.color.isEmpty { color = kept.color }; if !kept.type.isEmpty { type = kept.type }; budget = kept.budget
             }
@@ -2565,7 +2588,7 @@ struct FinanceEntityEditor: View {
         .modifier(CloudSyncEditingGuard())
     }
     private func keepEntityDraft() {
-        drafts.financeEntity = FinanceEntityDraft(kind: kind, id: id, name: name, currency: currency, opening: opening, symbol: symbol, archived: archived, accountID: accountID,
+        drafts.financeEntity = FinanceEntityDraft(original: original, kind: kind, id: id, name: name, currency: currency, opening: opening, symbol: symbol, archived: archived, accountID: accountID,
                                                   income: income, color: color, type: type, budget: budget, emoji: emoji, bankName: bankName, assetRate: assetRate, parentID: parentID)
     }
     private func remove() {
@@ -2607,10 +2630,8 @@ struct FinanceEntityEditor: View {
                         try data.setManualRate(from: currency, to: "CNY", text: rateText)
                     }
                 case .book:
-                    guard data.books.first(where: { $0.id == id }) == original.books.first(where: { $0.id == id }) else { throw TaskBackup.invalid(L("账本已改变，请重新打开。", "Book changed. Reopen it.")) }
-                    guard !data.books.contains(where: { $0.id != id && $0.name.caseInsensitiveCompare(title) == .orderedSame }) else { throw TaskBackup.invalid(L("账本名称已存在。", "Book name already exists.")) }
                     let value = MoneyBook(id: id ?? UUID(), name: title, defaultAccountID: accountID, archived: archived, budget: budgetValue, emoji: emoji.isEmpty ? nil : emoji, symbol: symbol.isEmpty ? nil : symbol)
-                    data.books.upsert(value)
+                    try data.updateBook(value, expected: original.books.first { $0.id == id }, baseCurrency: original.baseCurrency)
                 case .category:
                     let old = original.categories.first { $0.id == id }
                     // Preserve a built-in name's localization while its display label is unchanged.
@@ -2633,6 +2654,7 @@ struct EntryRequest: Identifiable {
 }
 
 struct FinanceDraft {
+    var ledger: FinanceData
     var entry: MoneyEntry
     var expected: MoneyEntry?
     var amount: String, actual: String, received: String, fee: String, converted: String, convertedFee: String
@@ -2755,6 +2777,9 @@ struct FinanceEntryEditor: View {
             Button(L("继续编辑", "Keep editing"), role: .cancel) {}
         }
         .task {
+            if !loaded, let kept = drafts.finance, kept.entry.id == draft.id {
+                ledger = kept.ledger; restoringDraft = true
+            }
             reload()
             if !loaded {
                 if let kept = drafts.finance, kept.entry.id == draft.id {
@@ -3259,7 +3284,14 @@ struct FinanceEntryEditor: View {
 
     // MARK: Data
 
-    private func reload() { do { ledger = try FinanceStore.read(context) ?? .initial } catch { self.error = error.localizedDescription } }
+    private func reload() {
+        do {
+            let current = try FinanceStore.read(context) ?? .initial
+            // Keep displayed conversion fields in the denomination they were entered in.
+            if loaded || restoringDraft { try current.requireEntryCurrencies(draft, from: ledger) }
+            ledger = current
+        } catch { self.error = error.localizedDescription }
+    }
     private func fillRates() {
         Task { await fetchAndFillRates() }
     }
@@ -3330,7 +3362,7 @@ struct FinanceEntryEditor: View {
         }
     }
     private func keepDraft() {
-        drafts.finance = FinanceDraft(entry: draft, expected: expected, amount: amount, actual: actual, received: received, fee: fee, converted: converted, convertedFee: convertedFee, balance: initialBalance, expression: expression)
+        drafts.finance = FinanceDraft(ledger: ledger, entry: draft, expected: expected, amount: amount, actual: actual, received: received, fee: fee, converted: converted, convertedFee: convertedFee, balance: initialBalance, expression: expression)
     }
     private func preparedEntry() throws -> MoneyEntry {
         guard !amount.isEmpty, (try? Money.parse(amount, currency: draft.currency, signed: signedAmount)).map({ $0 != 0 || draft.kind == .adjustment }) == true else {
@@ -3367,14 +3399,8 @@ struct FinanceEntryEditor: View {
             keepDraft()
             let e = try preparedEntry()
             try FinanceStore.update(context) { value in
-                guard value.entries.first(where: { $0.id == e.id }) == expected else { throw TaskBackup.invalid(L("账单已变化，请重新打开。", "Entry changed. Reopen it.")) }
-                // Account currency/archival changes are checked again at the save boundary.
-                try value.checkAccounts(for: e, replacing: expected)
-                guard value.baseCurrency == ledger.baseCurrency else { throw TaskBackup.invalid(L("本位币已改变，请重新打开。", "Base currency changed. Reopen the entry.")) }
-                value.entries.removeAll { $0.id == e.id }; value.entries.append(e)
-                if e.kind == .expense {
-                    for i in value.entries.indices where value.entries[i].refundOf == e.id { value.entries[i].bookID = e.bookID; value.entries[i].categoryID = e.categoryID }
-                }
+                try value.requireEntryCurrencies(e, from: ledger)
+                try value.updateEntry(e, expected: expected, baseCurrency: ledger.baseCurrency)
                 try value.mergeReferenceRates(rates)
             }
             if let id = e.bookID { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyBook") }

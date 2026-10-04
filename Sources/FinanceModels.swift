@@ -490,6 +490,52 @@ struct FinanceData: Codable, Equatable {
         let entries = selected.filter { $0.deletedAt == nil && $0.bookID.map(ids.contains) == true }
         return statisticsTotal(entries, income: false, in: baseCurrency, history: nil, days: nil)
     }
+    var canChangeBaseCurrency: Bool { entries.isEmpty && books.allSatisfy { $0.budget == nil } }
+    func requireBaseCurrency(_ expected: String) throws {
+        guard baseCurrency == expected else {
+            throw TaskBackup.invalid(L("统计币种已在其他窗口改变，请重新打开后编辑。", "The reporting currency changed in another window. Reopen this editor."))
+        }
+    }
+    mutating func changeBaseCurrency(to currency: String, expected: String) throws {
+        try requireBaseCurrency(expected)
+        guard currency != baseCurrency else { return }
+        guard Money.currencies.contains(currency), canChangeBaseCurrency else {
+            throw TaskBackup.invalid(L("已有账单或预算时不能直接更改统计币种。请先清除预算；已有账单可在统计页面切换显示币种。", "The reporting currency cannot change while entries or budgets exist. Clear budgets first; for existing entries, change the display currency in Statistics."))
+        }
+        baseCurrency = currency
+    }
+    mutating func updateBook(_ book: MoneyBook, expected: MoneyBook?, baseCurrency: String) throws {
+        try requireBaseCurrency(baseCurrency)
+        guard books.first(where: { $0.id == book.id }) == expected else { throw TaskBackup.invalid(L("账本已改变，请重新打开。", "Book changed. Reopen it.")) }
+        guard !books.contains(where: { $0.id != book.id && $0.name.caseInsensitiveCompare(book.name) == .orderedSame }) else { throw TaskBackup.invalid(L("账本名称已存在。", "Book name already exists.")) }
+        books.upsert(book)
+    }
+    func requireEntryCurrencies(_ entry: MoneyEntry, from original: FinanceData) throws {
+        try requireBaseCurrency(original.baseCurrency)
+        for id in [entry.accountID, entry.destinationID].compactMap({ $0 }) {
+            guard accounts.first(where: { $0.id == id })?.currency == original.accounts.first(where: { $0.id == id })?.currency else {
+                throw TaskBackup.invalid(L("账户币种已改变，请重新打开账单后输入金额。", "An account currency changed. Reopen the entry before entering its amounts."))
+            }
+        }
+    }
+    mutating func updateEntry(_ entry: MoneyEntry, expected: MoneyEntry?, baseCurrency: String) throws {
+        try requireBaseCurrency(baseCurrency)
+        guard entries.first(where: { $0.id == entry.id }) == expected else { throw TaskBackup.invalid(L("账单已在其他窗口修改。请重新打开再编辑。", "This entry changed in another window. Reopen it before editing.")) }
+        try checkAccounts(for: entry, replacing: expected)
+        entries.removeAll { $0.id == entry.id }; entries.append(entry)
+        if entry.kind == .expense {
+            for i in entries.indices where entries[i].refundOf == entry.id { entries[i].bookID = entry.bookID; entries[i].categoryID = entry.categoryID }
+        }
+    }
+    /// One pass for an entire asset page, including archived accounts and both transfer sides.
+    func accountBalances() -> [UUID: Decimal] {
+        var balances = Dictionary(accounts.map { ($0.id, $0.opening) }, uniquingKeysWith: { first, _ in first })
+        for entry in entries where entry.deletedAt == nil {
+            if let id = entry.accountID, balances[id] != nil { balances[id, default: 0] += entry.accountChange(for: id) }
+            if let id = entry.destinationID, id != entry.accountID, balances[id] != nil { balances[id, default: 0] += entry.accountChange(for: id) }
+        }
+        return balances
+    }
     func balance(_ id: UUID, before date: Date? = nil) -> Decimal {
         guard let account = accounts.first(where: { $0.id == id }) else { return 0 }
         return entries.filter { $0.deletedAt == nil && (date == nil || $0.date < date!) }
@@ -606,14 +652,10 @@ struct FinanceData: Codable, Equatable {
         if selected.base != from { selected.base = from; selected.quote = to; selected.rate = 1 / selected.rate }
         return selected
     }
-    func assetSummary(in currency: String = "CNY") -> MoneyAssetSummary {
+    func assetSummary(in currency: String = "CNY", accountBalances: [UUID: Decimal]? = nil, accounts selectedAccounts: [MoneyAccount]? = nil) -> MoneyAssetSummary {
         var result = MoneyAssetSummary()
-        let accountMap = Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for account in accounts { result.balances[account.currency, default: 0] += account.opening }
-        for entry in entries where entry.deletedAt == nil {
-            if let id = entry.accountID, let account = accountMap[id] { result.balances[account.currency, default: 0] += entry.accountChange(for: id) }
-            if let id = entry.destinationID, id != entry.accountID, let account = accountMap[id] { result.balances[account.currency, default: 0] += entry.accountChange(for: id) }
-        }
+        let balances = accountBalances ?? self.accountBalances()
+        for account in selectedAccounts ?? accounts { result.balances[account.currency, default: 0] += balances[account.id, default: 0] }
         for (original, amount) in result.balances {
             if original == currency { result.convertedSubtotal += amount; continue }
             if amount == 0 { continue }
@@ -858,21 +900,16 @@ struct FinanceData: Codable, Equatable {
     static func update(_ context: ModelContext, _ change: (inout FinanceData) throws -> Void) throws {
         try Store.recovery.requireWritable(context)
         var value = try read(context) ?? .initial
-        try change(&value); try stage(value, in: context); try Store.save(context)
-    }
-    static func put(_ entry: MoneyEntry, expected: MoneyEntry?, in context: ModelContext) throws {
-        try update(context) { value in
-            let current = value.entries.first { $0.id == entry.id }
-            guard current == expected else { throw TaskBackup.invalid(L("账单已在其他窗口修改。请重新打开再编辑。", "This entry changed in another window. Reopen it before editing.")) }
-            try value.checkAccounts(for: entry, replacing: expected)
-            value.entries.removeAll { $0.id == entry.id }; value.entries.append(entry)
-            // Moving a purchase between books is only reclassification; refunds follow without another debit.
-            if entry.kind == .expense {
-                for i in value.entries.indices where value.entries[i].refundOf == entry.id {
-                    value.entries[i].bookID = entry.bookID; value.entries[i].categoryID = entry.categoryID
-                }
-            }
+        let original = value
+        try change(&value)
+        if original.baseCurrency != value.baseCurrency {
+            var check = original
+            try check.changeBaseCurrency(to: value.baseCurrency, expected: original.baseCurrency)
         }
+        try stage(value, in: context); try Store.save(context)
+    }
+    static func put(_ entry: MoneyEntry, expected: MoneyEntry?, baseCurrency: String, in context: ModelContext) throws {
+        try update(context) { try $0.updateEntry(entry, expected: expected, baseCurrency: baseCurrency) }
     }
 }
 
@@ -928,7 +965,7 @@ enum ExchangeRates {
     }
 }
 /// Daily ECB reference rates (per euro), so reports can convert each entry at the rate of its own day.
-struct RateHistory: Codable, Equatable {
+struct RateHistory: Codable, Equatable, Sendable {
     var days: [String: [String: Decimal]] = [:] // "yyyy-MM-dd" → currency → units per euro
     var fetchedAt = Date.distantPast
     var sortedDays: [String] { days.keys.sorted() }
@@ -950,6 +987,11 @@ struct RateHistory: Codable, Equatable {
         guard let found, let values = days[found], let a = values[from], let b = values[to], a > 0 else { return nil }
         return (b / a, found)
     }
+    /// A recent short-range request must not discard older coverage or replace newer quotes.
+    func merging(_ incoming: Self) -> Self {
+        let preferIncoming = incoming.fetchedAt >= fetchedAt
+        return Self(days: days.merging(incoming.days) { preferIncoming ? $1 : $0 }, fetchedAt: max(fetchedAt, incoming.fetchedAt))
+    }
     static func parse(_ data: Data, since: String) throws -> Self {
         let delegate = ECBRatesParser(limit: "9999-12-31"), parser = XMLParser(data: data)
         parser.shouldResolveExternalEntities = false; parser.delegate = delegate
@@ -962,36 +1004,56 @@ struct RateHistory: Codable, Equatable {
 }
 
 /// Downloads daily rates once and keeps them on disk; rates are public data, nothing about the ledger is sent.
-@MainActor enum RateHistoryStore {
-    private static var memory: RateHistory?
-    private static var file: URL? {
+actor RateHistoryStore {
+    private static let shared = RateHistoryStore()
+    private var memory: RateHistory?
+    private var diskLoaded = false
+    private var inFlight: (id: UUID, start: String, task: Task<RateHistory, Error>)?
+    private var file: URL? {
         try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("JianshiRates", isDirectory: true).appendingPathComponent("ecb-daily.json")
     }
-    static var cached: RateHistory? {
-        if let memory { return memory }
-        guard let file, let data = try? Data(contentsOf: file), let value = try? JSONDecoder().decode(RateHistory.self, from: data) else { return nil }
-        memory = value; return value
+    static var cached: RateHistory? { get async { await shared.readCache() } }
+    private func readCache() -> RateHistory? {
+        guard !diskLoaded else { return memory }
+        diskLoaded = true
+        if let file, let data = try? Data(contentsOf: file) { memory = try? JSONDecoder().decode(RateHistory.self, from: data) }
+        return memory
     }
-    /// Covers `since` through today; refreshes at most every few hours. Throws only when nothing usable exists.
-    static func load(since: Date) async throws -> RateHistory {
+    static func load(since: Date) async throws -> RateHistory { try await shared.history(since: since) }
+    /// Actor serialization keeps file IO and JSON work off the UI thread and orders writes.
+    /// Concurrent callers share a download; a wider request follows a narrower one only when needed.
+    private func history(since: Date) async throws -> RateHistory {
         let start = ExchangeRates.dayString(since)
-        if let cached, cached.isFresh(since: start) { return cached }
-        do {
-            let archive = since < Date().addingTimeInterval(-80 * 86400) ? "eurofxref-hist.xml" : "eurofxref-hist-90d.xml"
-            var request = URLRequest(url: URL(string: "https://www.ecb.europa.eu/stats/eurofxref/" + archive)!); request.timeoutInterval = 30
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 40_000_000 else { throw URLError(.badServerResponse) }
-            let value = try await Task.detached(priority: .utility) { try RateHistory.parse(data, since: start) }.value
-            memory = value
-            if let file {
-                try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? JSONEncoder().encode(value).write(to: file, options: .atomic)
+        if let cached = readCache(), cached.isFresh(since: start) { return cached }
+        while true {
+            if inFlight == nil {
+                inFlight = (UUID(), start, Task {
+                    let archive = since < Date().addingTimeInterval(-80 * 86400) ? "eurofxref-hist.xml" : "eurofxref-hist-90d.xml"
+                    var request = URLRequest(url: URL(string: "https://www.ecb.europa.eu/stats/eurofxref/" + archive)!); request.timeoutInterval = 30
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 40_000_000 else { throw URLError(.badServerResponse) }
+                    return try RateHistory.parse(data, since: start)
+                })
             }
-            return value
-        } catch {
-            if let cached { return cached }
-            throw error
+            let pending = inFlight!
+            do {
+                let value = try await pending.task.value
+                if inFlight?.id == pending.id {
+                    let merged = memory?.merging(value) ?? value
+                    memory = merged; inFlight = nil
+                    if let file {
+                        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try? JSONEncoder().encode(merged).write(to: file, options: .atomic)
+                    }
+                }
+                if pending.start <= start { return memory ?? value }
+                if let memory, memory.isFresh(since: start) { return memory }
+            } catch {
+                if inFlight?.id == pending.id { inFlight = nil }
+                if let memory { return memory }
+                throw error
+            }
         }
     }
 }

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B69000000000000000000001 /* EditingChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = B69000000000000000000002 /* EditingChecks.swift */; };
 		B62000000000000000000001 /* DayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B62000000000000000000002 /* DayTimeline.swift */; };
 		B10000000000000000000001 /* CloudSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* CloudSync.swift */; };
 		00000000000000000000000A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000008 /* Assets.xcassets */; };
@@ -26,6 +27,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		B69000000000000000000002 /* EditingChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditingChecks.swift; sourceTree = "<group>"; };
 		B62000000000000000000002 /* DayTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DayTimeline.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* CloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSync.swift; sourceTree = "<group>"; };
 		000000000000000000000006 /* 小记.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = "小记.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -68,6 +70,7 @@
 				000000000000000000000065 /* JianshiApp.swift */,
 				000000000000000000000066 /* Models.swift */,
 				000000000000000000000067 /* SelfCheck.swift */,
+				B69000000000000000000002 /* EditingChecks.swift */,
 				000000000000000000000068 /* TaskEditor.swift */,
 				0000000000000000000001F5 /* WidgetShared.swift */,
 				0000000000000000000001F6 /* WidgetBridge.swift */,
@@ -182,6 +185,7 @@
 				0000000000000000000000C9 /* JianshiApp.swift in Sources */,
 				0000000000000000000000CA /* Models.swift in Sources */,
 				0000000000000000000000CB /* SelfCheck.swift in Sources */,
+				B69000000000000000000001 /* EditingChecks.swift in Sources */,
 				0000000000000000000000CC /* TaskEditor.swift in Sources */,
 				0000000000000000000001FF /* WidgetShared.swift in Sources */,
 				000000000000000000000200 /* WidgetBridge.swift in Sources */,
@@ -210,6 +214,8 @@
 				SDKROOT = auto;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_INFER_SENDABLE_FROM_CAPTURES = YES;
 			};
 			name = Debug;
 		};
@@ -222,6 +228,8 @@
 				SDKROOT = auto;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_INFER_SENDABLE_FROM_CAPTURES = YES;
 			};
 			name = Release;
 		};
@@ -233,7 +241,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -267,7 +275,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -320,6 +328,8 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) JIANSHI_WIDGETS";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_INFER_SENDABLE_FROM_CAPTURES = YES;
 			};
 			name = Debug;
 		};
@@ -349,6 +359,8 @@
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) JIANSHI_WIDGETS";
 				SWIFT_VERSION = 5.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_INFER_SENDABLE_FROM_CAPTURES = YES;
 			};
 			name = Release;
 		};
@@ -361,6 +373,8 @@
 				SDKROOT = auto;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_INFER_SENDABLE_FROM_CAPTURES = YES;
 			};
 			name = AppStore;
 		};
@@ -373,7 +387,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiStore.entitlements;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
@@ -427,6 +441,8 @@
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) JIANSHI_WIDGETS";
 				SWIFT_VERSION = 5.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_INFER_SENDABLE_FROM_CAPTURES = YES;
 			};
 			name = AppStore;
 		};

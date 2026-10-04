@@ -20,3 +20,4 @@ __pycache__/
 *.provisionprofile
 *.store*
 *.sqlite*
+!Checks/Fixtures/schema-68/store.sqlite

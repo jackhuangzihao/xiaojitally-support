@@ -500,20 +500,22 @@ struct ReminderEntry: Equatable {
     nonisolated static func audit(delivery: Bool) {
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             print("NOTIFICATION SETTINGS authorization=\(settings.authorizationStatus.rawValue) alert=\(settings.alertSetting.rawValue) style=\(settings.alertStyle.rawValue) sound=\(settings.soundSetting.rawValue) center=\(settings.notificationCenterSetting.rawValue) scheduledDelivery=\(settings.scheduledDeliverySetting.rawValue)")
+            let canDeliver = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
             UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
                 for request in requests.filter({ $0.identifier.hasPrefix(ReminderNavigation.prefix) }).sorted(by: { $0.identifier < $1.identifier }) {
                     print("PENDING \(request.identifier) next=\(String(describing: (request.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate()))")
                 }
-                guard delivery, settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { exit(0) }
+                guard delivery, canDeliver else { exit(0) }
                 let probe = testRequest()
+                let identifier = probe.identifier
                 UNUserNotificationCenter.current().add(probe) { error in
                     if let error { print("DELIVERY CHECK FAILED: \(error)"); exit(1) }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
                         UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
-                            let found = notifications.contains { $0.request.identifier == probe.identifier }
+                            let found = notifications.contains { $0.request.identifier == identifier }
                             print(found ? "DELIVERY CHECK PASSED: system reports delivered" : "DELIVERY CHECK: not found in delivered notifications; check system settings or Focus")
-                            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [probe.identifier])
-                            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [probe.identifier])
+                            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+                            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
                             exit(found ? 0 : 2)
                         }
                     }

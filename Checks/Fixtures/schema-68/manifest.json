@@ -1,0 +1,21 @@
+{
+  "filesSHA256": {
+    "cloud-baseline.json": "fade08f764d6f09b75a709a7949d19713e0b1eef3fd0cdaaab74b2f77cbe5c92",
+    "cloud-state.json": "1bad281033480e7b8d2822586c611cdb63017fa40b2e3d8305f64715de50426e",
+    "expected.json": "d577d6d2ce32dda93c8e597d1be3fd4aef4d23a81e1bb89f9e989a3516a345bd",
+    "store.sqlite": "d030122bc5e7009b8ed60b8833275cb79b219c08b9024e665fc53496528d7346"
+  },
+  "generatorSHA256": {
+    "generate.py": "34f92df8300c378a99353b7413351dd59cdcc4aa1152f4e76d520b727577ccbb",
+    "generate.swift": "cd940e24e56c1c054213d1537144a7566097f9437261442a362c5d8ebf01ea03"
+  },
+  "sourceBuild": "1.0 (68)",
+  "sourceCommit": "6614558dbb888ae9b453f54be3ed4e0fd36f8466",
+  "sourceSHA256": {
+    "Sources/CloudSync.swift": "22b9f329a9223fb05b651e156c386aa948a8725ca9a0b64abe5059df3220d5da",
+    "Sources/FinanceModels.swift": "f4c0944ccd5dba75f5ac36f7f3d93785b48e733f9e55910312fff32bb2c1f24f",
+    "Sources/Models.swift": "efb6b30435cf3cf3a03d546cb032dd5ff297db297eafde2be2a025ed5c85fa89"
+  },
+  "synthetic": true,
+  "xcode": "Xcode 26.6\nBuild version 17F113"
+}

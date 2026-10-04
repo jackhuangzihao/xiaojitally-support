@@ -25,6 +25,7 @@ struct TaskEditor: View {
     @Environment(EditorDrafts.self) private var drafts
     let request: EditorRequest
     @State private var recoveredDraft: Bool
+    @State private var original: TaskBackup.TaskRecord?
 
     @State private var title: String
     @State private var notes: String
@@ -70,6 +71,7 @@ struct TaskEditor: View {
         _recoveredDraft = State(initialValue: draft != nil)
         _openPanel = State(initialValue: request.timed ? .time : nil)
         let task = request.task
+        _original = State(initialValue: draft?.original ?? task.map(TaskBackup.TaskRecord.init))
         _title = State(initialValue: task?.title ?? "")
         _notes = State(initialValue: task?.notes ?? "")
         _hasDate = State(initialValue: (task?.scheduledAt ?? request.date) != nil)
@@ -181,7 +183,7 @@ struct TaskEditor: View {
 
                     if let task = request.task, task.deletedAt == nil { Divider(); TaskMoneySection(task: task) }
 
-                    if request.task?.deletedAt != nil {
+                    if original?.deletedAt != nil {
                         Text(L("保存时会将这项任务从最近删除中恢复。", "Saving will restore this task from Recently deleted.")).font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -225,7 +227,7 @@ struct TaskEditor: View {
                 focus = request.task == nil ? .title : .sheet
             }
             .interactiveDismissDisabled(isSaving || hasChanges)
-            .navigationTitle(request.task == nil ? L("新建任务", "New task") : L("任务详情", "Task details"))
+            .navigationTitle(original == nil ? L("新建任务", "New task") : L("任务详情", "Task details"))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -269,17 +271,18 @@ struct TaskEditor: View {
         let listID: UUID?
         let priority: Int
         let subtasks: [Subtask]
+        var original: TaskBackup.TaskRecord? = nil
     }
     private var draftState: DraftState {
         DraftState(title: title, notes: notes, pending: newSubtask, repeating: repeatRule, repeatUntil: repeatRule == "none" ? nil : repeatUntil,
                    end: effectiveEnd, scheduled: hasDate ? date : nil, due: hasDue ? due : nil, reminder: effectiveReminder,
-                   timed: hasTime, dueTimed: dueHasTime, preset: reminderPreset, listID: listID, priority: priority, subtasks: subtasks)
+                   timed: hasTime, dueTimed: dueHasTime, preset: reminderPreset, listID: listID, priority: priority, subtasks: subtasks, original: original)
     }
     private var effectiveEnd: Date? { hasDate && hasTime && hasEnd ? end : nil }
     private var hasChanges: Bool { recoveredDraft || (initialDraft.map { $0 != draftState } ?? false) }
     private func keepDraft() {
         guard (try? Store.recovery.requireWritable(context)) != nil else { return }
-        drafts.taskID = request.task?.id
+        drafts.taskID = original?.id
         drafts.task = draftState
     }
 
@@ -761,6 +764,8 @@ struct TaskEditor: View {
     @MainActor private func persist() async {
         guard (try? Store.recovery.requireWritable(context)) != nil else { return }
         keepDraft()
+        do { _ = try EditorVersion.task(original, in: context) }
+        catch { errorMessage = error.localizedDescription; return }
         if let end = effectiveEnd, end <= date { errorMessage = L("结束时间必须晚于开始时间。", "End must be after start."); return }
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanTitle.isEmpty, cleanTitle.count <= 160, notes.count <= 10000 else {
@@ -784,10 +789,10 @@ struct TaskEditor: View {
         let reminderAt = effectiveReminder
         if reminderPreset != .none {
             guard let reminderAt else { errorMessage = L("请选择提醒时间。", "Choose a reminder time."); return }
-            if let reminderLatest, reminderAt > reminderLatest, reminderAt != request.task?.reminderAt {
+            if let reminderLatest, reminderAt > reminderLatest, reminderAt != original?.reminderAt {
                 errorMessage = L("提醒不能晚于任务时间，请调整提醒。", "The reminder can't be after the task. Adjust the reminder."); return
             }
-            if reminderAt <= Date() && reminderAt != request.task?.reminderAt {
+            if reminderAt <= Date() && reminderAt != original?.reminderAt {
                 errorMessage = L("提醒时间 \(Dates.label(reminderAt, pattern: "M月d日 HH:mm")) 已经过去，请换一个提醒选项。", "The reminder time \(Dates.label(reminderAt, pattern: "M月d日 HH:mm")) has passed. Choose another option."); return
             }
             do {
@@ -797,10 +802,17 @@ struct TaskEditor: View {
             } catch { errorMessage = error.localizedDescription; return }
         }
         guard (try? Store.recovery.requireWritable(context)) != nil else { return }
-        let oldBase = request.task?.calendarDate
-        let oldRule = request.task?.repeatRule
-        let task = request.task ?? TaskItem(title: cleanTitle)
-        if request.task == nil { context.insert(task) }
+        // Authorizing notifications can suspend this editor while another window saves.
+        // Recheck immediately before the first mutation, without an await between check and save.
+        let existing: TaskItem?, selectedList: TaskList?
+        do {
+            existing = try EditorVersion.task(original, in: context)
+            selectedList = try EditorVersion.selectedList(listID, in: context)
+        } catch { errorMessage = error.localizedDescription; return }
+        let oldBase = existing?.calendarDate
+        let oldRule = existing?.repeatRule
+        let task = existing ?? TaskItem(title: cleanTitle)
+        if existing == nil { context.insert(task) }
         task.title = cleanTitle; task.notes = notes
         task.scheduledAt = hasDate ? (hasTime ? date : Dates.calendar.startOfDay(for: date)) : nil
         task.hasTime = hasDate && hasTime
@@ -814,7 +826,7 @@ struct TaskEditor: View {
         task.repeatRule = repeatRule
         task.repeatUntil = repeatRule == "none" ? nil : repeatUntil.map { Dates.calendar.startOfDay(for: $0) }
         if let base = task.calendarDate, task.repeatAnchorDay == 0 || oldRule != repeatRule || oldBase.map({ !Dates.sameDay($0, base) }) == true { task.repeatAnchorDay = Dates.calendar.component(.day, from: base) }
-        task.list = lists.first { $0.id == listID }
+        task.list = selectedList
         task.subtasks = cleanSubtasks
         task.deletedAt = nil
         task.ensureNextOccurrence(in: context)
@@ -1098,18 +1110,20 @@ struct ListEditor: View {
         let colorHex: String?
         let emoji: String
         let parentID: UUID?
+        var original: TaskBackup.ListRecord? = nil
     }
     @Environment(EditorDrafts.self) private var drafts
-    private var draftState: DraftState { DraftState(name: name, colorHex: colorHex, emoji: emoji, parentID: parentID) }
+    private var draftState: DraftState { DraftState(name: name, colorHex: colorHex, emoji: emoji, parentID: parentID, original: original) }
     private func keepDraft() {
         guard (try? Store.recovery.requireWritable(context)) != nil else { return }
-        drafts.listID = list?.id; drafts.list = draftState
+        drafts.listID = original?.id; drafts.list = draftState
     }
     @AppStorage("appLanguage") private var language = "system"
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @Query private var lists: [TaskList]
     let list: TaskList?
+    @State private var original: TaskBackup.ListRecord?
     @State private var name: String
     @State private var colorHex: String?
     @State private var emoji: String
@@ -1119,6 +1133,7 @@ struct ListEditor: View {
     @State private var parentID: UUID?
     init(list: TaskList?, parentID: UUID? = nil, draft: DraftState? = nil) {
         self.list = list; _name = State(initialValue: list?.name ?? "")
+        _original = State(initialValue: draft?.original ?? list.map(TaskBackup.ListRecord.init))
         _colorHex = State(initialValue: list?.colorHex)
         _emoji = State(initialValue: list?.emoji ?? "")
         _parentID = State(initialValue: list?.parentID ?? parentID)
@@ -1175,7 +1190,7 @@ struct ListEditor: View {
                 }
                 Text(L("清单可包含任务和子清单；选择上级即可建立组中组。", "Lists can contain tasks and child lists. Choose a parent to nest them.")).font(.caption).foregroundStyle(.secondary)
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
-            }.formStyle(.grouped).navigationTitle(list == nil ? L("新建清单", "New list") : L("编辑清单", "Edit list"))
+            }.formStyle(.grouped).navigationTitle(original == nil ? L("新建清单", "New list") : L("编辑清单", "Edit list"))
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 .scrollDismissesKeyboard(.interactively)
@@ -1215,21 +1230,70 @@ struct ListEditor: View {
     private func save() {
         guard (try? Store.recovery.requireWritable(context)) != nil else { return }
         keepDraft()
+        let existing: TaskList?, currentLists: [TaskList]
+        do {
+            existing = try EditorVersion.list(original, in: context)
+            _ = try EditorVersion.selectedList(parentID, in: context)
+            currentLists = try context.fetch(FetchDescriptor<TaskList>())
+        } catch { errorMessage = error.localizedDescription; return }
         guard emoji.isEmpty || TaskList.validEmoji(emoji) else { errorMessage = L("请选择一个 emoji 作为图标，或恢复默认图标。", "Choose one emoji or use the default icon."); return }
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, value.count <= 40 else { errorMessage = L("清单名称需为1–40个字。", "List names must contain 1–40 characters."); return }
-        guard !lists.contains(where: { $0.id != list?.id && $0.parentID == parentID && $0.name.localizedCaseInsensitiveCompare(value) == .orderedSame }) else {
+        guard !currentLists.contains(where: { $0.id != original?.id && $0.parentID == parentID && $0.name.localizedCaseInsensitiveCompare(value) == .orderedSame }) else {
             errorMessage = L("已存在同名清单。", "A list with this name already exists."); return
         }
-        if let list, ListTree.contains(parentID, in: list.id, lists: lists) { errorMessage = L("不能移入自己的子清单。", "Cannot move inside a descendant."); return }
-        if let colorHex, lists.contains(where: { $0.id != list?.id && $0.colorHex?.uppercased() == colorHex.uppercased() }) {
+        if let existing, ListTree.contains(parentID, in: existing.id, lists: currentLists) { errorMessage = L("不能移入自己的子清单。", "Cannot move inside a descendant."); return }
+        if let colorHex, currentLists.contains(where: { $0.id != original?.id && $0.colorHex?.uppercased() == colorHex.uppercased() }) {
             errorMessage = L("这个颜色已被其他清单使用，请选择其他颜色。", "This color is already used. Choose another color."); return
         }
-        let target = list ?? TaskList(name: value)
-        if list == nil { target.sortOrder = (lists.filter { $0.parentID == parentID }.map(\.sortOrder).max() ?? -1) + 1 }
-        if list == nil { context.insert(target) }
+        let target = existing ?? TaskList(name: value)
+        if existing == nil { target.sortOrder = (currentLists.filter { $0.parentID == parentID }.map(\.sortOrder).max() ?? -1) + 1 }
+        if existing == nil { context.insert(target) }
         target.name = value; target.parentID = parentID; target.colorHex = colorHex; target.emoji = emoji.isEmpty ? nil : emoji
         do { try Store.save(context); ReminderScheduler.shared.refresh(context); dismiss() }
         catch { errorMessage = Store.recovery.failure == nil ? error.localizedDescription : nil }
+    }
+}
+
+
+extension TaskBackup.ListRecord {
+    init(_ list: TaskList) {
+        self.init(id: list.id, name: list.name, createdAt: list.createdAt, parentID: list.parentID,
+                  colorHex: list.colorHex, sortOrder: list.sortOrder, emoji: list.emoji)
+    }
+}
+
+/// Editors retain value snapshots, including across store recovery, rather than a live model reference.
+@MainActor enum EditorVersion {
+    static func task(_ expected: TaskBackup.TaskRecord?, in context: ModelContext) throws -> TaskItem? {
+        guard let expected else { return nil }
+        let id = expected.id
+        var query = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })
+        query.fetchLimit = 2
+        let current = try context.fetch(query)
+        guard current.count == 1, TaskBackup.TaskRecord(current[0]) == expected else {
+            throw TaskBackup.invalid(L("任务已在其他窗口修改或删除，未覆盖最新内容。此页面的输入仍保留，请先复制需要的内容，再关闭并重新打开任务核对。", "This task changed or was deleted in another window. Nothing was overwritten and your input remains here. Copy anything you need before closing and reopening the task to review it."))
+        }
+        return current[0]
+    }
+
+    static func list(_ expected: TaskBackup.ListRecord?, in context: ModelContext) throws -> TaskList? {
+        guard let expected else { return nil }
+        let current = try selectedList(expected.id, in: context)
+        guard let current, TaskBackup.ListRecord(current) == expected else {
+            throw TaskBackup.invalid(L("清单已在其他窗口修改，未覆盖最新内容。此页面的输入仍保留，请先复制需要的内容，再关闭并重新打开清单核对。", "This list changed in another window. Nothing was overwritten and your input remains here. Copy anything you need before closing and reopening the list to review it."))
+        }
+        return current
+    }
+
+    static func selectedList(_ id: UUID?, in context: ModelContext) throws -> TaskList? {
+        guard let id else { return nil }
+        var query = FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == id })
+        query.fetchLimit = 2
+        let current = try context.fetch(query)
+        guard current.count == 1 else {
+            throw TaskBackup.invalid(L("清单已删除或无法确定，未保存修改。此页面的输入仍保留，请重新选择清单；如果正在编辑此清单，请先复制需要的内容再关闭。", "The list was deleted or cannot be identified. Changes were not saved and your input remains here. Choose another list; if you are editing this list, copy anything you need before closing."))
+        }
+        return current[0]
     }
 }
