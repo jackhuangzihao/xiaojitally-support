@@ -1,5 +1,8 @@
 import Foundation
 import SwiftData
+#if os(macOS)
+import AppKit
+#endif
 
 @MainActor enum EditingChecks {
     static func run() throws -> Int {
@@ -12,6 +15,25 @@ import SwiftData
             do { try action() } catch { rejected = true }
             try require(rejected, label)
         }
+        try require(!TaskEditor.isCustomRepeat(nil) && !TaskEditor.isCustomRepeat("none"),
+                    "New and nonrepeating tasks do not preselect custom repeat")
+        try require(TaskEditor.repeatPresets.allSatisfy { !TaskEditor.isCustomRepeat($0) }
+                    && TaskEditor.isCustomRepeat(RepeatRule(interval: 2, unit: .week).text),
+                    "Saved preset and custom repeats retain their selection")
+        #if os(macOS)
+        let owner = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+        let otherWindow = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+        let eventView = NSView(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        owner.contentView = eventView
+        try require(LocalEventScope.accepts(window: owner, in: eventView)
+                    && !LocalEventScope.accepts(window: otherWindow, in: eventView)
+                    && !LocalEventScope.accepts(window: nil, in: eventView),
+                    "Calendar and suggestion monitors only accept their own window")
+        eventView.isHidden = true
+        try require(!LocalEventScope.accepts(window: owner, in: eventView), "Hidden views cannot handle local events")
+        eventView.isHidden = false; owner.contentView = nil
+        try require(!LocalEventScope.accepts(window: owner, in: eventView), "Detached views cannot handle local events")
+        #endif
         let container = try ModelContainer(for: TaskItem.self, TaskList.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let context = container.mainContext

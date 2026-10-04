@@ -614,6 +614,8 @@ import SwiftData
             try require(ledger.balanceAfterSaving(outgoing, for: funding.id) == 10000, "edit preview includes account removed from the new transfer")
             var posted = ledger; posted.entries = [outgoing]; try posted.validate()
             for account in ledger.accounts { try require(ledger.balanceAfterSaving(outgoing, for: account.id) == posted.balance(account.id), "preview equals actual replacement for every affected account") }
+            let cachedBalances = ledger.accountBalances()
+            for account in ledger.accounts { try require(ledger.balanceAfterSaving(outgoing, for: account.id, accountBalances: cachedBalances) == posted.balance(account.id), "cached editor balances preserve replacement preview for every affected account") }
             outgoing.fee = 2; outgoing.baseFee = 10
             try require(ledger.balanceAfterSaving(outgoing, for: source.id) == -1402, "preview includes source fee")
             outgoing.deletedAt = Date()
@@ -1071,6 +1073,66 @@ import SwiftData
             var refreshed = original
             try refreshed.mergeReferenceRates(partial.rates)
             try require(refreshed.storedRate(from: "USD", to: "CNY")?.rate == 99, "partial automatic refresh still respects a manual inverse quote")
+        }
+        // Offline entry estimates and saves share these production paths; asset-only quotes never become posting rates.
+        do {
+            var ledger = FinanceData.initial
+            let account = MoneyAccount(name: "CNY bank", opening: 1000)
+            ledger.accounts = [account]
+            let day = ISO8601DateFormatter().date(from: "2026-10-01T12:00:00Z")!
+            try ledger.setManualRate(from: "USD", to: "CNY", text: "99", at: day)
+            let manual = ledger.rates[0]
+            try require(ledger.cachedReferenceRates(from: "USD", quotes: ["CNY"], onOrBefore: "2026-10-01").isEmpty, "manual asset quote cannot autofill an offline entry")
+            let euros = MoneyRate(base: "USD", quote: "EUR", rate: Decimal(string: "0.8")!, date: "2026-09-29")
+            ledger.rates += [euros, MoneyRate(base: "EUR", quote: "CNY", rate: 8, date: "2026-09-30")]
+            let reference = MoneyRate(base: "USD", quote: "CNY", rate: Decimal(string: "7.1")!, date: "2026-09-30")
+            var staleEuros = euros; staleEuros.date = "2026-09-28"; staleEuros.rate = Decimal(string: "0.7")!
+            var future = reference; future.date = "2026-10-02"; future.rate = 8
+            var invalid = reference; invalid.rate = 0
+            var badDate = reference; badDate.date = "2026"
+            var badSource = reference; badSource.source = String(repeating: "x", count: 81)
+            var unrelated = reference; unrelated.quote = "GBP"
+            let cached = ledger.cachedReferenceRates(from: "USD", quotes: ["CNY", "EUR"], onOrBefore: "2026-10-01", including: [manual, future, invalid, badDate, badSource, unrelated, staleEuros, reference])
+            try require(cached == [reference, euros], "offline estimates choose usable earlier references and exclude manual, future, invalid and unrelated quotes")
+            try require(ledger.cachedReferenceRates(from: "USD", quotes: ["CNY"], onOrBefore: "2026-09-28", including: cached).isEmpty, "backdated entry cannot use later cached quotes")
+            var entry = MoneyEntry(); entry.title = "Offline purchase"; entry.date = day; entry.bookID = ledger.books[0].id
+            entry.currency = "USD"; entry.amount = 10; entry.accountID = account.id
+            entry.accountAmount = Money.round(entry.amount * cached[0].rate, currency: account.currency); entry.baseAmount = entry.accountAmount
+            try ledger.updateEntry(entry, expected: nil, baseCurrency: "CNY", referenceRates: cached); try ledger.validate()
+            try require(ledger.entries == [entry] && ledger.balance(account.id) == 929, "reference fallback saves the real posting offline")
+            try require(ledger.storedRate(from: "USD", to: "CNY") == manual, "saving an entry preserves the separate manual asset valuation")
+            let previous = entry; entry.accountAmount = 72; entry.baseAmount = 72
+            try ledger.updateEntry(entry, expected: previous, baseCurrency: "CNY", referenceRates: [manual, reference]); try ledger.validate()
+            try require(ledger.entries == [entry] && ledger.balance(account.id) == 928 && ledger.storedRate(from: "USD", to: "CNY") == manual, "older editor state containing a manual quote still saves the entered actual amount without rewriting asset rates")
+            let reviewed = entry; entry.accountAmount = 73; entry.baseAmount = 73
+            try ledger.updateEntry(entry, expected: reviewed, baseCurrency: "CNY"); try ledger.validate()
+            try require(ledger.entries == [entry] && ledger.balance(account.id) == 927, "explicit actual amounts save without any reference rate or network")
+            let saved = ledger
+            try rejects("invalid reference quote still rejects the entry atomically") { try ledger.updateEntry(previous, expected: entry, baseCurrency: "CNY", referenceRates: [invalid]) }
+            try require(ledger == saved, "failed reference validation preserves entries and rates")
+        }
+        do {
+            var ledger = FinanceData.initial
+            let onlyBook = ledger.books[0]
+            ledger.books.append(MoneyBook(name: "Past trip", archived: true))
+            var archived = onlyBook; archived.archived = true
+            let original = ledger
+            try require(ledger.bookArchiveBlock(onlyBook.id) != nil, "archive toggle explains why the last available book must remain active")
+            try rejects("last available book cannot be archived") { try ledger.updateBook(archived, expected: onlyBook, baseCurrency: ledger.baseCurrency) }
+            try require(ledger == original, "blocked archival keeps the book and historical references unchanged")
+            let second = MoneyBook(name: "Other active book")
+            try ledger.updateBook(second, expected: nil, baseCurrency: ledger.baseCurrency)
+            try ledger.updateBook(archived, expected: onlyBook, baseCurrency: ledger.baseCurrency)
+            try require(ledger.books.first { $0.id == onlyBook.id }?.archived == true && ledger.bookArchiveBlock(second.id) != nil, "another active book allows archival and becomes protected immediately")
+            try ledger.updateBook(onlyBook, expected: archived, baseCurrency: ledger.baseCurrency)
+            try require(ledger.bookArchiveBlock(second.id) == nil, "restoring an archived book makes the other book archivable")
+            ledger.books = [archived]
+            var renamed = archived; renamed.name = "Renamed old archive"
+            try ledger.updateBook(renamed, expected: archived, baseCurrency: ledger.baseCurrency)
+            try require(ledger.books == [renamed], "legacy all-archived books remain editable without an archival transition")
+            try rejects("a new archived book cannot leave an all-archived ledger without an available book") {
+                try ledger.updateBook(MoneyBook(name: "Another archive", archived: true), expected: nil, baseCurrency: ledger.baseCurrency)
+            }
         }
         print("FINANCE PASS: \(checks) checks — accounts, books, transfers, refunds, FX, backup and persistence")
         return checks

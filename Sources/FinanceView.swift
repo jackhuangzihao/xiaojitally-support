@@ -425,6 +425,7 @@ struct FinanceHome: View {
     private var compact: Bool { false }
     #endif
     @Environment(EditorDrafts.self) private var drafts
+    @State private var generation = Store.recovery.generation
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -483,6 +484,11 @@ struct FinanceHome: View {
     @State private var foreignCurrency = ""
     @State private var document: FinanceCSV?
     @State private var exporting = false
+
+    private var presentationActive: Bool {
+        editor != nil || entity != nil || conversionRequest != nil || showAssetRates || exporting || showDateRange
+            || error != nil || info != nil || confirmDelete != nil || confirmSamples
+    }
 
     /// Nil means every book.
     private var bookFilterID: UUID? { data.books.first { $0.id.uuidString == scope }?.id }
@@ -601,6 +607,13 @@ struct FinanceHome: View {
         .onAppear {
             if let kept = drafts.finance { editor = EntryRequest(entry: kept.entry, expected: kept.expected) }
             else if let kept = drafts.financeEntity { entity = EntityRequest(kind: kept.kind, existingID: kept.id, income: kept.income) }
+        }
+        .onChange(of: presentationActive, initial: true) { _, active in
+            guard generation == Store.recovery.generation else { return }
+            drafts.financePresentationGeneration = active ? generation : nil
+        }
+        .onDisappear {
+            if drafts.financePresentationGeneration == generation { drafts.financePresentationGeneration = nil }
         }
         .onChange(of: selection) { old, new in
             if new != "all" { drilldown = nil; accountDetailID = nil; accountFilter = nil; categoryFilter = nil; kindFilter = nil; search = ""; statsReturn = nil }
@@ -2438,7 +2451,7 @@ struct FinanceEntityEditor: View {
                 let quote = "1 \(currency) = \(assetRateText(rate.rate)) CNY · \(source)"
                 Text(L("当前：", "Current: ") + quote).font(.caption).foregroundStyle(.secondary)
             }
-            Text(L("留空保留现有汇率；没有时，资产页会按自动汇率设置获取参考值。填写后用于所有 \(currency) 账户的人民币估值，不改变历史账单。", "Leave blank to keep the current rate; Assets can fetch a reference rate when automatic rates are enabled. An entered rate values every \(currency) account in CNY and leaves recorded entries unchanged."))
+            Text(L("留空保留现有汇率；没有时，资产页会按自动汇率设置获取参考值。手动汇率仅用于所有 \(currency) 账户的人民币估值；账单请填写实际金额或使用参考汇率。", "Leave blank to keep the current rate; Assets can fetch a reference rate when automatic rates are enabled. Manual rates only value \(currency) assets in CNY; entries use actual amounts or reference rates."))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -2530,7 +2543,11 @@ struct FinanceEntityEditor: View {
                     }
                     Text(L("新账单金额和账单合计默认使用此账户的币种。账户由所有账本共用，不会复制余额。", "New entry amounts and entry totals default to this account's currency. Accounts are shared across books without copying balances.")).font(.caption).foregroundStyle(.secondary)
                 }
-                if id != nil { Toggle(L("归档", "Archived"), isOn: $archived); Text(L("归档后保留历史账目，在新增时隐藏。", "Archiving keeps all history and hides this option for new entries.")).font(.caption).foregroundStyle(.secondary) }
+                if let id {
+                    Toggle(L("归档", "Archived"), isOn: $archived)
+                        .disabled(kind == .book && !archived && original.bookArchiveBlock(id) != nil)
+                    Text(L("归档后保留历史账目，在新增时隐藏。", "Archiving keeps all history and hides this option for new entries.")).font(.caption).foregroundStyle(.secondary)
+                }
                 if let id {
                     if let reason = original.removalBlock(kind, id: id) {
                         Text(reason).font(.caption).foregroundStyle(.secondary)
@@ -2684,6 +2701,7 @@ struct FinanceEntryEditor: View {
     @Query private var records: [FinanceLedger]
     @State private var draft: MoneyEntry
     @State private var ledger = FinanceData.initial
+    @State private var accountBalances: [UUID: Decimal] = [:]
     @State private var expression: String
     @State private var amount: String
     @State private var actual: String
@@ -2726,7 +2744,6 @@ struct FinanceEntryEditor: View {
     private var dirty: Bool { loaded && fingerprint != initialFingerprint }
     private var rateQuery: String { "\(loaded)-\(automaticRates)-\(draft.currency)-\(draft.accountID?.uuidString ?? "")-\(draft.destinationID?.uuidString ?? "")-\(Dates.calendar.startOfDay(for: draft.date).timeIntervalSince1970)" }
     private var foreign: Bool { draft.currency != ledger.baseCurrency }
-    private var resolvedRates: [MoneyRate] { rates + ledger.rates.filter { old in !rates.contains { $0.base == old.base && $0.quote == old.quote } } }
     private var desiredAmountFocus: Field? {
         #if os(iOS)
         return showCalculator ? nil : .amount
@@ -2778,7 +2795,7 @@ struct FinanceEntryEditor: View {
         }
         .task {
             if !loaded, let kept = drafts.finance, kept.entry.id == draft.id {
-                ledger = kept.ledger; restoringDraft = true
+                ledger = kept.ledger; accountBalances = kept.ledger.accountBalances(); restoringDraft = true
             }
             reload()
             if !loaded {
@@ -2970,8 +2987,8 @@ struct FinanceEntryEditor: View {
                 HStack {
                     Text(account.name).lineLimit(1)
                     Spacer()
-                    let after = ledger.balanceAfterSaving(entry, for: account.id)
-                    Text(Money.display(ledger.balance(account.id), account.currency, hidden: hidden)).foregroundStyle(.secondary)
+                    let after = ledger.balanceAfterSaving(entry, for: account.id, accountBalances: accountBalances)
+                    Text(Money.display(accountBalances[account.id, default: 0], account.currency, hidden: hidden)).foregroundStyle(.secondary)
                     Image(systemName: "arrow.right").foregroundStyle(.secondary)
                     Text(Money.display(after, account.currency, hidden: hidden)).foregroundStyle(after < 0 ? Color.red : .primary)
                 }.font(.caption).monospacedDigit()
@@ -2981,7 +2998,7 @@ struct FinanceEntryEditor: View {
     private func accountPicker(_ label: String, selection: Binding<UUID?>, excluding: UUID?) -> some View {
         Picker(label, selection: selection) {
             Text(L("选择账户", "Choose account")).tag(nil as UUID?)
-            ForEach(activeAccounts.filter { $0.id != excluding }) { a in Text(a.name + " · " + Money.display(ledger.balance(a.id), a.currency, hidden: hidden)).tag(Optional(a.id)) }
+            ForEach(activeAccounts.filter { $0.id != excluding }) { a in Text(a.name + " · " + Money.display(accountBalances[a.id, default: 0], a.currency, hidden: hidden)).tag(Optional(a.id)) }
         }.pickerStyle(.menu).frame(maxWidth: .infinity)
     }
     private var refundInfo: some View {
@@ -3183,7 +3200,7 @@ struct FinanceEntryEditor: View {
             Menu {
                 Picker(L("账户", "Account"), selection: $draft.accountID) {
                     Text(L("不计入账户（只记收支）", "No account (totals only)")).tag(nil as UUID?)
-                    ForEach(activeAccounts) { a in Text(a.name + " · " + Money.display(ledger.balance(a.id), a.currency, hidden: hidden)).tag(Optional(a.id)) }
+                    ForEach(activeAccounts) { a in Text(a.name + " · " + Money.display(accountBalances[a.id, default: 0], a.currency, hidden: hidden)).tag(Optional(a.id)) }
                 }.pickerStyle(.inline).labelsHidden()
                 Divider()
                 Button(L("新增账户…", "New account…")) { entity = EntityRequest(kind: .account) }
@@ -3290,6 +3307,7 @@ struct FinanceEntryEditor: View {
             // Keep displayed conversion fields in the denomination they were entered in.
             if loaded || restoringDraft { try current.requireEntryCurrencies(draft, from: ledger) }
             ledger = current
+            accountBalances = current.accountBalances()
         } catch { self.error = error.localizedDescription }
     }
     private func fillRates() {
@@ -3310,9 +3328,9 @@ struct FinanceEntryEditor: View {
                 draft.rateNote = L("欧洲央行 ", "ECB ") + (result.map(\.date).sorted().first ?? "") + L(" 参考汇率", " reference rate") + rateSummary(result)
             } catch {
                 guard !Task.isCancelled && rateQuery == query else { return }
-                let cached = resolvedRates.filter { $0.base == source && $0.date <= ExchangeRates.dayString(day) }
+                let cached = ledger.cachedReferenceRates(from: source, quotes: quotes, onOrBefore: ExchangeRates.dayString(day), including: rates)
+                rates = cached
                 if !cached.isEmpty {
-                    rates = cached
                     applyRates(cached)
                     draft.rateNote = L("离线参考汇率：", "Cached reference rates: ") + cached.map(\.date).sorted().joined(separator: ", ")
                 }
@@ -3348,7 +3366,7 @@ struct FinanceEntryEditor: View {
         guard let amount = try? Money.parse(amount, currency: draft.currency) else { return }
         func conversion(_ value: Decimal, _ to: String) -> String? {
             if draft.currency == to { return Money.text(value) }
-            return values.first { $0.base == draft.currency && $0.quote == to }.map { Money.text(Money.round(value * $0.rate, currency: to)) }
+            return values.first { !$0.isManual && $0.base == draft.currency && $0.quote == to }.map { Money.text(Money.round(value * $0.rate, currency: to)) }
         }
         func fill(_ key: String, _ field: inout String, _ replacement: String?) {
             guard let next = Money.refreshedEstimate(field, previous: filledValues[key], replacement: replacement) else { return }
@@ -3400,8 +3418,7 @@ struct FinanceEntryEditor: View {
             let e = try preparedEntry()
             try FinanceStore.update(context) { value in
                 try value.requireEntryCurrencies(e, from: ledger)
-                try value.updateEntry(e, expected: expected, baseCurrency: ledger.baseCurrency)
-                try value.mergeReferenceRates(rates)
+                try value.updateEntry(e, expected: expected, baseCurrency: ledger.baseCurrency, referenceRates: rates)
             }
             if let id = e.bookID { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyBook") }
             if e.kind == .expense || e.kind == .income { UserDefaults.standard.set(e.accountID?.uuidString ?? "none", forKey: "lastMoneyAccount") }

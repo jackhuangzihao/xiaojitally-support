@@ -479,6 +479,14 @@ enum ReminderPreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// iOS delivers notification taps before a window may exist. Keep only the ID until
+/// an active window accepts it, then let that window defer navigation during edits.
+@MainActor @Observable final class ReminderInbox {
+    static let shared = ReminderInbox()
+    var navigation = ReminderNavigation()
+    func receive(_ id: UUID) { navigation.pendingTaskID = id }
+}
+
 /// Value-only pending navigation survives cold startup and model-context recovery with the window drafts.
 struct ReminderNavigation {
     var pendingTaskID: UUID?

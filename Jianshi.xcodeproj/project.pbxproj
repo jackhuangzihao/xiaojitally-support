@@ -241,7 +241,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 69;
+				CURRENT_PROJECT_VERSION = 70;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -275,7 +275,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 69;
+				CURRENT_PROJECT_VERSION = 70;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -387,7 +387,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiStore.entitlements;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 69;
+				CURRENT_PROJECT_VERSION = 70;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;

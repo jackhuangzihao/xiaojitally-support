@@ -238,6 +238,10 @@ struct MoneyRate: Codable, Equatable {
     var fetchedAt = MoneyEntry.timestamp()
     var source = "ECB"
     var isManual: Bool { source == "Manual" }
+    var isValidReference: Bool {
+        !isManual && Money.currencies.contains(base) && Money.currencies.contains(quote) && base != quote
+            && Self.valid(rate) && date.count == 10 && fetchedAt.timeIntervalSince1970.isFinite && source.count <= 80
+    }
     static func valid(_ rate: Decimal) -> Bool {
         !rate.isNaN && rate >= Decimal(string: "0.000000001")! && rate < 1_000_000_000
     }
@@ -508,7 +512,11 @@ struct FinanceData: Codable, Equatable {
         try requireBaseCurrency(baseCurrency)
         guard books.first(where: { $0.id == book.id }) == expected else { throw TaskBackup.invalid(L("账本已改变，请重新打开。", "Book changed. Reopen it.")) }
         guard !books.contains(where: { $0.id != book.id && $0.name.caseInsensitiveCompare(book.name) == .orderedSame }) else { throw TaskBackup.invalid(L("账本名称已存在。", "Book name already exists.")) }
+        if book.archived && expected?.archived != true, let reason = bookArchiveBlock(book.id) { throw TaskBackup.invalid(reason) }
         books.upsert(book)
+    }
+    func bookArchiveBlock(_ id: UUID) -> String? {
+        books.contains { $0.id != id && !$0.archived } ? nil : L("请至少保留一个可用账本。", "Keep at least one available book.")
     }
     func requireEntryCurrencies(_ entry: MoneyEntry, from original: FinanceData) throws {
         try requireBaseCurrency(original.baseCurrency)
@@ -518,10 +526,12 @@ struct FinanceData: Codable, Equatable {
             }
         }
     }
-    mutating func updateEntry(_ entry: MoneyEntry, expected: MoneyEntry?, baseCurrency: String) throws {
+    mutating func updateEntry(_ entry: MoneyEntry, expected: MoneyEntry?, baseCurrency: String, referenceRates: [MoneyRate] = []) throws {
         try requireBaseCurrency(baseCurrency)
         guard entries.first(where: { $0.id == entry.id }) == expected else { throw TaskBackup.invalid(L("账单已在其他窗口修改。请重新打开再编辑。", "This entry changed in another window. Reopen it before editing.")) }
         try checkAccounts(for: entry, replacing: expected)
+        // Older editor state can contain asset quotes; actual posting amounts remain authoritative.
+        try mergeReferenceRates(referenceRates.filter { !$0.isManual })
         entries.removeAll { $0.id == entry.id }; entries.append(entry)
         if entry.kind == .expense {
             for i in entries.indices where entries[i].refundOf == entry.id { entries[i].bookID = entry.bookID; entries[i].categoryID = entry.categoryID }
@@ -546,9 +556,9 @@ struct FinanceData: Codable, Equatable {
         balance(id, before: MoneyEntry.timestamp(date).addingTimeInterval(1))
     }
     /// Editing replaces the old posting; a new UUID adds a separate posting.
-    func balanceAfterSaving(_ entry: MoneyEntry, for id: UUID) -> Decimal {
+    func balanceAfterSaving(_ entry: MoneyEntry, for id: UUID, accountBalances: [UUID: Decimal]? = nil) -> Decimal {
         let old = entries.first { $0.id == entry.id && $0.deletedAt == nil }
-        return balance(id) - (old?.accountChange(for: id) ?? 0)
+        return (accountBalances?[id] ?? balance(id)) - (old?.accountChange(for: id) ?? 0)
             + (entry.deletedAt == nil ? entry.accountChange(for: id) : 0)
     }
     func reconciliationEntry(for id: UUID, bookID: UUID? = nil) -> MoneyEntry {
@@ -683,11 +693,19 @@ struct FinanceData: Codable, Equatable {
     mutating func removeManualRate(from: String, to: String) {
         rates.removeAll { $0.isManual && ($0.base == from && $0.quote == to || $0.base == to && $0.quote == from) }
     }
+    /// Posting estimates use dated reference quotes only; manual quotes belong to asset valuation.
+    func cachedReferenceRates(from base: String, quotes: [String], onOrBefore day: String, including pending: [MoneyRate] = []) -> [MoneyRate] {
+        var selected: [String: MoneyRate] = [:]
+        for rate in pending + rates where rate.isValidReference && rate.base == base && quotes.contains(rate.quote) && rate.date <= day {
+            if let old = selected[rate.quote], old.date > rate.date || old.date == rate.date && old.fetchedAt >= rate.fetchedAt { continue }
+            selected[rate.quote] = rate
+        }
+        return selected.values.sorted { $0.quote < $1.quote }
+    }
     mutating func mergeReferenceRates(_ incoming: [MoneyRate], replaceManual: Bool = false) throws {
         var updated = self
         for rate in incoming {
-            guard !rate.isManual, Money.currencies.contains(rate.base), Money.currencies.contains(rate.quote), rate.base != rate.quote,
-                  MoneyRate.valid(rate.rate), rate.date.count == 10, rate.fetchedAt.timeIntervalSince1970.isFinite, rate.source.count <= 80 else {
+            guard rate.isValidReference else {
                 throw TaskBackup.invalid(L("汇率数据无效。", "Invalid exchange rate data."))
             }
             if updated.storedRate(from: rate.base, to: rate.quote)?.isManual == true {

@@ -175,6 +175,59 @@ enum CloudMerge {
         for index in result.indices where result[index].parentID.map(archivedParents.contains) == true { result[index].archived = true }
         return result
     }
+    private struct AccountPostings: Equatable {
+        var accounts: [MoneyAccount]
+        var entries: [MoneyEntry]
+    }
+    /// Amounts and transfer fees are denominated by their accounts. Never merge a currency change
+    /// separately from its postings; linked refunds and transfers must follow the same choice.
+    static func accountPostingRows(_ local: FinanceData, _ cloud: FinanceData, _ base: FinanceData?,
+                                   choice: Choice?, report: @escaping (String) -> Void) throws -> (accounts: [MoneyAccount], entries: [MoneyEntry]) {
+        let cloudAccounts = Dictionary(uniqueKeysWithValues: cloud.accounts.map { ($0.id, $0) })
+        let differing = Set(local.accounts.compactMap { account -> UUID? in
+            guard let other = cloudAccounts[account.id], other.currency != account.currency else { return nil }
+            return account.id
+        })
+        var accountEntries: [UUID: Set<UUID>] = [:], entryAccounts: [UUID: Set<UUID>] = [:], refunds: [UUID: Set<UUID>] = [:]
+        if !differing.isEmpty {
+            for entry in local.entries + cloud.entries + (base?.entries ?? []) {
+                for id in [entry.accountID, entry.destinationID].compactMap({ $0 }) where differing.contains(id) {
+                    accountEntries[id, default: []].insert(entry.id); entryAccounts[entry.id, default: []].insert(id)
+                }
+                if let original = entry.refundOf {
+                    refunds[entry.id, default: []].insert(original); refunds[original, default: []].insert(entry.id)
+                }
+            }
+        }
+        var handledAccounts = Set<UUID>(), handledEntries = Set<UUID>()
+        var chosenAccounts: [MoneyAccount] = [], chosenEntries: [MoneyEntry] = []
+        for id in differing.sorted(by: { $0.uuidString < $1.uuidString }) where !handledAccounts.contains(id) {
+            var accounts: Set<UUID> = [id], entries = Set<UUID>(), pending = Array(accountEntries[id] ?? [])
+            while let entry = pending.popLast() {
+                guard entries.insert(entry).inserted else { continue }
+                pending.append(contentsOf: refunds[entry] ?? [])
+                for account in entryAccounts[entry] ?? [] where accounts.insert(account).inserted {
+                    pending.append(contentsOf: accountEntries[account] ?? [])
+                }
+            }
+            func family(_ finance: FinanceData?) -> AccountPostings {
+                AccountPostings(accounts: (finance?.accounts ?? []).filter { accounts.contains($0.id) }.sorted { $0.id.uuidString < $1.id.uuidString },
+                                entries: (finance?.entries ?? []).filter { entries.contains($0.id) }.sorted { $0.id.uuidString < $1.id.uuidString })
+            }
+            let left = family(local), right = family(cloud)
+            let chosen = try value(left, right, family(base), label:
+                L("账户币种与关联流水（选择将用于这些账户、转账、手续费及关联退款）", "Account currencies and postings (choice includes these accounts, transfers, fees and linked refunds)") + "\n" +
+                left.accounts.map { $0.name + " · " + $0.currency + " / " + cloudAccounts[$0.id]!.currency }.joined(separator: "\n"), choice: choice, report: report)
+            handledAccounts.formUnion(accounts); handledEntries.formUnion(entries)
+            chosenAccounts += chosen.accounts; chosenEntries += chosen.entries
+        }
+        let accounts = try rows(local.accounts.filter { !handledAccounts.contains($0.id) }, cloud.accounts.filter { !handledAccounts.contains($0.id) },
+                                (base?.accounts ?? []).filter { !handledAccounts.contains($0.id) }, id: { $0.id }, label: L("记账账户", "Account"), describe: { $0.name }, choice: choice, report: report)
+        let entries = try rows(local.entries.filter { !handledEntries.contains($0.id) }, cloud.entries.filter { !handledEntries.contains($0.id) },
+                               (base?.entries ?? []).filter { !handledEntries.contains($0.id) }, id: { $0.id }, label: L("账单", "Entry"), describe: { $0.title + " · " + $0.currency + " " + NSDecimalNumber(decimal: $0.amount).stringValue }, choice: choice, report: report)
+        return ((accounts + chosenAccounts).sorted { $0.id.uuidString < $1.id.uuidString },
+                (entries + chosenEntries).sorted { $0.id.uuidString < $1.id.uuidString })
+    }
     static func merge(local rawLocal: TaskBackup, cloud rawCloud: TaskBackup, base rawBase: TaskBackup?, choice: Choice? = nil,
                       cloudExists: Bool = true) throws -> TaskBackup {
         var local = try TaskBackup.decode(bytes(rawLocal), allowLargeFile: true)
@@ -203,10 +256,9 @@ enum CloudMerge {
             } else {
                 var finance = l
                 finance.baseCurrency = try value(l.baseCurrency, r.baseCurrency, b?.baseCurrency ?? "CNY", label: L("记账本位币", "Base currency"), choice: choice, report: report)
-                finance.accounts = try rows(l.accounts, r.accounts, b?.accounts ?? [], id: { $0.id }, label: L("记账账户", "Account"), describe: { $0.name }, choice: choice, report: report)
+                (finance.accounts, finance.entries) = try accountPostingRows(l, r, b, choice: choice, report: report)
                 finance.books = try rows(l.books, r.books, b?.books ?? [], id: { $0.id }, label: L("账本", "Book"), describe: { $0.name }, choice: choice, report: report)
                 finance.categories = try categoryRows(l.categories, r.categories, b?.categories ?? [], choice: choice, report: report)
-                finance.entries = try rows(l.entries, r.entries, b?.entries ?? [], id: { $0.id }, label: L("账单", "Entry"), describe: { $0.title + " · " + $0.currency + " " + NSDecimalNumber(decimal: $0.amount).stringValue }, choice: choice, report: report)
                 finance.rates = try rateRows(l.rates, r.rates, b?.rates ?? [], choice: choice, report: report)
                 result.finance = finance
             }
@@ -349,6 +401,20 @@ enum CloudMerge {
     private var conflictCloud: Data?
     private var observer: NSObjectProtocol?
     private var retryAfter: Date?
+    /// Only cache a saved context revision. Recovery replaces the context; every save changes revision.
+    struct SnapshotCache {
+        let contextID: ObjectIdentifier
+        let revision: Int
+        let baseline: Data?
+        let local: TaskBackup
+        let localBytes: Data
+        let base: TaskBackup?
+        let baselineDigest: String?
+        @MainActor func matches(_ context: ModelContext, baseline: Data?) -> Bool {
+            contextID == ObjectIdentifier(context) && revision == Store.revision && self.baseline == baseline && !context.hasChanges
+        }
+    }
+    @ObservationIgnored private var snapshotCache: SnapshotCache?
     private var context: ModelContext? { (Store.recovery.container ?? originalContainer)?.mainContext }
     var summary: String {
         if !enabled { return L("仅保存在本机", "Stored on this device") }
@@ -362,6 +428,8 @@ enum CloudMerge {
         else if editors == 0 { localSaved() }
     }
     func attach(_ container: ModelContainer) {
+        generation += 1; snapshotCache = nil
+        if let observer { NotificationCenter.default.removeObserver(observer) }
         originalContainer = container
         do {
             if let state = try container.mainContext.fetch(FetchDescriptor<CloudSyncState>()).first {
@@ -371,7 +439,7 @@ enum CloudMerge {
         observer = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.generation += 1
+                self.generation += 1; self.snapshotCache = nil
                 self.localSaved()
             }
         }
@@ -389,7 +457,7 @@ enum CloudMerge {
             let state = try state(context); state.enabled = value
             applying = true; defer { applying = false }
             try Store.save(context)
-            enabled = value; generation += 1; detail = ""; conflict = false
+            enabled = value; generation += 1; snapshotCache = nil; detail = ""; conflict = false
             debounce?.cancel()
             if value { Task { await sync() } }
         } catch { detail = error.localizedDescription }
@@ -427,6 +495,7 @@ enum CloudMerge {
             guard canContinue(ticket, in: context) else { return }
             let state = try state(context)
             if !state.account.isEmpty && state.account != account {
+                snapshotCache = nil
                 accountChanged = true
                 throw TaskBackup.invalid(L("iCloud 账户已改变。为避免把原账户数据传给其他人，同步已暂停。切回原账户后可继续。", "The iCloud account changed. Sync is paused to avoid uploading the previous account’s data. Switch back to the original account to continue."))
             }
@@ -439,17 +508,27 @@ enum CloudMerge {
                 try Store.save(context)
             }
             let baseline = state.baseline
-            let local = try TaskBackup.capture(context)
-            let capturedRevision = Store.revision
-            let (base, localBytes, baselineDigest) = try await Task.detached {
-                (try baseline.map { try TaskBackup.decode($0, allowLargeFile: true) },
-                 try CloudMerge.bytes(local), baseline.map(CloudMerge.digest))
-            }.value
-            guard canContinue(ticket, in: context) else { return }
+            let prepared: SnapshotCache
+            if let cached = snapshotCache, cached.matches(context, baseline: baseline) {
+                prepared = cached
+            } else {
+                let local = try TaskBackup.capture(context), revision = Store.revision
+                let (base, localBytes, baselineDigest) = try await Task.detached {
+                    (try baseline.map { try TaskBackup.decode($0, allowLargeFile: true) },
+                     try CloudMerge.bytes(local), baseline.map(CloudMerge.digest))
+                }.value
+                guard canContinue(ticket, in: context) else { return }
+                prepared = SnapshotCache(contextID: ObjectIdentifier(context), revision: revision, baseline: baseline,
+                                         local: local, localBytes: localBytes, base: base, baselineDigest: baselineDigest)
+                if prepared.matches(context, baseline: state.baseline) { snapshotCache = prepared }
+            }
+            let local = prepared.local, localBytes = prepared.localBytes, base = prepared.base
+            let capturedRevision = prepared.revision, baselineDigest = prepared.baselineDigest
             let database = container.privateCloudDatabase
             let recordID = CKRecord.ID(recordName: "tally-personal-v1")
             var record: CKRecord
             var remote: TaskBackup
+            var unchangedRemoteBytes: Data?
             var cloudExists = true
             do {
                 let headers = try await database.records(for: [recordID], desiredKeys: ["formatVersion", "digest"])
@@ -460,6 +539,7 @@ enum CloudMerge {
                 }
                 if let base, let baselineDigest, record["digest"] as? String == baselineDigest {
                     remote = base // Do not download the asset again when nothing changed in the cloud.
+                    unchangedRemoteBytes = baseline
                 } else {
                     record = try await database.record(for: recordID)
                     guard (record["formatVersion"] as? Int64) == 1, let url = (record["snapshot"] as? CKAsset)?.fileURL else { throw TaskBackup.invalid("Unsupported cloud snapshot") }
@@ -476,7 +556,9 @@ enum CloudMerge {
                 cloudExists = false
             }
             let cloud = remote, existingCloud = cloudExists
-            let remoteBytes = try await Task.detached { try CloudMerge.bytes(cloud) }.value
+            let remoteBytes: Data
+            if let unchangedRemoteBytes { remoteBytes = unchangedRemoteBytes }
+            else { remoteBytes = try await Task.detached { try CloudMerge.bytes(cloud) }.value }
             guard canContinue(ticket, in: context) else { return }
             if localBytes == baseline && localBytes == remoteBytes && capturedRevision == Store.revision {
                 lastSync = Date(); detail = ""; conflict = false
@@ -546,6 +628,8 @@ enum CloudMerge {
             defer { applying = false }
             guard try CloudMerge.commit(final, changed: changed, baseline: mergedBytes, state: state,
                                         revision: importRevision, in: context) else { pendingSave = true; return }
+            // A save may normalize list colors. Refill from the actual committed context on the next poll.
+            snapshotCache = nil
             lastSync = state.lastSync; detail = ""; conflict = false; conflictLocal = nil; conflictCloud = nil
             if finalBytes != mergedBytes { pendingSave = true; detail = L("新修改等待上传。", "New edits are waiting to upload.") }
         } catch {
@@ -634,7 +718,7 @@ struct CloudSyncSettings: View {
                 ScrollView {
                     Text(sync.detail).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                 }
-                Text(L("下面的选择适用于本次列出的所有冲突。重复任务按整条序列选择；本位币冲突按整本账目选择。其他项目继续合并。合并前已保存双方恢复副本。", "Your choice applies to all listed conflicts. Repeating tasks are kept as a whole chain; base-currency conflicts affect the entire ledger. Other items are merged. Recovery copies of both sides are saved first."))
+                Text(L("下面的选择适用于本次列出的所有冲突。重复任务按整条序列选择；账户币种与关联流水一起选择；本位币冲突按整本账目选择。其他项目继续合并。合并前已保存双方恢复副本。", "Your choice applies to all listed conflicts. Repeating tasks are kept as a whole chain; account currencies stay with their related postings; base-currency conflicts affect the entire ledger. Other items are merged. Recovery copies of both sides are saved first."))
                     .font(.callout).foregroundStyle(.secondary)
                 Button(L("所有冲突保留本机修改", "Keep local changes for all conflicts")) { resolve = false; Task { await sync.sync(choice: .local) } }
                     .buttonStyle(.bordered).controlSize(.large)
@@ -755,6 +839,79 @@ extension CloudMerge {
         try rejects("base currency conversion versus concurrent posting conflicts") { _ = try merge(local: local, cloud: remote, base: base) }
         remote = base; remote.finance!.entries = [transfer]; remote.finance!.entries[0].accountAmount = 1499
         try rejects("same posting does not silently win") { _ = try merge(local: local, cloud: remote, base: base) }
+        do {
+            var money = FinanceData.initial
+            let wallet = MoneyAccount(name: "Travel wallet", currency: "USD", opening: 100)
+            let sender = MoneyAccount(name: "CNY sender", currency: "CNY", opening: 1000)
+            let spare = MoneyAccount(name: "Spare", currency: "GBP", opening: 50)
+            money.accounts = [wallet, sender, spare]
+            let original = TaskBackup(finance: money, lists: [], tasks: [])
+            var converted = original, changed = wallet; changed.currency = "EUR"
+            try converted.finance!.updateAccount(changed, expected: wallet)
+            var debit = MoneyEntry(); debit.title = "USD coffee"; debit.currency = "USD"; debit.amount = 10
+            debit.accountID = wallet.id; debit.accountAmount = 10; debit.bookID = money.books[0].id; debit.baseAmount = 70
+            var credit = debit; credit.id = UUID(); credit.kind = .income; credit.title = "USD income"
+            var incoming = debit; incoming.id = UUID(); incoming.kind = .transfer; incoming.title = "Incoming transfer"
+            incoming.currency = "CNY"; incoming.amount = 70; incoming.accountID = sender.id; incoming.accountAmount = 70
+            incoming.destinationID = wallet.id; incoming.destinationAmount = 10; incoming.fee = 2; incoming.baseFee = 2; incoming.baseAmount = nil
+            var outgoing = debit; outgoing.id = UUID(); outgoing.kind = .transfer; outgoing.title = "Outgoing transfer"
+            outgoing.destinationID = sender.id; outgoing.destinationAmount = 70; outgoing.fee = 1; outgoing.baseFee = 7; outgoing.baseAmount = nil
+            var adjustment = debit; adjustment.id = UUID(); adjustment.kind = .adjustment; adjustment.title = "USD correction"
+            adjustment.amount = -10; adjustment.accountAmount = -10; adjustment.baseAmount = nil
+            var unrelated = debit; unrelated.id = UUID(); unrelated.title = "Independent GBP posting"
+            unrelated.currency = "GBP"; unrelated.accountID = spare.id; unrelated.baseAmount = 90
+            for posting in [debit, credit, incoming, outgoing, adjustment] {
+                var posted = original
+                try posted.finance!.updateEntry(posting, expected: nil, baseCurrency: "CNY")
+                try posted.finance!.updateEntry(unrelated, expected: nil, baseCurrency: "CNY")
+                for reverse in [false, true] {
+                    let left = reverse ? posted : converted, right = reverse ? converted : posted
+                    do {
+                        _ = try merge(local: left, cloud: right, base: original)
+                        throw TaskBackup.invalid("Currency and concurrent posting must require an explicit choice")
+                    } catch let conflict as Conflict {
+                        try check(conflict.label.contains(wallet.name) && conflict.label.contains("USD") && conflict.label.contains("EUR"), "currency conflict identifies account and both denominations: \(posting.title)")
+                    }
+                    for choice in [Choice.local, .cloud] {
+                        let selected = choice == .local ? left : right
+                        let resolved = try merge(local: left, cloud: right, base: original, choice: choice)
+                        try check(resolved.finance!.accounts.first { $0.id == wallet.id } == selected.finance!.accounts.first { $0.id == wallet.id } &&
+                                  resolved.finance!.entries.first { $0.id == posting.id } == selected.finance!.entries.first { $0.id == posting.id }, "currency choice retains complete account and posting amounts/fees: \(posting.title)")
+                        try check(resolved.finance!.entries.contains(unrelated), "currency choice preserves independent postings")
+                        try check(try bytes(merge(local: resolved, cloud: resolved, base: original)) == bytes(resolved), "currency resolution retries are idempotent")
+                    }
+                }
+            }
+            // A refund to another account still depends on the selected original expense.
+            var refunded = original, refund = debit; refund.id = UUID(); refund.kind = .refund; refund.refundOf = debit.id
+            refund.title = "Refund to spare"; refund.accountID = spare.id; refund.accountAmount = 8
+            refunded.finance!.entries = [debit, refund, unrelated]
+            let keepCurrency = try merge(local: converted, cloud: refunded, base: original, choice: .local)
+            let keepRefund = try merge(local: converted, cloud: refunded, base: original, choice: .cloud)
+            try check(keepCurrency.finance!.entries == [unrelated] && keepRefund.finance!.entries.count == 3, "currency resolution keeps or removes expense and linked refund together")
+            // Two accounts connected by a transfer must use one choice even if both currencies differ.
+            var bothConverted = converted, convertedSender = sender; convertedSender.currency = "AUD"
+            try bothConverted.finance!.updateAccount(convertedSender, expected: sender)
+            var transferred = original; transferred.finance!.entries = [incoming, unrelated]
+            for choice in [Choice.local, .cloud] {
+                let resolved = try merge(local: bothConverted, cloud: transferred, base: original, choice: choice)
+                try check(resolved.finance!.entries.count == (choice == .local ? 1 : 2), "connected currency changes resolve transfer exactly once")
+                try check(resolved.finance!.accounts.first { $0.id == sender.id }?.currency == (choice == .local ? "AUD" : "CNY"), "connected currency changes keep both account denominations")
+            }
+            var independent = original; independent.finance!.entries = [unrelated]
+            try check(try merge(local: converted, cloud: independent, base: original).finance!.entries == [unrelated], "currency edit merges with unrelated posting without conflict")
+            var separate = original, changedSpare = spare; changedSpare.currency = "JPY"
+            try separate.finance!.updateAccount(changedSpare, expected: spare)
+            let separateResult = try merge(local: converted, cloud: separate, base: original)
+            try check(separateResult.finance!.accounts.first { $0.id == wallet.id }?.currency == "EUR" && separateResult.finance!.accounts.first { $0.id == spare.id }?.currency == "JPY", "independent account currency edits merge without a false conflict")
+            var oneSided = converted, newCurrencyDebit = debit; newCurrencyDebit.currency = "EUR"
+            oneSided.finance!.entries = [newCurrencyDebit]
+            try check(try bytes(merge(local: oneSided, cloud: original, base: original)) == bytes(oneSided), "one-sided currency edit and subsequent posting merge together")
+            var renamed = original; renamed.finance!.accounts[0].name = "Renamed wallet"
+            var ordinary = original; ordinary.finance!.entries = [debit]
+            let ordinaryResult = try merge(local: renamed, cloud: ordinary, base: original)
+            try check(ordinaryResult.finance!.entries == [debit] && ordinaryResult.finance!.accounts.first { $0.id == wallet.id }?.name == "Renamed wallet", "account rename and concurrent posting remain independent")
+        }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("sync-check-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -770,6 +927,29 @@ extension CloudMerge {
         let savedState = try reopened.mainContext.fetch(FetchDescriptor<CloudSyncState>()).first!
         try check(try savedState.baseline == bytes(TaskBackup.capture(reopened.mainContext)), "merge base commits atomically with data")
         try check(savedState.account == "fixture-account" && savedState.enabled, "account binding survives restart")
+        do {
+            let cacheStore = try Store.make(url: directory.appendingPathComponent("cache.store")), cacheContext = cacheStore.mainContext
+            try stage(base, in: cacheContext); try Store.save(cacheContext)
+            let captured = try TaskBackup.capture(cacheContext), encoded = try bytes(captured)
+            let cached = CloudSync.SnapshotCache(contextID: ObjectIdentifier(cacheContext), revision: Store.revision, baseline: encoded,
+                                                local: captured, localBytes: encoded, base: try TaskBackup.decode(encoded), baselineDigest: digest(encoded))
+            try check(cached.matches(cacheContext, baseline: encoded) && cached.matches(cacheContext, baseline: encoded), "unchanged sync polls reuse the same saved revision")
+            try check(try cached.localBytes == bytes(TaskBackup.capture(cacheContext)) && bytes(cached.base!) == encoded && cached.baselineDigest == digest(encoded), "cached local snapshot and merge base equal fresh captures and encoding")
+            try check(!cached.matches(reopened.mainContext, baseline: encoded), "reloaded or attached context cannot reuse another context's sync cache")
+            try check(!cached.matches(cacheContext, baseline: nil) && !cached.matches(cacheContext, baseline: Data("different baseline".utf8)), "baseline reset or replacement invalidates sync cache")
+            let cachedTask = try cacheContext.fetch(FetchDescriptor<TaskItem>()).first!
+            cachedTask.notes = "Unsaved editor draft"
+            try check(!cached.matches(cacheContext, baseline: encoded), "unsaved drafts cannot reuse sync snapshot cache")
+            cacheContext.rollback()
+            try check(cached.matches(cacheContext, baseline: encoded), "rolled back draft retains the unchanged saved snapshot")
+            cachedTask.notes = "Saved after snapshot preparation"; try Store.save(cacheContext)
+            try check(!cached.matches(cacheContext, baseline: encoded) && cached.localBytes != bytes(TaskBackup.capture(cacheContext)), "saved edits reject an older prepared snapshot even when baseline is unchanged")
+            let fresh = try TaskBackup.capture(cacheContext), freshBytes = try bytes(fresh)
+            let reset = CloudSync.SnapshotCache(contextID: ObjectIdentifier(cacheContext), revision: Store.revision, baseline: nil,
+                                               local: fresh, localBytes: freshBytes, base: nil, baselineDigest: nil)
+            Store.invalidateHistory()
+            try check(!reset.matches(cacheContext, baseline: nil), "explicit store invalidation expires first-sync cache without a baseline")
+        }
         let backup = try TaskBackup.capture(context).encoded()
         try check(!String(decoding: backup, as: UTF8.self).contains("fixture-account"), "portable exports exclude sync credentials and baseline")
         let oldURL = directory.appendingPathComponent("previous.store")
@@ -914,5 +1094,33 @@ extension CloudMerge {
 
         print("SYNC PASS: \(count) merge and storage checks")
         return count
+    }
+}
+
+extension CloudSync {
+    /// Called only with the performance check's disposable store; no CloudKit or user data access.
+    @MainActor static func snapshotPerformance(in context: ModelContext) throws {
+        let local = try TaskBackup.capture(context), baseline = try CloudMerge.bytes(local), digest = CloudMerge.digest(baseline)
+        let cached = SnapshotCache(contextID: ObjectIdentifier(context), revision: Store.revision, baseline: baseline,
+                                   local: local, localBytes: baseline, base: try TaskBackup.decode(baseline, allowLargeFile: true), baselineDigest: digest)
+        var uncached: [Double] = [], reused: [Double] = []
+        for _ in 0..<3 {
+            var start = ProcessInfo.processInfo.systemUptime
+            let captured = try TaskBackup.capture(context), encoded = try CloudMerge.bytes(captured)
+            let base = try TaskBackup.decode(baseline, allowLargeFile: true), baselineDigest = CloudMerge.digest(baseline)
+            uncached.append(ProcessInfo.processInfo.systemUptime - start)
+            guard encoded == cached.localBytes, try CloudMerge.bytes(base) == baseline, baselineDigest == cached.baselineDigest else {
+                throw TaskBackup.invalid("Sync cache differs from uncached preparation")
+            }
+            start = ProcessInfo.processInfo.systemUptime
+            for _ in 0..<1000 {
+                guard cached.matches(context, baseline: baseline), cached.localBytes == baseline, cached.baselineDigest == digest else {
+                    throw TaskBackup.invalid("Unchanged sync poll did not reuse its prepared snapshot")
+                }
+            }
+            reused.append((ProcessInfo.processInfo.systemUptime - start) / 1000)
+        }
+        print(String(format: "PERF unchanged sync snapshot, %d tasks/%d entries: uncached %.3f ms/poll, cached %.6f ms/poll (median of 3)",
+                     local.tasks.count, local.finance?.entries.count ?? 0, uncached.sorted()[1] * 1000, reused.sorted()[1] * 1000))
     }
 }

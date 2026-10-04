@@ -119,13 +119,6 @@ struct EditorRequest: Identifiable {
 
 }
 
-private final class SwipeTracker {
-    var total: CGFloat = 0
-    var fired = false
-    /// Replaced on every update, so a swipe always steps from the date on screen, not the one at install time.
-    var step: ((Int) -> Void)?
-}
-
 /// Left and right swipes turn the page: a finger drag on iPhone, a two-finger trackpad swipe on Mac.
 struct PageSwipe: ViewModifier {
     let step: (Int) -> Void
@@ -134,15 +127,9 @@ struct PageSwipe: ViewModifier {
         guard abs(dx) > 70, abs(dx) > abs(dy) * 1.6 else { return nil }
         return dx < 0 ? 1 : -1
     }
-    #if os(macOS)
-    @State private var monitor: Any?
-    @State private var tracker = SwipeTracker()
-    #endif
-
     func body(content: Content) -> some View {
         #if os(macOS)
-        tracker.step = step
-        return content.onAppear(perform: install).onDisappear(perform: remove)
+        content.background(MacPageSwipe(step: step))
         #else
         if #available(iOS 18, *) {
             content.gesture(HorizontalPageDrag(step: step))
@@ -154,35 +141,56 @@ struct PageSwipe: ViewModifier {
         #endif
     }
 
-    #if os(macOS)
-    private func install() {
-        guard monitor == nil else { return }
-        let tracker = tracker
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            // Only the main window turns pages; sheets and popovers scroll on their own.
-            guard event.window?.attachedSheet == nil, event.window?.isKeyWindow ?? false || event.window?.isMainWindow ?? false,
-                  event.window is NSPanel == false else { return event }
-            if event.phase == .began || event.phase == .mayBegin { tracker.total = 0; tracker.fired = false }
-            guard event.momentumPhase.isEmpty, event.hasPreciseScrollingDeltas else { return event }
-            if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.2 {
-                // Finger movement, whichever scrolling direction the system uses.
-                tracker.total += event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX
-                if !tracker.fired && abs(tracker.total) > 80 {
-                    tracker.fired = true
-                    tracker.step?(tracker.total < 0 ? 1 : -1)
+}
+
+#if os(macOS)
+/// Local monitors receive events from every app window, including background editors.
+@MainActor enum LocalEventScope {
+    static func accepts(window source: NSWindow?, in view: NSView) -> Bool {
+        guard let owner = view.window else { return false }
+        return source === owner && owner.attachedSheet == nil && !view.isHiddenOrHasHiddenAncestor
+    }
+}
+
+private struct MacPageSwipe: NSViewRepresentable {
+    let step: (Int) -> Void
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) { view.step = step }
+    static func dismantleNSView(_ view: Probe, coordinator: ()) { view.stop() }
+
+    final class Probe: NSView {
+        var step: ((Int) -> Void)?
+        private var monitor: Any?
+        private var total: CGFloat = 0
+        private var fired = false
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow(); stop()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, LocalEventScope.accepts(window: event.window, in: self),
+                      let window = self.window, window.isKeyWindow || window.isMainWindow,
+                      !(window is NSPanel), self.visibleRect.contains(self.convert(event.locationInWindow, from: nil)) else { return event }
+                if event.phase == .began || event.phase == .mayBegin { self.total = 0; self.fired = false }
+                guard event.momentumPhase.isEmpty, event.hasPreciseScrollingDeltas else { return event }
+                if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.2 {
+                    self.total += event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX
+                    if !self.fired && abs(self.total) > 80 {
+                        self.fired = true
+                        self.step?(self.total < 0 ? 1 : -1)
+                    }
                 }
+                if event.phase == .ended || event.phase == .cancelled { self.total = 0; self.fired = false }
+                return event
             }
-            if event.phase == .ended || event.phase == .cancelled { tracker.total = 0; tracker.fired = false }
-            return event
+        }
+        func stop() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil; total = 0; fired = false
         }
     }
-
-    private func remove() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
-    }
-    #endif
 }
+#endif
 
 #if os(iOS)
 /// Reject vertical pans before recognition, so scrolling keeps its native momentum.
@@ -788,13 +796,13 @@ struct ContentView: View {
                 }
             }
             .task { initializeWindow() }
-            #if os(macOS)
             .onOpenURL { url in
                 if let id = ReminderNavigation.taskID(url: url) {
                     drafts.reminder.pendingTaskID = id
                     openReminderIfReady()
                     return
                 }
+                #if os(macOS)
                 guard url.scheme == "jianshi", Store.recovery.failure == nil else { return }
                 guard editor == nil, listEditor == nil else { notify(L("请先完成当前编辑，再打开小组件中的任务。", "Finish the current edit before opening a widget task.")); return }
                 if url.host == "today" {
@@ -809,7 +817,10 @@ struct ContentView: View {
                     selection = .calendar; search = ""; filter = TaskFilter(); locate(task)
                     editor = EditorRequest(task: task)
                 }
+                #endif
             }
+            #if os(iOS)
+            .onChange(of: ReminderInbox.shared.navigation.pendingTaskID, initial: true) { _, _ in receiveReminder() }
             #endif
             .onChange(of: language) { _, _ in
                 #if os(macOS)
@@ -838,7 +849,9 @@ struct ContentView: View {
                 if !Dates.sameDay(currentDay, now) { selectedDate = Dates.selectionAfterDayChange(selectedDate, previousToday: currentDay, now: now) }
                 currentDay = now
             }
-            .onChange(of: scenePhase) { _, phase in if phase == .active { refreshDay() } }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { refreshDay(); receiveReminder() }
+            }
             .safeAreaInset(edge: .bottom) {
                 BackupStatusNotice { showingSettings = true }
                 if let id = assigning, let task = tasks.first(where: { $0.id == id }) {
@@ -898,6 +911,9 @@ struct ContentView: View {
                 pendingMove = nil; confirmingDelete = nil; deletingList = nil; purgeIDs = nil
             }
             .onChange(of: reminderAlertActive) { _, active in if !active { openReminderIfReady() } }
+            .onChange(of: drafts.finance == nil && drafts.financeEntity == nil && !drafts.financePresentationActive) { _, finished in
+                if finished { openReminderIfReady() }
+            }
             .sheet(isPresented: $showingSettings, onDismiss: openReminderIfReady) { PreferencesView() }
             .sheet(item: $copyRequest, onDismiss: openReminderIfReady) { request in
                 TaskCopySheet(record: request.record) { moment, timed in pasteTask(request.record, at: moment, timed: timed) }
@@ -912,8 +928,17 @@ struct ContentView: View {
         pendingMove != nil || confirmingDelete != nil || deletingList != nil || purgeIDs != nil || errorMessage != nil
     }
 
+    private func receiveReminder() {
+        #if os(iOS)
+        guard let id = ReminderInbox.shared.navigation.take(blocked: scenePhase != .active) else { return }
+        drafts.reminder.pendingTaskID = id
+        openReminderIfReady()
+        #endif
+    }
+
     private func openReminderIfReady() {
         let blocked = !windowReady || editor != nil || listEditor != nil || copyRequest != nil || showingSettings || reminderAlertActive
+            || drafts.finance != nil || drafts.financeEntity != nil || drafts.financePresentationActive
             || Store.recovery.failure != nil || recoveryGeneration != Store.recovery.generation
         guard let id = drafts.reminder.take(blocked: blocked) else { return }
         guard let task = tasks.first(where: { $0.id == id && $0.deletedAt == nil }) else {
@@ -928,7 +953,7 @@ struct ContentView: View {
     }
 
     private func initializeWindow() {
-        defer { windowReady = true; openReminderIfReady() }
+        defer { windowReady = true; receiveReminder(); openReminderIfReady() }
         // The timeline and the multiweek overview became the week and month views.
         if planningView == "timeline" { planningView = "week" } else if planningView == "weeks" { planningView = "month" }
         restoreEditorDraft()

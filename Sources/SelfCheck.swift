@@ -366,6 +366,24 @@ import AppKit
             route.pendingTaskID = later
             try require(route.take(blocked: false) == later && route.pendingTaskID == nil, "After editing open the most recently selected notification once")
             try require(route.take(blocked: false) == nil, "Consumed notification cannot reopen an editor")
+            let inbox = ReminderInbox()
+            let financePresentation = EditorDrafts()
+            try require(!financePresentation.financePresentationActive, "A new window has no finance presentation blocking reminders")
+            financePresentation.financePresentationGeneration = Store.recovery.generation
+            try require(financePresentation.financePresentationActive, "Open finance dialogs defer reminder navigation")
+            financePresentation.financePresentationGeneration = Store.recovery.generation - 1
+            try require(!financePresentation.financePresentationActive, "Recovered windows ignore obsolete finance presentation state")
+            inbox.receive(id)
+            try require(inbox.navigation.take(blocked: true) == nil && inbox.navigation.pendingTaskID == id,
+                        "Notification tap survives delivery before an active iOS window exists")
+            inbox.receive(later)
+            route.pendingTaskID = inbox.navigation.take(blocked: false)
+            try require(route.pendingTaskID == later && inbox.navigation.pendingTaskID == nil,
+                        "An active window accepts the latest notification exactly once")
+            try require(route.take(blocked: true) == nil && route.pendingTaskID == later,
+                        "Accepted notification waits while a task or finance draft is open")
+            try require(route.take(blocked: false) == later && inbox.navigation.take(blocked: false) == nil,
+                        "Closing the editor opens the accepted notification without redelivery")
         }
         do {
             let source = TaskItem(title: "Template", scheduledAt: date(2026, 9, 10))
@@ -2306,7 +2324,14 @@ import AppKit
             }
             try checkSyncState(migrated.mainContext)
             if let expectedPath = ProcessInfo.processInfo.environment["JIANSHI_MIGRATION_EXPECTED"] {
-                let expected = try TaskBackup.decode(Data(contentsOf: URL(fileURLWithPath: expectedPath)))
+                var expected = try TaskBackup.decode(Data(contentsOf: URL(fileURLWithPath: expectedPath)))
+                // Compare saved fields strictly while accepting the current export version and newly added empty table.
+                // The old CloudSyncState baseline is checked byte-for-byte above, without normalization.
+                expected.version = before.version
+                if expected.weekTitles == nil {
+                    try require(before.weekTitles?.isEmpty == true, "A schema without week titles migrates to an empty week-title table")
+                    expected.weekTitles = []
+                }
                 try require(try BackupFiles.contentData(before) == BackupFiles.contentData(expected),
                             "Previous-version schema migrates every task/list field, link, subtask and identity unchanged")
             }
@@ -2391,6 +2416,7 @@ import AppKit
             }
         }
         try FinanceChecks.performance()
+        try CloudSync.snapshotPerformance(in: context)
         print("PERF PASS: 5000-task and 5000-entry save, layout, search, preview and backup restore")
     }
 }

@@ -5,6 +5,9 @@ import Observation
 @MainActor @Observable final class EditorDrafts {
     var financeEntity: FinanceEntityDraft?
     var finance: FinanceDraft?
+    // Presentation state expires when recovery replaces the window; value-only drafts remain separate.
+    var financePresentationGeneration: Int?
+    var financePresentationActive: Bool { financePresentationGeneration == Store.recovery.generation }
     var reminder = ReminderNavigation()
     var taskID: UUID?
     var task: TaskEditor.DraftState?
@@ -87,7 +90,7 @@ struct TaskEditor: View {
         _reminder = State(initialValue: task?.reminderAt ?? TaskEditor.defaultCustomReminder(for: task?.scheduledAt ?? request.date))
         _repeatRule = State(initialValue: task?.repeatRule ?? "none")
         _repeatUntil = State(initialValue: task?.repeatUntil)
-        _customRepeat = State(initialValue: !TaskEditor.repeatPresets.contains(task?.repeatRule ?? "none") && task?.repeatRule != "none")
+        _customRepeat = State(initialValue: Self.isCustomRepeat(task?.repeatRule))
         _listID = State(initialValue: task?.list?.id ?? request.listID)
         _subtasks = State(initialValue: task?.subtasks ?? [])
         if let draft {
@@ -100,7 +103,7 @@ struct TaskEditor: View {
             _dueHasTime = State(initialValue: draft.dueTimed); _priority = State(initialValue: draft.priority)
             _listID = State(initialValue: draft.listID); _repeatRule = State(initialValue: draft.repeating)
             _repeatUntil = State(initialValue: draft.repeatUntil)
-            _customRepeat = State(initialValue: !Self.repeatPresets.contains(draft.repeating) && draft.repeating != "none")
+            _customRepeat = State(initialValue: Self.isCustomRepeat(draft.repeating))
             _reminderPreset = State(initialValue: draft.preset)
             _reminder = State(initialValue: draft.reminder ?? Self.defaultCustomReminder(for: draft.scheduled))
         }
@@ -116,7 +119,7 @@ struct TaskEditor: View {
                             .focused($focus, equals: .title)
                             .accessibilityLabel(L("任务名称", "Task title"))
                             #if os(macOS)
-                            .modifier(SuggestionKeys(active: showSuggestions, handle: suggestionKey))
+                            .background(SuggestionKeys(active: showSuggestions && focus == .title, handle: suggestionKey))
                             #endif
                         if showSuggestions { suggestionList }
                         TextField("", text: $notes, prompt: Text(L("写点备注…", "Add a note…")), axis: .vertical)
@@ -576,6 +579,11 @@ struct TaskEditor: View {
 
     static let repeatPresets = ["daily", RepeatRule.workdays.text, "weekly", "monthly", "yearly"]
 
+    static func isCustomRepeat(_ rule: String?) -> Bool {
+        guard let rule, rule != "none" else { return false }
+        return !repeatPresets.contains(rule)
+    }
+
     /// The task's own day: the first time it happens.
     private var repeatStartDay: Date { Dates.calendar.startOfDay(for: reminderBase ?? date) }
     private var baseWeekday: Int { Dates.calendar.component(.weekday, from: repeatStartDay) }
@@ -902,25 +910,30 @@ private struct SelectPill: View {
 #if os(macOS)
 /// While the suggestion list is open, catches the arrow keys, Return and Esc before the text field
 /// (and before the sheet's own Esc = Cancel). An input method that is still composing gets them as usual.
-private struct SuggestionKeys: ViewModifier {
+private struct SuggestionKeys: NSViewRepresentable {
     let active: Bool
     let handle: (UInt16) -> Bool
-    @State private var monitor: Any?
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) { view.active = active; view.handle = handle }
+    static func dismantleNSView(_ view: Probe, coordinator: ()) { view.stop() }
 
-    func body(content: Content) -> some View {
-        content
-            .onChange(of: active, initial: true) { _, on in
-                if on, monitor == nil {
-                    monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                        if let editor = event.window?.firstResponder as? NSTextView, editor.hasMarkedText() { return event }
-                        guard event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
-                        return handle(event.keyCode) ? nil : event
-                    }
-                } else if !on, let installed = monitor {
-                    NSEvent.removeMonitor(installed); monitor = nil
-                }
+    final class Probe: NSView {
+        var active = false
+        var handle: ((UInt16) -> Bool)?
+        private var monitor: Any?
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow(); stop()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, self.active, LocalEventScope.accepts(window: event.window, in: self),
+                      let editor = self.window?.firstResponder as? NSTextView, !editor.hasMarkedText(),
+                      self.convert(self.visibleRect, to: nil).intersects(editor.convert(editor.visibleRect, to: nil)),
+                      event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
+                return self.handle?(event.keyCode) == true ? nil : event
             }
-            .onDisappear { if let installed = monitor { NSEvent.removeMonitor(installed); monitor = nil } }
+        }
+        func stop() { if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil }
     }
 }
 #endif

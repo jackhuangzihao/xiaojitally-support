@@ -425,6 +425,7 @@ struct ReminderEntry: Equatable {
     }
     private func reconcile(version: Int) async {
         guard let context = latestContext, (try? Store.recovery.requireWritable(context)) != nil else { return }
+        center.setNotificationCategories(ReminderAction.categories)
         do {
             let all = try context.fetch(FetchDescriptor<TaskItem>())
             let items = ReminderEntry.upcoming(all, now: Date())
@@ -570,6 +571,8 @@ struct ReminderEntry: Equatable {
         } catch {
             await MainActor.run { self.status = L("无法打开提醒中的任务：", "Could not open the reminder task: ") + error.localizedDescription }
         }
+        #else
+        await MainActor.run { ReminderInbox.shared.receive(id) }
         #endif
     }
 
