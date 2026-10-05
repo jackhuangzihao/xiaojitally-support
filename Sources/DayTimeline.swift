@@ -7,6 +7,7 @@ struct DayTimelineCard: View {
     var showTime = false
     let onComplete: () -> Void
     let onEdit: () -> Void
+    let onCopy: () -> Void
     let onDelete: () -> Void
     let onRemindNow: () -> Void
     let onToggleSubtask: (UUID) -> Void
@@ -229,20 +230,28 @@ struct DayTimelineCard: View {
                     }
                 }
             }
-            let actionLayout = dynamicTypeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-                : AnyLayout(HStackLayout())
-            actionLayout {
-                Button(action: onEdit) {
-                    Label(L("编辑", "Edit"), systemImage: "pencil").frame(minWidth: controlSize, minHeight: controlSize)
-                }
-                if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 12) }
-                Button(role: .destructive, action: onDelete) {
-                    Label(L("删除", "Delete"), systemImage: "trash").frame(minWidth: controlSize, minHeight: controlSize)
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) { taskActions }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) { taskActions }
+                    VStack(alignment: .leading, spacing: 4) { taskActions }
                 }
             }
         }
         .font(.callout).buttonStyle(.borderless)
+    }
+
+    @ViewBuilder private var taskActions: some View {
+        Button(action: onEdit) {
+            Label(L("编辑", "Edit"), systemImage: "pencil").frame(minWidth: controlSize, minHeight: controlSize)
+        }
+        Button(action: onCopy) {
+            Label(L("复制", "Copy"), systemImage: "doc.on.doc").frame(minWidth: controlSize, minHeight: controlSize)
+        }
+        Button(role: .destructive, action: onDelete) {
+            Label(L("删除", "Delete"), systemImage: "trash").frame(minWidth: controlSize, minHeight: controlSize)
+        }
     }
 
     @ViewBuilder private var reminderActions: some View {

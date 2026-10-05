@@ -102,6 +102,103 @@ import AppKit
         try require(try EditorVersion.selectedList(nil, in: context) == nil, "An explicitly unfiled task or top-level list remains valid")
         try require(try context.fetch(FetchDescriptor<TaskItem>()).isEmpty && context.fetch(FetchDescriptor<TaskList>()).count == 1,
                     "Rejected saves do not insert replacement records")
+        // New-task bookkeeping uses the exact draft preparation and single-context commit used by the editor.
+        let moneyContainer = try ModelContainer(for: TaskItem.self, TaskList.self, FinanceLedger.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let moneyContext = moneyContainer.mainContext
+        moneyContext.autosaveEnabled = false
+        var ledger = FinanceData.initial
+        let bank = MoneyAccount(name: "Task account", currency: "CNY", opening: 100)
+        ledger.accounts = [bank]; ledger.books[0].defaultAccountID = bank.id
+        var moneyDraft = TaskFinanceDraft(ledger: ledger)
+        moneyDraft.amount = "12.50"
+        let freshTask = TaskItem(title: "Task with an entry")
+        let prepared = try moneyDraft.preparedLedger(taskID: freshTask.id, title: freshTask.title, current: ledger)
+        try require(try FinanceStore.read(moneyContext) == nil && !moneyContext.hasChanges,
+                    "Preparing or cancelling a task finance draft creates no records")
+        try require(prepared.entries.count == 1 && prepared.entries[0].taskID == freshTask.id
+                    && prepared.entries[0].baseAmount == Decimal(string: "12.50") && prepared.balance(bank.id) == Decimal(string: "87.50"),
+                    "Task entry has the linked UUID and posts the typed expense exactly once")
+        moneyContext.insert(freshTask)
+        try FinanceStore.stage(prepared, in: moneyContext)
+        moneyContext.rollback()
+        try require(try moneyContext.fetch(FetchDescriptor<TaskItem>()).isEmpty && FinanceStore.read(moneyContext) == nil,
+                    "Rolling back a combined save removes both the task and staged ledger")
+        let savedTask = TaskItem(title: "Task with an entry")
+        let toSave = try moneyDraft.preparedLedger(taskID: savedTask.id, title: savedTask.title, current: ledger)
+        moneyContext.insert(savedTask); try FinanceStore.stage(toSave, in: moneyContext); try Store.save(moneyContext)
+        let savedLedger = try FinanceStore.read(moneyContext)!
+        try require(savedLedger.entries.count == 1 && savedLedger.entries[0].taskID == savedTask.id,
+                    "One commit saves both the task and linked Finance entry")
+        try rejects("Submitting the same draft again cannot create a duplicate posting") {
+            _ = try moneyDraft.preparedLedger(taskID: savedTask.id, title: savedTask.title, current: savedLedger)
+        }
+        let separateDraft = TaskFinanceDraft(ledger: ledger)
+        var unrelated = ledger
+        var unrelatedEntry = toSave.entries[0]
+        unrelatedEntry.id = UUID(); unrelatedEntry.title = "Saved by another window"
+        unrelated.entries.append(unrelatedEntry)
+        let mergedEntry = try moneyDraft.preparedLedger(taskID: UUID(), title: "This window", current: unrelated)
+        try require(mergedEntry.entries.count == 2 && mergedEntry.entries.contains(unrelatedEntry)
+                    && separateDraft.entry.id != moneyDraft.entry.id,
+                    "A new task merges unrelated saved entries and separate drafts have independent posting IDs")
+        var changed = ledger
+        changed.accounts[0].currency = "AUD"
+        try rejects("Account currency changes while task editing are rejected") {
+            _ = try moneyDraft.preparedLedger(taskID: UUID(), title: "Stale", current: changed)
+        }
+        changed = ledger; changed.baseCurrency = "AUD"
+        try rejects("Reporting currency changes while task editing are rejected") {
+            _ = try moneyDraft.preparedLedger(taskID: UUID(), title: "Stale", current: changed)
+        }
+        changed = ledger; changed.books[0].archived = true
+        try rejects("An archived book cannot receive a task entry") {
+            _ = try moneyDraft.preparedLedger(taskID: UUID(), title: "Stale", current: changed)
+        }
+        changed = ledger; changed.accounts[0].archived = true
+        try rejects("An archived account cannot receive a task entry") {
+            _ = try moneyDraft.preparedLedger(taskID: UUID(), title: "Stale", current: changed)
+        }
+        changed = ledger
+        if let category = changed.categories.firstIndex(where: { $0.id == moneyDraft.entry.categoryID }) {
+            changed.categories[category].archived = true
+            try rejects("An archived category cannot receive a task entry") {
+                _ = try moneyDraft.preparedLedger(taskID: UUID(), title: "Stale", current: changed)
+            }
+        }
+        moneyDraft.amount = "0"
+        try rejects("Zero amounts cannot leave a partially saved task") {
+            _ = try moneyDraft.preparedLedger(taskID: UUID(), title: "Invalid", current: ledger)
+        }
+        moneyDraft.amount = "2.50"; moneyDraft.entry.kind = .income
+        moneyDraft.entry.categoryID = ledger.defaultCategory(income: true)
+        let income = try moneyDraft.preparedLedger(taskID: UUID(), title: "Income", current: ledger)
+        try require(income.entries[0].kind == .income && income.balance(bank.id) == Decimal(string: "102.50"),
+                    "Task-linked income increases the selected account")
+        var foreignLedger = ledger
+        foreignLedger.accounts[0].currency = "USD"
+        let quoteDay = ExchangeRates.dayString(Date())
+        foreignLedger.rates = [MoneyRate(base: "USD", quote: "CNY", rate: 7, date: quoteDay)]
+        var foreignDraft = TaskFinanceDraft(ledger: foreignLedger)
+        foreignDraft.amount = "10"; foreignDraft.refreshConversion()
+        try require(foreignDraft.converted == "70", "Task entries reuse dated reference conversions")
+        foreignDraft.amount = "20"; foreignDraft.refreshConversion()
+        try require(foreignDraft.converted == "140", "Automatic conversion follows amount edits")
+        foreignDraft.converted = "141"; foreignDraft.amount = "30"; foreignDraft.refreshConversion()
+        try require(foreignDraft.converted == "141", "Task finance conversion preserves a manual override")
+        foreignDraft.entry.accountID = nil; foreignDraft.followAccountCurrency()
+        try require(foreignDraft.entry.currency == "CNY" && foreignDraft.amount.isEmpty && foreignDraft.converted.isEmpty,
+                    "Switching account denomination never reinterprets a typed amount")
+        foreignLedger.rates[0].source = "Manual"
+        var manualDraft = TaskFinanceDraft(ledger: foreignLedger)
+        manualDraft.amount = "10"; manualDraft.refreshConversion()
+        let unconverted = try manualDraft.preparedLedger(taskID: UUID(), title: "Foreign", current: foreignLedger)
+        try require(manualDraft.converted.isEmpty && unconverted.entries[0].baseAmount == nil,
+                    "Asset-only manual rates never become task posting rates")
+        savedTask.scheduledAt = Dates.calendar.startOfDay(for: Date()); savedTask.repeatRule = "daily"
+        savedTask.isDone = true; savedTask.ensureNextOccurrence(in: moneyContext); try Store.save(moneyContext)
+        try require(try moneyContext.fetch(FetchDescriptor<TaskItem>()).count == 2 && FinanceStore.read(moneyContext)?.entries.count == 1,
+                    "Completing a repeating task creates its next task without another financial posting")
         print("Editor checks passed: \(checks)")
         return checks
     }

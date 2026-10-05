@@ -773,6 +773,29 @@ import AppKit
             source.isDone = true; source.completedAt = start; source.repeatRule = "weekly"; source.repeatUntil = date(2031, 1, 1)
             source.nextOccurrenceID = UUID(); source.subtasks = [Subtask(title: "Done step", isDone: true)]
             let original = TaskBackup.TaskRecord(source), next = original.nextCopyDate!
+            let destination = date(2030, 9, 18)
+            let dayPaste = TaskCopyRequest(record: original, on: destination)
+            try require(dayPaste.timed && Dates.sameDay(dayPaste.moment, destination)
+                        && Dates.clockMinute(dayPaste.moment) == floor(Dates.clockMinute(start)) && dayPaste.record == original,
+                        "Phone day paste targets the selected date with the copied start time, without changing the snapshot")
+            let slotPaste = TaskCopyRequest(record: original, on: destination, minute: 975)
+            try require(slotPaste.timed && Dates.sameDay(slotPaste.moment, destination) && Dates.clockMinute(slotPaste.moment) == 975,
+                        "Phone week paste confirms the tapped quarter-hour instead of the next interval")
+            let dayOnlyPaste = TaskCopyRequest(record: original, on: destination, minute: 975, allDay: true)
+            try require(!dayOnlyPaste.timed && dayOnlyPaste.moment == Dates.calendar.startOfDay(for: destination),
+                        "Explicit all-day paste overrides a copied timed task and clears its time")
+            let undatedRecord = TaskBackup.TaskRecord(TaskItem(title: "Undated copy"))
+            let undatedPaste = TaskCopyRequest(record: undatedRecord, on: destination)
+            try require(!undatedPaste.timed && undatedPaste.moment == Dates.calendar.startOfDay(for: destination),
+                        "Undated copies default to the chosen day without inventing a time")
+            let undatedSlot = TaskCopyRequest(record: undatedRecord, on: destination, minute: 600)
+            try require(undatedSlot.timed && Dates.clockMinute(undatedSlot.moment) == 600,
+                        "An explicit week slot can schedule an undated copied task")
+            let dueOnly = TaskItem(title: "Due-only copy"); dueOnly.dueAt = start; dueOnly.dueHasTime = true
+            let duePaste = TaskCopyRequest(record: TaskBackup.TaskRecord(dueOnly), on: destination)
+            try require(duePaste.timed && Dates.sameDay(duePaste.moment, destination)
+                        && Dates.clockMinute(duePaste.moment) == floor(Dates.clockMinute(start)),
+                        "A due-only copied task retains its deadline clock when choosing another day")
             let duplicate = original.duplicate(at: next, timed: true, list: nil)
             try require(duplicate.id != source.id && duplicate.subtasks[0].id != source.subtasks[0].id && !duplicate.isDone && !duplicate.subtasks[0].isDone,
                         "Copy makes independent task and subtask identities, resetting completion")

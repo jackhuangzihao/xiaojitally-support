@@ -453,9 +453,20 @@ struct ListRequest: Identifiable {
     var parentID: UUID?
 }
 
-private struct TaskCopyRequest: Identifiable {
+struct TaskCopyRequest: Identifiable {
     let id = UUID()
     let record: TaskBackup.TaskRecord
+    let moment: Date
+    let timed: Bool
+
+    init(record: TaskBackup.TaskRecord, on day: Date, minute: Int? = nil, allDay: Bool = false) {
+        self.record = record
+        let sourceTimed = record.scheduledAt != nil ? record.hasTime : record.dueHasTime
+        timed = !allDay && (minute != nil || sourceTimed)
+        let source = record.scheduledAt ?? record.dueAt
+        let targetMinute = minute ?? source.map { Int(Dates.clockMinute($0)) } ?? 540
+        moment = timed ? Dates.clockTime(on: day, minute: targetMinute, reference: source) : Dates.calendar.startOfDay(for: day)
+    }
 }
 
 private struct TaskCopySheet: View {
@@ -466,10 +477,10 @@ private struct TaskCopySheet: View {
     @State private var moment: Date
     @State private var timed: Bool
 
-    init(record: TaskBackup.TaskRecord, copy: @escaping (Date, Bool) -> Bool) {
+    init(record: TaskBackup.TaskRecord, moment: Date, timed: Bool, copy: @escaping (Date, Bool) -> Bool) {
         self.record = record; self.copy = copy
-        _moment = State(initialValue: record.nextCopyDate ?? Date())
-        _timed = State(initialValue: record.scheduledAt != nil ? record.hasTime : record.dueHasTime)
+        _moment = State(initialValue: moment)
+        _timed = State(initialValue: timed)
     }
     var body: some View {
         NavigationStack {
@@ -486,7 +497,7 @@ private struct TaskCopySheet: View {
                     Text(L("创建一项独立任务，保留时长、备注和子任务；原任务不变。", "Creates an independent task with the same duration, notes and subtasks. The original stays in place."))
                 }
             }.formStyle(.grouped)
-                .navigationTitle(L("复制任务", "Copy task"))
+                .navigationTitle(L("粘贴任务", "Paste task"))
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) {
@@ -916,7 +927,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showingSettings, onDismiss: openReminderIfReady) { PreferencesView() }
             .sheet(item: $copyRequest, onDismiss: openReminderIfReady) { request in
-                TaskCopySheet(record: request.record) { moment, timed in pasteTask(request.record, at: moment, timed: timed) }
+                TaskCopySheet(record: request.record, moment: request.moment, timed: request.timed) { moment, timed in
+                    pasteTask(request.record, at: moment, timed: timed)
+                }
             }
             .sheet(item: $editor, onDismiss: openReminderIfReady) { request in
                 TaskEditor(request: request, draft: drafts.task)
@@ -1134,6 +1147,9 @@ struct ContentView: View {
                     }
                     if planningView != "list" && !searchingCalendar { dateNavigator }
                 }
+                #if os(iOS)
+                if !(selection == .calendar && planningView == "month"), selection != .trash { taskClipboardBar }
+                #endif
                 if searchingCalendar && planningView != "list" {
                     calendarSearchResults
                 } else if selection == .calendar && !searchingCalendar && planningView != "list" {
@@ -1789,6 +1805,7 @@ struct ContentView: View {
                 DayTimelineCard(task: task, compact: isPhone, showTime: showTime,
                                 onComplete: { toggleCompletion(task) },
                                 onEdit: { editor = EditorRequest(task: task) },
+                                onCopy: { copyTask(task) },
                                 onDelete: { confirmingDelete = task.id },
                                 onRemindNow: { remindNow(task) },
                                 onToggleSubtask: { id in
@@ -2021,13 +2038,39 @@ struct ContentView: View {
 
     private func copyTask(_ task: TaskItem) {
         guard task.previewSourceID == nil, task.deletedAt == nil else { return }
-        #if os(macOS)
         copiedTask = TaskBackup.TaskRecord(task); assigning = nil; presentation.taskKey = nil
+        #if os(macOS)
         notify(L("已复制，在周历空白处右键粘贴", "Copied. Right-click an empty week-calendar slot to paste."))
         #else
-        copyRequest = TaskCopyRequest(record: TaskBackup.TaskRecord(task)); assigning = nil; presentation.taskKey = nil
+        notify(L("已复制，可选择日期粘贴，或轻点周历空白时段。", "Copied. Choose a date to paste, or tap an empty week-calendar slot."))
         #endif
     }
+
+    /// Both platforms copy the same immutable snapshot. A phone confirms the destination
+    /// before saving, since a narrow seven-day column is not a precise pointer target.
+    private func preparePaste(on day: Date, minute: Int? = nil, allDay: Bool = false) {
+        guard let copiedTask else { return }
+        copyRequest = TaskCopyRequest(record: copiedTask, on: day, minute: minute, allDay: allDay)
+    }
+
+    #if os(iOS)
+    @ViewBuilder private var taskClipboardBar: some View {
+        if let copiedTask {
+            HStack(spacing: 8) {
+                Label(copiedTask.title, systemImage: "doc.on.doc")
+                    .font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel(L("已复制：", "Copied: ") + copiedTask.title)
+                Button(L("粘贴…", "Paste…")) { preparePaste(on: selectedDate) }
+                    .font(.callout.weight(.medium)).frame(minHeight: 44)
+                Button { self.copiedTask = nil } label: {
+                    Image(systemName: "xmark").font(.caption).frame(width: 44, height: 44)
+                }.accessibilityLabel(L("清除已复制的任务", "Clear copied task"))
+            }
+            .buttonStyle(.borderless).padding(.leading, 10)
+            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+    #endif
 
     private func duplicateNext(_ task: TaskItem) {
         let record = TaskBackup.TaskRecord(task)
@@ -2547,7 +2590,13 @@ private extension ContentView {
             .dayDrop { dropAllDay($0, day) }
             .contextMenu {
                 #if os(macOS)
-                if let copiedTask { Button(L("粘贴为全天任务", "Paste as all-day task")) { pasteTask(copiedTask, at: day, timed: false) } }
+                if let copiedTask {
+                    Button(L("粘贴为全天任务", "Paste as all-day task")) { pasteTask(copiedTask, at: day, timed: false) }
+                }
+                #else
+                if copiedTask != nil {
+                    Button(L("粘贴为全天任务", "Paste as all-day task")) { preparePaste(on: day, allDay: true) }
+                }
                 #endif
             }
             .modifier(CalendarDayPopover(presentation: presentation, day: day) { dayTasks(day) })
@@ -2678,7 +2727,8 @@ private extension ContentView {
                 guard PlanSlot.emptyPoint(point, column: column, gutter: planGutter, layout: layout,
                                           occupied: weekTaskFrames(perDay, column: column, layout: layout), dayCount: days.count) != nil else { return }
                 selectedDate = days[slot.day]
-                editor = EditorRequest(date: Dates.clockTime(on: days[slot.day], minute: slot.minute), timed: true)
+                if copiedTask != nil { preparePaste(on: days[slot.day], minute: slot.minute) }
+                else { editor = EditorRequest(date: Dates.clockTime(on: days[slot.day], minute: slot.minute), timed: true) }
             }
         }
         #endif
@@ -3219,7 +3269,6 @@ private extension ContentView {
     func savedDayTaskRow(_ task: TaskItem) -> some View {
         let expanded = presentation.expandedTask == task.id
         let note = task.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasMore = !note.isEmpty || !task.subtasks.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Button { toggleCompletion(task) } label: {
@@ -3237,7 +3286,7 @@ private extension ContentView {
                             if !meta.isEmpty { Text(meta.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
                         }
                         Spacer(minLength: 0)
-                        if hasMore { Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.secondary).padding(.top, 3) }
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.secondary).padding(.top, 3)
                     }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain)
                     .accessibilityHint(expanded ? L("收起详情", "Hide details") : L("展开备注和子任务", "Show note and subtasks"))
@@ -3260,6 +3309,11 @@ private extension ContentView {
                     }
                     Button(L("编辑", "Edit")) { presentation.day = nil; afterDetail { editor = EditorRequest(task: task) } }
                         .buttonStyle(.borderless)
+                    if planningView != "month" {
+                        Button { afterDetail { copyTask(task) } } label: {
+                            Label(L("复制", "Copy"), systemImage: "doc.on.doc").frame(minHeight: 44)
+                        }.buttonStyle(.borderless)
+                    }
                 }.padding(.leading, 42).padding(.bottom, 8)
             }
         }

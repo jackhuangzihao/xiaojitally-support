@@ -1134,6 +1134,30 @@ import SwiftData
                 try ledger.updateBook(MoneyBook(name: "Another archive", archived: true), expected: nil, baseCurrency: ledger.baseCurrency)
             }
         }
+        // Removing preset categories from the picker must survive default upgrades and retain old entries.
+        do {
+            var ledger = FinanceData.initial
+            let preset = ledger.categories.first { $0.name == "drinks" }!
+            let child = MoneyCategory(name: "Morning coffee", parentID: preset.id)
+            try ledger.updateCategory(child, expected: nil)
+            var entry = MoneyEntry(); entry.title = "Coffee"; entry.amount = 25; entry.baseAmount = 25
+            entry.bookID = ledger.books[0].id; entry.categoryID = child.id
+            try ledger.updateEntry(entry, expected: nil, baseCurrency: ledger.baseCurrency)
+            var archived = preset; archived.archived = true
+            try ledger.updateCategory(archived, expected: preset)
+            ledger = try JSONDecoder().decode(FinanceData.self, from: JSONEncoder().encode(ledger))
+            ledger.addMissingDefaults()
+            try ledger.validate()
+            try require(ledger.categories.filter { $0.id == preset.id }.count == 1 && ledger.categories.first { $0.id == preset.id }?.archived == true,
+                        "archived preset stays hidden after relaunch/default upgrade without duplication")
+            try require(ledger.categories.first { $0.id == child.id }?.archived == true && ledger.entries == [entry],
+                        "preset removal hides children while preserving their historical entries")
+            try require(ledger.statisticsTotal(ledger.entries, income: false, in: "CNY", history: nil, days: nil).total == 25,
+                        "archived preset entries remain included in totals")
+            try ledger.updateCategory(preset, expected: archived)
+            try require(ledger.categories.first { $0.id == child.id }?.archived == true,
+                        "restoring a preset leaves individually archived children under user control")
+        }
         print("FINANCE PASS: \(checks) checks — accounts, books, transfers, refunds, FX, backup and persistence")
         return checks
     }

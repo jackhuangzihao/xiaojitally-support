@@ -123,27 +123,47 @@ private struct MoneyIconPicker: View {
     @Binding var emoji: String
     let fallback: String
     @State private var useEmoji = false
+    @Environment(\.dismiss) private var dismiss
     @FocusState private var emojiFocused: Bool
     var body: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(L("选择图标", "Choose an icon")).font(.headline)
+                Spacer()
+                Button(L("完成", "Done")) { emojiFocused = false; dismiss() }
+                    .frame(minHeight: 44)
+            }
             Picker(L("图标类型", "Icon type"), selection: $useEmoji) {
                 Text(L("系统图标", "Symbols")).tag(false)
                 Text(L("表情", "Emoji")).tag(true)
             }.pickerStyle(.segmented).labelsHidden()
             if useEmoji {
-                HStack {
-                    TextField("🙂", text: $emoji).textFieldStyle(.roundedBorder).frame(width: 60).focused($emojiFocused)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L("使用任意表情", "Use any emoji")).font(.subheadline.weight(.medium))
+                    TextField(L("输入或粘贴一个表情", "Type or paste one emoji"), text: $emoji)
+                        .textFieldStyle(.roundedBorder).font(.title3).frame(minHeight: 44).focused($emojiFocused)
                         .accessibilityLabel(L("图标表情", "Icon emoji"))
-                        .onChange(of: emoji) { _, value in if value.count > 1 { emoji = String(value.last!) } }
-                    #if os(macOS)
-                    Button(L("更多表情…", "More emoji…")) {
+                        .autocorrectionDisabled()
+                        .onChange(of: emoji) { _, value in
+                            if value.count > 1, let last = value.last { emoji = String(last) }
+                        }
+                        .onSubmit { emojiFocused = false }
+                    #if os(iOS)
+                    Text(L("点输入框，再用键盘的笑脸或地球按钮切换到表情键盘；也可以粘贴表情。", "Tap the field, then use the keyboard’s smiley or globe key to choose any emoji. You can also paste one."))
+                        .font(.caption).foregroundStyle(.secondary)
+                    #else
+                    Button(L("打开系统表情选择器…", "Open emoji picker…")) {
                         emojiFocused = true
                         DispatchQueue.main.async { NSApp.orderFrontCharacterPalette(nil) }
-                    }
+                    }.frame(minHeight: 44)
                     #endif
+                    if !emoji.isEmpty && !TaskList.validEmoji(emoji) {
+                        Text(L("请输入一个表情符号。", "Enter one emoji character.")).font(.caption).foregroundStyle(.red)
+                    }
                 }
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 8) {
+                Text(L("常用表情", "Suggestions")).font(.caption).foregroundStyle(.secondary)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 44))], spacing: 8) {
                     ForEach(["🏠", "✈️", "💳", "🏦", "💰", "☕", "🍜", "🛍️", "🎮", "🚗", "📚", "🎁"], id: \.self) { item in
                         Button { emoji = item } label: {
                             Text(item).font(.title2).frame(width: 44, height: 44)
@@ -166,10 +186,11 @@ private struct MoneyIconPicker: View {
         }.padding(16)
         }
         #if os(macOS)
-        .frame(width: 340, height: 470)
+        .frame(width: 360, height: 500)
         #else
-        .frame(maxWidth: 340)
-        .presentationDetents([.medium, .large])
+        .frame(maxWidth: .infinity)
+        .presentationCompactAdaptation(.sheet)
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         #endif
         .onAppear { useEmoji = !emoji.isEmpty }
@@ -178,9 +199,11 @@ private struct MoneyIconPicker: View {
 
 /// Capsule look shared by the entry sheet's date, account and book controls.
 private struct MoneyChip: ViewModifier {
+    var expanded = false
     func body(content: Content) -> some View {
-        content.font(.callout).padding(.horizontal, 10).padding(.vertical, 5)
-            .background(Capsule().fill(Color.primary.opacity(0.07)))
+        content.font(.callout).padding(.horizontal, 10).padding(.vertical, expanded ? 8 : 5)
+            .frame(maxWidth: expanded ? .infinity : nil, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: expanded ? 12 : 24).fill(Color.primary.opacity(0.07)))
             #if os(iOS)
             .frame(minHeight: 44).contentShape(Rectangle())
             #endif
@@ -1846,15 +1869,22 @@ struct FinanceHome: View {
             Section { categoryGrid(income: false) } header: { Text(L("支出分类", "Spending categories")) }
             Section { categoryGrid(income: true) } header: { Text(L("收入分类", "Income categories")) }
             Section {
-                Picker(L("统计币种", "Reporting currency"), selection: Binding(get: { data.baseCurrency }, set: { currency in mutate { try $0.changeBaseCurrency(to: currency, expected: data.baseCurrency) } })) {
+                Picker(L("显示币种", "Display currency"), selection: $statsCurrencyRaw) {
+                    Text(L("跟随记账本位币 · ", "Use recorded currency · ") + data.baseCurrency).tag("")
                     CurrencyPickerItems()
-                }.disabled(!data.canChangeBaseCurrency)
-                if !data.canChangeBaseCurrency {
-                    Text(L("已有账单或预算，统计币种已锁定。预算可清空后重设；查看其他币种请使用统计页面的显示币种。", "Entries or budgets lock the reporting currency. Clear budgets before changing it, or choose a display currency in Statistics."))
-                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(L("历史折算金额与预算使用此本位币。账单显示可跟随常用账户；资产总额折合人民币。", "Recorded conversions and budgets use this base currency. Entries can follow the default account; net worth is shown in CNY.")).font(.caption).foregroundStyle(.secondary)
-            } header: { Text(L("统计币种", "Reporting currency")) }
+                Text(L("可随时切换统计图表与合计的显示币种，不改变账单原金额、历史折算或账户余额。此设置与统计页共用。", "Change the currency used for Statistics totals and charts at any time. Original amounts, recorded conversions and account balances stay the same."))
+                    .font(.caption).foregroundStyle(.secondary)
+                if data.canChangeBaseCurrency {
+                    Picker(L("记账本位币", "Recorded currency"), selection: Binding(get: { data.baseCurrency }, set: { currency in mutate { try $0.changeBaseCurrency(to: currency, expected: data.baseCurrency) } })) {
+                        CurrencyPickerItems()
+                    }
+                } else {
+                    LabeledContent(L("记账本位币", "Recorded currency"), value: data.baseCurrency)
+                }
+                Text(L("历史折算与预算按记账本位币保存；有账单或预算后不再更改。账单页合计默认跟随常用账户，资产总额折合人民币。", "Recorded conversions and budgets keep their original currency, which is fixed once entries or budgets exist. Entries default to the account currency; net worth is shown in CNY."))
+                    .font(.caption).foregroundStyle(.secondary)
+            } header: { Text(L("统计显示币种", "Reporting currency")) }
             Section {
                 Toggle(L("自动更新参考汇率", "Update reference rates automatically"), isOn: $automaticRates)
                 HStack {
@@ -1918,11 +1948,27 @@ struct FinanceHome: View {
                         }.buttonStyle(.borderless).frame(minWidth: compact ? 44 : nil, minHeight: 44)
                             .labelStyle(.iconOnly).accessibilityLabel(L("为", "Add a subcategory to ") + category.label + L("添加子分类", ""))
                     }
+                    Menu {
+                        Button(L("编辑分类", "Edit category")) { entity = EntityRequest(kind: .category, existingID: category.id, income: income) }
+                        Button(archived ? L("恢复分类", "Restore category") : L("归档分类", "Archive category"), systemImage: archived ? "arrow.uturn.backward" : "archivebox") {
+                            var value = category; value.archived = !archived
+                            mutate { try $0.updateCategory(value, expected: category) }
+                        }.disabled(archived && category.parentID.flatMap { data.category($0) }?.archived == true)
+                        if archived && category.parentID.flatMap({ data.category($0) })?.archived == true {
+                            Text(L("请先恢复上级分类", "Restore the parent category first"))
+                        }
+                    } label: {
+                        Label(L("管理分类", "Manage category"), systemImage: "ellipsis.circle").labelStyle(.iconOnly)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }.menuStyle(.borderlessButton).menuIndicator(.hidden)
+                        .accessibilityLabel(L("管理分类：", "Manage category: ") + category.label)
                 }
             }
             if !archived {
                 Button { entity = EntityRequest(kind: .category, income: income) } label: { Label(L("新增大类", "New main category"), systemImage: "plus") }
                     .frame(minHeight: 44)
+                Text(L("点 … 可编辑或归档任何分类，包括预设分类。归档后新增账单不再显示，历史账目保留；大类的子分类会一起归档。", "Use … to edit or archive any category, including presets. Archived categories disappear from new entries and keep their history. Archiving a main category includes its children."))
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }.padding(.vertical, 4)
     }
@@ -2544,9 +2590,11 @@ struct FinanceEntityEditor: View {
                     Text(L("新账单金额和账单合计默认使用此账户的币种。账户由所有账本共用，不会复制余额。", "New entry amounts and entry totals default to this account's currency. Accounts are shared across books without copying balances.")).font(.caption).foregroundStyle(.secondary)
                 }
                 if let id {
-                    Toggle(L("归档", "Archived"), isOn: $archived)
+                    Toggle(kind == .category ? L("隐藏此分类（归档）", "Hide this category (archive)") : L("归档", "Archived"), isOn: $archived)
                         .disabled(kind == .book && !archived && original.bookArchiveBlock(id) != nil)
-                    Text(L("归档后保留历史账目，在新增时隐藏。", "Archiving keeps all history and hides this option for new entries.")).font(.caption).foregroundStyle(.secondary)
+                    Text(kind == .category
+                         ? L("预设分类也可以隐藏。保存后新增账单不再显示此分类，历史账目保留；隐藏大类会同时隐藏子分类，可在已归档分类中恢复。", "Preset categories can be hidden too. Save to remove this option from new entries while keeping history. Hiding a main category includes its children; restore it under Archived categories.")
+                         : L("归档后保留历史账目，在新增时隐藏。", "Archiving keeps all history and hides this option for new entries.")).font(.caption).foregroundStyle(.secondary)
                 }
                 if let id {
                     if let reason = original.removalBlock(kind, id: id) {
@@ -3173,12 +3221,12 @@ struct FinanceEntryEditor: View {
         }
     }
     private var chips: some View {
-        // Long account or book names move the last two controls to a second row instead of squeezing them.
+        // Every required choice stays visible on a phone. Large text uses one column.
         Group {
         if compact {
-            ScrollView(.horizontal) {
-                HStack(spacing: 8) { dateChip; accountChip; bookChip; moreChip }
-            }.scrollIndicators(.hidden)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: 8) {
+                dateChip; accountChip; bookChip; moreChip
+            }
         } else {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) { dateChip; accountChip; bookChip; moreChip; Spacer(minLength: 0) }
@@ -3191,8 +3239,10 @@ struct FinanceEntryEditor: View {
         }.labelStyle(.titleAndIcon)
     }
     private var dateChip: some View {
-        Button { showDate = true } label: { Label(dateText, systemImage: "calendar") }
-            .buttonStyle(.plain).fixedSize().modifier(MoneyChip())
+        Button { showDate = true } label: {
+            entryChipLabel(L("日期", "Date"), value: dateText, symbol: "calendar", desktopTitle: dateText)
+        }
+            .buttonStyle(.plain).fixedSize(horizontal: !compact, vertical: false)
             .popover(isPresented: $showDate, arrowEdge: .bottom) { datePopover }
     }
     @ViewBuilder private var accountChip: some View {
@@ -3204,8 +3254,10 @@ struct FinanceEntryEditor: View {
                 }.pickerStyle(.inline).labelsHidden()
                 Divider()
                 Button(L("新增账户…", "New account…")) { entity = EntityRequest(kind: .account) }
-            } label: { MoneyMenuLabel(title: L("账户：", "Account: ") + (account?.name ?? L("不计入账户", "No account")), symbol: account?.iconSymbol ?? "wallet.pass", emoji: account?.emoji) }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().modifier(MoneyChip())
+            } label: {
+                entryChipLabel(L("账户", "Account"), value: account?.name ?? L("不计入账户", "No account"), symbol: account?.iconSymbol ?? "wallet.pass", emoji: account?.emoji)
+            }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: !compact, vertical: false)
                 .help(L("从哪个账户扣款或入账", "Which account this uses"))
         }
     }
@@ -3216,14 +3268,32 @@ struct FinanceEntryEditor: View {
             }.pickerStyle(.inline).labelsHidden()
             Divider()
             Button(L("新建账本…", "New book…")) { entity = EntityRequest(kind: .book) }
-        } label: { MoneyMenuLabel(title: L("账本：", "Book: ") + (ledger.book(draft.bookID)?.name ?? L("选择", "choose")), symbol: ledger.book(draft.bookID)?.iconSymbol ?? "book.closed", emoji: ledger.book(draft.bookID)?.emoji) }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().modifier(MoneyChip())
+        } label: {
+            entryChipLabel(L("账本", "Book"), value: ledger.book(draft.bookID)?.name ?? L("选择账本", "Choose a book"), symbol: ledger.book(draft.bookID)?.iconSymbol ?? "book.closed", emoji: ledger.book(draft.bookID)?.emoji)
+        }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: !compact, vertical: false)
             .disabled(draft.kind == .refund)
     }
     private var moreChip: some View {
         Button { withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { showMore.toggle() } } label: {
-            Label(showMore ? L("收起", "Less") : L("更多", "More"), systemImage: showMore ? "chevron.up" : "ellipsis")
-        }.buttonStyle(.plain).fixedSize().modifier(MoneyChip()).help(L("补充说明、标签、关联任务", "Notes, tags and linked task"))
+            entryChipLabel(showMore ? L("收起", "Less") : L("更多", "More"), value: L("标签与关联任务", "Tags & linked task"), symbol: showMore ? "chevron.up" : "ellipsis", desktopTitle: showMore ? L("收起", "Less") : L("更多", "More"))
+        }.buttonStyle(.plain).fixedSize(horizontal: !compact, vertical: false).help(L("补充说明、标签、关联任务", "Notes, tags and linked task"))
+    }
+    @ViewBuilder private func entryChipLabel(_ title: String, value: String, symbol: String, emoji: String? = nil, desktopTitle: String? = nil) -> some View {
+        // Padding and the full touch shape belong to the native control's label.
+        Group {
+        if compact {
+            HStack(spacing: 8) {
+                MoneyGlyph(symbol: symbol, emoji: emoji).frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.caption).foregroundStyle(.secondary)
+                    Text(value).font(.callout.weight(.medium)).lineLimit(1).truncationMode(.tail)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.accessibilityElement(children: .ignore).accessibilityLabel(title + ": " + value)
+        } else {
+            MoneyMenuLabel(title: desktopTitle ?? title + ": " + value, symbol: symbol, emoji: emoji)
+        }
+        }.modifier(MoneyChip(expanded: compact))
     }
     private var datePopover: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -3451,16 +3521,14 @@ struct TaskMoneySection: View {
     @AppStorage("hideMoney") private var hidden = false
     @State private var error: String?
     var body: some View {
-        // Nothing to link until bookkeeping has been used; the Money section is where it starts.
-        if !records.isEmpty {
-            switch Result(catching: { try FinanceStore.read(context) }) {
-            case .success(let ledger):
-                if let ledger { section(ledger) }
-            case .failure(let failure):
-                Label(L("无法读取关联账单：", "Unable to read linked entries: ") + failure.localizedDescription,
-                      systemImage: "exclamationmark.circle")
-                    .font(.caption).foregroundStyle(.red)
-            }
+        // The first financial entry can start from a task as well as Finance.
+        switch Result(catching: { try FinanceStore.read(context) ?? .initial }) {
+        case .success(let ledger):
+            section(ledger)
+        case .failure(let failure):
+            Label(L("无法读取关联账单：", "Unable to read linked entries: ") + failure.localizedDescription,
+                  systemImage: "exclamationmark.circle")
+                .font(.caption).foregroundStyle(.red)
         }
     }
     private func section(_ ledger: FinanceData) -> some View {

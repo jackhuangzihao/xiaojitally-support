@@ -497,14 +497,14 @@ struct FinanceData: Codable, Equatable {
     var canChangeBaseCurrency: Bool { entries.isEmpty && books.allSatisfy { $0.budget == nil } }
     func requireBaseCurrency(_ expected: String) throws {
         guard baseCurrency == expected else {
-            throw TaskBackup.invalid(L("统计币种已在其他窗口改变，请重新打开后编辑。", "The reporting currency changed in another window. Reopen this editor."))
+            throw TaskBackup.invalid(L("记账本位币已在其他窗口改变，请重新打开后编辑。", "The recorded base currency changed in another window. Reopen this editor."))
         }
     }
     mutating func changeBaseCurrency(to currency: String, expected: String) throws {
         try requireBaseCurrency(expected)
         guard currency != baseCurrency else { return }
         guard Money.currencies.contains(currency), canChangeBaseCurrency else {
-            throw TaskBackup.invalid(L("已有账单或预算时不能直接更改统计币种。请先清除预算；已有账单可在统计页面切换显示币种。", "The reporting currency cannot change while entries or budgets exist. Clear budgets first; for existing entries, change the display currency in Statistics."))
+            throw TaskBackup.invalid(L("已有账单或预算时不能直接更改记账本位币。查看其他币种，请切换统计显示币种。", "The recorded base currency cannot change while entries or budgets exist. Choose a reporting display currency to view other currencies."))
         }
         baseCurrency = currency
     }

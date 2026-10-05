@@ -58,15 +58,18 @@ struct TaskEditor: View {
     @State private var suggestionsClosedFor: String?
     @State private var openPanel: Panel?
     @State private var isSaving = false
+    @State private var didFinishSaving = false
     @State private var clockNow = Date()
     @State private var discardPrompt = false
     @State private var initialDraft: DraftState?
     @State private var listID: UUID?
     @State private var subtasks: [Subtask]
     @State private var newSubtask = ""
+    @State private var linkedFinance: TaskFinanceDraft?
+    @State private var financeCurrencyChanged = false
     @State private var errorMessage: String?
     @FocusState private var newSubtaskFocused: Bool
-    private enum Focus: Hashable { case title, notes, sheet }
+    private enum Focus: Hashable { case title, notes, sheet, financeAmount, financeConverted }
     @FocusState private var focus: Focus?
 
     init(request: EditorRequest, draft: DraftState? = nil) {
@@ -106,6 +109,7 @@ struct TaskEditor: View {
             _customRepeat = State(initialValue: Self.isCustomRepeat(draft.repeating))
             _reminderPreset = State(initialValue: draft.preset)
             _reminder = State(initialValue: draft.reminder ?? Self.defaultCustomReminder(for: draft.scheduled))
+            _linkedFinance = State(initialValue: draft.finance)
         }
     }
 
@@ -160,6 +164,8 @@ struct TaskEditor: View {
                             }
                         }
                     }
+
+                    if original == nil { Divider(); newTaskFinance }
 
                     Divider()
                     VStack(alignment: .leading, spacing: 4) {
@@ -275,11 +281,13 @@ struct TaskEditor: View {
         let priority: Int
         let subtasks: [Subtask]
         var original: TaskBackup.TaskRecord? = nil
+        var finance: TaskFinanceDraft? = nil
     }
     private var draftState: DraftState {
         DraftState(title: title, notes: notes, pending: newSubtask, repeating: repeatRule, repeatUntil: repeatRule == "none" ? nil : repeatUntil,
                    end: effectiveEnd, scheduled: hasDate ? date : nil, due: hasDue ? due : nil, reminder: effectiveReminder,
-                   timed: hasTime, dueTimed: dueHasTime, preset: reminderPreset, listID: listID, priority: priority, subtasks: subtasks, original: original)
+                   timed: hasTime, dueTimed: dueHasTime, preset: reminderPreset, listID: listID, priority: priority, subtasks: subtasks, original: original,
+                   finance: linkedFinance)
     }
     private var effectiveEnd: Date? { hasDate && hasTime && hasEnd ? end : nil }
     private var hasChanges: Bool { recoveredDraft || (initialDraft.map { $0 != draftState } ?? false) }
@@ -287,6 +295,109 @@ struct TaskEditor: View {
         guard (try? Store.recovery.requireWritable(context)) != nil else { return }
         drafts.taskID = original?.id
         drafts.task = draftState
+    }
+
+    // A new task keeps its entry in this draft; both are committed by the same Save.
+    private var newTaskFinance: AnyView {
+        if let finance = linkedFinance {
+            let binding = Binding(get: { linkedFinance ?? finance }, set: { linkedFinance = $0 })
+            return AnyView(VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label(L("同时记一笔", "Record an entry"), systemImage: "banknote").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button { linkedFinance = nil; focus = nil } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44)
+                    }.buttonStyle(.plain).accessibilityLabel(L("移除这笔未保存账单", "Remove this unsaved entry"))
+                }
+                Picker(L("收支类型", "Entry type"), selection: binding.entry.kind) {
+                    Text(MoneyKind.expense.label).tag(MoneyKind.expense)
+                    Text(MoneyKind.income.label).tag(MoneyKind.income)
+                }.pickerStyle(.segmented)
+                financeAmountField(L("金额", "Amount") + " · " + finance.entry.currency, text: binding.amount, field: .financeAmount)
+                if financeCurrencyChanged {
+                    Text(L("账户币种已更换，请按 \(finance.entry.currency) 重新输入金额。", "The account currency changed. Enter the amount in \(finance.entry.currency)."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                financeChoice(L("账本", "Book")) {
+                    Picker(L("账本", "Book"), selection: binding.entry.bookID) {
+                        ForEach(finance.ledger.books.filter { !$0.archived }) { Text($0.name).tag(Optional($0.id)) }
+                    }.pickerStyle(.menu).labelsHidden()
+                }
+                financeChoice(L("账户", "Account")) {
+                    Picker(L("账户", "Account"), selection: binding.entry.accountID) {
+                        Text(L("不关联账户", "No account")).tag(nil as UUID?)
+                        ForEach(finance.ledger.accounts.filter { !$0.archived }) { Text($0.name + " · " + $0.currency).tag(Optional($0.id)) }
+                    }.pickerStyle(.menu).labelsHidden()
+                }
+                financeChoice(L("分类", "Category")) {
+                    Picker(L("分类", "Category"), selection: binding.entry.categoryID) {
+                        Text(L("未分类", "Uncategorised")).tag(nil as UUID?)
+                        ForEach(finance.ledger.orderedCategories.filter { !$0.archived && $0.isIncome == (finance.entry.kind == .income) }) {
+                            Text(finance.ledger.categoryPath($0.id)).tag(Optional($0.id))
+                        }
+                    }.pickerStyle(.menu).labelsHidden()
+                }
+                DatePicker(L("记账日期", "Entry date"), selection: binding.entry.date, displayedComponents: .date).datePickerStyle(.compact)
+                if finance.entry.currency != finance.ledger.baseCurrency {
+                    financeAmountField(L("折算金额", "Converted amount") + " · " + finance.ledger.baseCurrency, text: binding.converted, field: .financeConverted)
+                    if let rate = finance.referenceRate, finance.converted == finance.estimatedConversion {
+                        Text(L("参考价日期：", "Reference rate date: ") + rate.date).font(.caption).foregroundStyle(.secondary)
+                    } else if finance.converted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(L("未填写折算金额时，这笔账单会标记为待折算，可在财务中补全。", "Without a converted amount, this entry will be marked for conversion in Finance."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text(L("保存任务时一起入账；取消不会产生账单。重复任务只记录这一次。", "Saved together with this task. Cancelling creates no entry. Repeating tasks record this occurrence only."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .onChange(of: finance.entry.kind) { _, kind in
+                linkedFinance?.entry.categoryID = finance.ledger.defaultCategory(income: kind == .income)
+            }
+            .onChange(of: finance.entry.bookID) { _, id in
+                if finance.ledger.books.first(where: { $0.id == id })?.defaultAccountID != nil {
+                    linkedFinance?.entry.accountID = finance.ledger.defaultAccount(for: id)
+                }
+            }
+            .onChange(of: finance.entry.accountID) { _, _ in
+                let oldCurrency = linkedFinance?.entry.currency
+                linkedFinance?.followAccountCurrency()
+                if oldCurrency != linkedFinance?.entry.currency { financeCurrencyChanged = true }
+            }
+            .onChange(of: finance.amount) { _, value in
+                linkedFinance?.refreshConversion()
+                if !value.isEmpty { financeCurrencyChanged = false }
+            }
+            .onChange(of: finance.entry.date) { _, _ in linkedFinance?.refreshConversion() })
+        } else {
+            return AnyView(Button {
+                do {
+                    linkedFinance = TaskFinanceDraft(ledger: try FinanceStore.read(context) ?? .initial)
+                    financeCurrencyChanged = false
+                    focus = .financeAmount
+                } catch { errorMessage = error.localizedDescription }
+            } label: {
+                Label(L("同时记一笔", "Record an entry with this task"), systemImage: "plus.circle")
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain).foregroundStyle(Color.accentColor))
+        }
+    }
+
+    private func financeAmountField(_ label: String, text: Binding<String>, field: Focus) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            TextField("0.00", text: text).textFieldStyle(.roundedBorder).focused($focus, equals: field)
+                .accessibilityLabel(label)
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+        }
+    }
+
+    private func financeChoice<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            content().frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        }
     }
 
     // MARK: Schedule — five rows that are always shown; tapping one opens it right underneath
@@ -764,9 +875,9 @@ struct TaskEditor: View {
     }
 
     private func save() {
-        guard !isSaving else { return }
+        guard !isSaving, !didFinishSaving else { return }
         isSaving = true
-        Task { await persist(); isSaving = false }
+        Task { await persist(); if !didFinishSaving { isSaving = false } }
     }
 
     @MainActor private func persist() async {
@@ -820,26 +931,114 @@ struct TaskEditor: View {
         let oldBase = existing?.calendarDate
         let oldRule = existing?.repeatRule
         let task = existing ?? TaskItem(title: cleanTitle)
-        if existing == nil { context.insert(task) }
-        task.title = cleanTitle; task.notes = notes
-        task.scheduledAt = hasDate ? (hasTime ? date : Dates.calendar.startOfDay(for: date)) : nil
-        task.hasTime = hasDate && hasTime
-        task.endAt = effectiveEnd
-        task.dueAt = hasDue ? (dueHasTime ? due : Dates.calendar.startOfDay(for: due)) : nil
-        task.dueHasTime = hasDue && dueHasTime
-        task.priority = priority
-        task.reminderAt = reminderAt
-        task.reminderKind = reminderPreset.rawValue
-        task.reminderNeedsAttention = task.reminderRequiresAttention()
-        task.repeatRule = repeatRule
-        task.repeatUntil = repeatRule == "none" ? nil : repeatUntil.map { Dates.calendar.startOfDay(for: $0) }
-        if let base = task.calendarDate, task.repeatAnchorDay == 0 || oldRule != repeatRule || oldBase.map({ !Dates.sameDay($0, base) }) == true { task.repeatAnchorDay = Dates.calendar.component(.day, from: base) }
-        task.list = selectedList
-        task.subtasks = cleanSubtasks
-        task.deletedAt = nil
-        task.ensureNextOccurrence(in: context)
-        do { try Store.save(context); ReminderScheduler.shared.refresh(context); dismiss() }
-        catch { errorMessage = Store.recovery.failure == nil ? error.localizedDescription : nil }
+        let preparedFinance: FinanceData?
+        do {
+            preparedFinance = try linkedFinance.map {
+                try $0.preparedLedger(taskID: task.id, title: cleanTitle, current: FinanceStore.read(context) ?? .initial)
+            }
+        } catch { errorMessage = error.localizedDescription; return }
+        do {
+            if existing == nil { context.insert(task) }
+            task.title = cleanTitle; task.notes = notes
+            task.scheduledAt = hasDate ? (hasTime ? date : Dates.calendar.startOfDay(for: date)) : nil
+            task.hasTime = hasDate && hasTime
+            task.endAt = effectiveEnd
+            task.dueAt = hasDue ? (dueHasTime ? due : Dates.calendar.startOfDay(for: due)) : nil
+            task.dueHasTime = hasDue && dueHasTime
+            task.priority = priority
+            task.reminderAt = reminderAt
+            task.reminderKind = reminderPreset.rawValue
+            task.reminderNeedsAttention = task.reminderRequiresAttention()
+            task.repeatRule = repeatRule
+            task.repeatUntil = repeatRule == "none" ? nil : repeatUntil.map { Dates.calendar.startOfDay(for: $0) }
+            if let base = task.calendarDate, task.repeatAnchorDay == 0 || oldRule != repeatRule || oldBase.map({ !Dates.sameDay($0, base) }) == true { task.repeatAnchorDay = Dates.calendar.component(.day, from: base) }
+            task.list = selectedList
+            task.subtasks = cleanSubtasks
+            task.deletedAt = nil
+            task.ensureNextOccurrence(in: context)
+            if let preparedFinance { try FinanceStore.stage(preparedFinance, in: context) }
+            try Store.save(context)
+            didFinishSaving = true
+            ReminderScheduler.shared.refresh(context); dismiss()
+        } catch {
+            // Store.save rolls back a failed disk commit; staging can fail before reaching it.
+            if Store.recovery.failure == nil { context.rollback(); errorMessage = error.localizedDescription }
+        }
+    }
+}
+
+/// A value-only entry attached to an unsaved task. It never creates its own save or repeating template.
+struct TaskFinanceDraft: Equatable {
+    let ledger: FinanceData
+    var entry: MoneyEntry
+    var amount = ""
+    var converted = ""
+    private var lastEstimate: String?
+
+    init(ledger: FinanceData) {
+        self.ledger = ledger
+        entry = ledger.newEntry(preferredBook: nil)
+    }
+
+    var referenceRate: MoneyRate? {
+        // A future task does not yet have a historical rate for its future posting day.
+        guard ExchangeRates.dayString(entry.date) <= ExchangeRates.dayString(Date()) else { return nil }
+        return ledger.cachedReferenceRates(from: entry.currency, quotes: [ledger.baseCurrency], onOrBefore: ExchangeRates.dayString(entry.date)).first
+    }
+    var estimatedConversion: String? {
+        guard let rate = referenceRate, let value = try? Money.parse(amount, currency: entry.currency), value > 0 else { return nil }
+        return Money.text(Money.round(value * rate.rate, currency: ledger.baseCurrency))
+    }
+    mutating func refreshConversion() {
+        if converted.isEmpty || converted == lastEstimate {
+            converted = estimatedConversion ?? ""
+            lastEstimate = estimatedConversion
+        }
+    }
+    mutating func followAccountCurrency() {
+        let currency = ledger.accounts.first { $0.id == entry.accountID }?.currency ?? ledger.baseCurrency
+        guard entry.currency != currency else { return }
+        entry.currency = currency
+        // Changing denomination must not turn a typed AUD amount into the same number of CNY.
+        amount = ""; converted = ""; lastEstimate = nil
+    }
+
+    func preparedLedger(taskID: UUID, title: String, current: FinanceData) throws -> FinanceData {
+        var value = current
+        let reopen = L("移除这笔未保存账单后重新添加，任务内容会保留。", "Remove this unsaved entry and add it again. Your task details will be kept.")
+        do { try value.requireEntryCurrencies(entry, from: ledger) }
+        catch { throw TaskBackup.invalid(error.localizedDescription + "\n" + reopen) }
+        guard entry.kind == .expense || entry.kind == .income,
+              value.books.contains(where: { $0.id == entry.bookID && !$0.archived }) else {
+            throw TaskBackup.invalid(L("所选账本已归档或不存在。", "The selected book is archived or missing.") + "\n" + reopen)
+        }
+        if let id = entry.categoryID {
+            guard value.categories.contains(where: { $0.id == id && !$0.archived && $0.isIncome == (entry.kind == .income) }) else {
+                throw TaskBackup.invalid(L("分类已改变。", "The category changed.") + "\n" + reopen)
+            }
+        }
+        let account = value.accounts.first { $0.id == entry.accountID }
+        if entry.accountID != nil, account?.archived != false {
+            throw TaskBackup.invalid(L("所选账户已归档或不存在。", "The selected account is archived or missing.") + "\n" + reopen)
+        }
+        guard entry.currency == (account?.currency ?? ledger.baseCurrency) else {
+            throw TaskBackup.invalid(L("账户币种已改变，请重新输入金额。", "The account currency changed. Enter the amount again."))
+        }
+        var saved = entry
+        saved.title = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        saved.taskID = taskID
+        saved.date = MoneyEntry.timestamp(entry.date)
+        saved.amount = try Money.parse(amount, currency: saved.currency)
+        guard saved.amount > 0 else { throw TaskBackup.invalid(L("请输入大于 0 的账单金额。", "Enter an entry amount greater than 0.")) }
+        saved.accountAmount = saved.accountID == nil ? 0 : saved.amount
+        saved.baseAmount = saved.currency == ledger.baseCurrency ? saved.amount
+            : (converted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : try Money.parse(converted, currency: ledger.baseCurrency))
+        if let rate = referenceRate, converted == estimatedConversion {
+            saved.rateNote = "ECB \(rate.date) · 1 \(rate.base) = \(Money.text(rate.rate)) \(rate.quote)"
+        }
+        try value.updateEntry(saved, expected: nil, baseCurrency: ledger.baseCurrency)
+        try value.validate()
+        return value
     }
 }
 
