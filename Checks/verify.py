@@ -47,7 +47,7 @@ def main():
         stages.append({"name": name, "seconds": round(time.monotonic() - started, 2), "log": log.name})
 
     def hashes():
-        source_files = sorted(p for folder in ("Sources", "Assets.xcassets", "Jianshi.xcodeproj", "Checks")
+        source_files = sorted(p for folder in ("Sources", "Widget", "Assets.xcassets", "Jianshi.xcodeproj", "Checks")
                               for p in (ROOT / folder).rglob("*") if p.is_file()
                               and "xcuserdata" not in p.parts and "__pycache__" not in p.parts)
         source_files += sorted(p for p in ROOT.iterdir() if p.suffix in (".entitlements", ".plist", ".xcprivacy"))
@@ -65,6 +65,7 @@ def main():
     directory = tempfile.TemporaryDirectory(prefix="tally-verify-")
     temporary = directory.name
     try:
+        run("project-sources", [sys.executable, str(ROOT / "Checks/check_project_sources.py")], marker="PASS:")
         products = {}
         for name, destination, configuration in (
             ("mac", "generic/platform=macOS", "AppStore"),

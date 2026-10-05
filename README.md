@@ -2,6 +2,12 @@
 
 SwiftUI + SwiftData 的 iPhone、iPad 和 Mac 待办与财务应用。当前本地开发版本：**1.0（71）**。当前已上传的 TestFlight 版本为 **1.0（70）**（iOS 与 macOS）；修改代码不会自动更新 TestFlight。
 
+## 代码目录整理 · 2026-10-05
+
+源码整理为 App、Tasks、Calendar、Finance、Storage、Shared、Validation 七个目录，Xcode 分组同步调整。原主页面、财务页面和任务编辑器按职责拆分；保留原状态所有者、数据模型、保存流程与同步格式。主要代码位置和维护约定见本文末尾。
+
+整理后完整检查 15 个阶段通过：Mac 双架构、iPhone 设备目标、模拟器编译及包检查；Mac 1,412 项、模拟器 1,311 项自检；52 / 68 冻结旧库分别 1,425 / 1,424 项；账户币种、工程引用和 5,000 项性能检查。无源代码警告，财务页面值类型大小与整理前一致。证据：工作区 `检查证据/结构整理-71-20261005/gate`。这次未重新进行真机帧率或双设备 iCloud 验收，未归档上传。
+
 ## 71 版财务操作与任务联动
 
 - iPhone 新增账单的日期、账户、账本、更多改为两排可见选项；辅助大字号改为单列，长名称可在菜单中查看。
@@ -62,7 +68,7 @@ python3 Checks/verify.py --simulator <模拟器UDID> --performance
 
 结果与日志默认保存在 `.build/verification/`，可用 `--output /path/to/logs` 指定位置。流程逐项执行：
 
-1. Mac（Apple Silicon 与 Intel）、iOS 模拟器和 iPhone 设备目标干净编译，严格并发检查；源代码警告会使检查失败。
+1. 核对源码实际路径、Xcode 编译引用与重复引用，再进行 Mac（Apple Silicon 与 Intel）、iOS 模拟器和 iPhone 设备目标干净编译，严格并发检查；源代码警告会使检查失败。
 2. 三端包内隐私声明、加密声明及禁用组件检查。
 3. Mac 与模拟器功能自检；任务和清单并发编辑、财务币种及数据恢复回归。
 4. 固定 52、68 两代合成数据库升级、完整记录与同步基线核对。
@@ -104,14 +110,32 @@ python3 Checks/check_release_bundle.py /path/to/小记.app \
 
 ## 主要代码位置
 
-| 文件 | 主要职责 |
-| --- | --- |
-| `Models.swift` | 本地模型、存储保护、备份与日期规则 |
-| `TaskEditor.swift` / `EditingChecks.swift` | 任务与清单编辑、保存冲突检查及回归 |
-| `ContentView.swift` / `DayTimeline.swift` | 导航、日周月日历与任务显示 |
-| `FinanceModels.swift` / `FinanceView.swift` | 账本规则、汇率及财务显示 |
-| `CloudSync.swift` | iCloud 同步、冲突合并及协议保护 |
-| `SelfCheck.swift` / `FinanceChecks.swift` | 合成数据验证及性能检查 |
-| `Checks/` | 统一检查入口、发布包检查及冻结数据 |
+磁盘目录与 Xcode 分组一致。仍为一个应用编译模块，没有引入新的包或依赖。
 
-ContentView 与 FinanceView 仍较大，后续按实际功能改动逐步拆分；优先明确状态和数据边界，不做只搬文件的重构。历史修复和当时的验收记录见 [CHANGELOG.md](CHANGELOG.md)。
+| 目录 | 主要职责与入口 |
+| --- | --- |
+| [Sources/App](Sources/App) | `JianshiApp` 启动；`ContentView` 窗口导航和日历状态；设置、编辑草稿、侧栏交互 |
+| [Sources/Tasks](Sources/Tasks) | 任务模型、规则、清单树、提醒、撤销、任务行、复制；任务与清单编辑器 |
+| [Sources/Calendar](Sources/Calendar) | 日安排 `AgendaView`、周 `WeekView`、月 `MonthView`；日期导航、详情、布局计算和拖动 |
+| [Sources/Finance](Sources/Finance) | `FinanceHome` 页面状态；账单、统计、资产、管理；账单/账户编辑器、金额规则和参考汇率 |
+| [Sources/Storage](Sources/Storage) | `Store` 保存与恢复保护；`TaskBackup` 数据格式；自动备份、iCloud 同步及备份界面 |
+| [Sources/Shared](Sources/Shared) | 日期与语言工具、翻页手势、共享小组件数据与桥接 |
+| [Sources/Validation](Sources/Validation) | 既有功能、财务、同步、编辑冲突和性能自检；使用合成数据 |
+| [Checks](Checks) | 统一检查入口、工程引用检查、发布包检查及冻结旧库 |
+
+### 如何找修改位置
+
+- 修改任务编辑页面：`Tasks/TaskEditor.swift` 是入口；`TaskEditorSchedule` 管日期和重复选项，`TaskEditorFinance` 管附带账单，`TaskEditorSuggestions` 管历史建议，`TaskEditorPersistence` 管草稿与保存。
+- 修改日历某种显示：先找 `Calendar/AgendaView`、`WeekView`、`MonthView`，公共导航和详情分别在 `CalendarNavigation`、`CalendarDetails`。任务变更入口在 `Tasks/TaskActions`。
+- 修改财务某一页：先找 `FinanceEntries`、`FinanceStatisticsView`、`FinanceAssets`、`FinanceManagement`；金额校验和账本操作放在 `FinanceData`，统计规则放在 `FinanceStatistics`，不要在页面另写一份规则。
+- 修改存储：任务仍通过 `Storage/Store` 保存，财务通过 `Finance/FinanceStore` 读写同一存储；文件整理没有改变模型名称、云端格式或数据位置。
+
+### 拆分约定
+
+- `ContentView`、`FinanceHome`、`TaskEditor` 各自继续持有原来的状态；同类型的跨文件 `extension` 负责分区显示或操作。不要为了缩短文件移动状态所有者，避免改变窗口、草稿和展开动画的生命周期。
+- 跨文件使用的成员采用模块内部访问；仅在本文件使用的实现继续保留 `private`。没有新增对外的 `public` 接口。
+- 保留已有的财务 `AnyView` 页面边界及行内展开状态；它们分别用于控制真机栈大小和避免整页重复刷新。不要在拆分时顺手去掉这些保护。
+- 新增/移动 Swift 文件时同步维护 Xcode 分组和 target membership；运行 `python3 Checks/check_project_sources.py` 可快速检查漏编译、重复引用和失效路径，完整检查也会自动运行它。
+- 按职责拆分，不以固定行数为目标。完整的同步算法和回归场景可以保留较长文件；优先保证调用关系清晰、规则只维护一处。
+
+历史修复和当时的验收记录见 [CHANGELOG.md](CHANGELOG.md)。
