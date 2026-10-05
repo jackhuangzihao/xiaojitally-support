@@ -41,8 +41,7 @@ extension ContentView {
     }
 
     func locate(_ task: TaskItem) {
-        weekDrag.releaseHeldScroll()
-        search = ""; presentation.taskKey = nil
+        search = ""
         locatedTask = task.id; locateRequest = UUID()
         if task.isDone { showPlanningCompleted = true }
         if let date = task.calendarDate {
@@ -50,26 +49,9 @@ extension ContentView {
             selectedDate = currentDays.first(where: { task.appearsInCalendar(on: $0, wholeMonth: false) }) ?? date
         } else { editor = EditorRequest(task: task) }
     }
-    func locatedMinute(days: [Date]) -> Int? {
-        guard let id = locatedTask, let task = tasks.first(where: { $0.id == id }), let clock = task.clockDate,
-              days.contains(where: { task.appearsInCalendar(on: $0, wholeMonth: false) }) else { return nil }
-        let minute = Dates.sameDay(clock, selectedDate) ? minuteOfDay(clock) : 0
-        return max(0, min(1380, minute / 60 * 60 - 60))
-    }
-    func visiblePlanItems(_ items: [TaskItem], count: Int) -> [TaskItem] {
-        var shown = Array(items.prefix(count))
-        if count > 0, let target = items.first(where: { $0.id == locatedTask }), !shown.contains(where: { $0.id == target.id }) {
-            shown[shown.count - 1] = target
-        }
-        return shown
-    }
-
-    func detailID(_ task: TaskItem, day: Date, allDay: Bool = false) -> String {
-        "\(task.id.uuidString)|\(Int(Dates.calendar.startOfDay(for: day).timeIntervalSince1970))|\(allDay)"
-    }
 
     /// Closes the card first; a sheet can't be presented while a popover is still going away.
-    func afterDetail(_ action: @escaping () -> Void) {
+    private func afterDetail(_ presentation: CalendarPresentation, _ action: @escaping () -> Void) {
         presentation.close()
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(300))
@@ -84,12 +66,12 @@ extension ContentView {
         }
     }
 
-    @ViewBuilder func taskDetail(_ task: TaskItem) -> some View {
-        if task.previewSourceID != nil { repeatPreviewDetail(task) }
-        else { savedTaskDetail(task) }
+    @ViewBuilder func taskDetail(_ task: TaskItem, presentation: CalendarPresentation) -> some View {
+        if task.previewSourceID != nil { repeatPreviewDetail(task, presentation: presentation) }
+        else { savedTaskDetail(task, presentation: presentation) }
     }
 
-    func repeatPreviewDetail(_ task: TaskItem) -> some View {
+    private func repeatPreviewDetail(_ task: TaskItem, presentation: CalendarPresentation) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(L("重复安排预览", "Repeat preview"), systemImage: "repeat").font(.caption).foregroundStyle(.secondary)
             Text(task.title).font(.headline)
@@ -99,7 +81,7 @@ extension ContentView {
             Button(L("查看原任务", "Open original task")) {
                 presentation.day = nil
                 if let original = tasks.first(where: { $0.id == task.previewSourceID }) {
-                    afterDetail { editor = EditorRequest(task: original) }
+                    afterDetail(presentation) { editor = EditorRequest(task: original) }
                 }
             }.buttonStyle(.borderless)
         }.padding(16)
@@ -110,7 +92,7 @@ extension ContentView {
         #endif
     }
 
-    private func savedTaskDetail(_ task: TaskItem) -> some View {
+    private func savedTaskDetail(_ task: TaskItem, presentation: CalendarPresentation) -> some View {
         let note = task.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -146,7 +128,7 @@ extension ContentView {
                 }
                 Divider()
                 if !(selection == .calendar && planningView == "month") {
-                    Button { afterDetail { copyTask(task) } } label: {
+                    Button { afterDetail(presentation) { copyTask(task) } } label: {
                         Label(L("复制", "Copy"), systemImage: "doc.on.doc")
                             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     }.buttonStyle(.borderless)
@@ -159,11 +141,11 @@ extension ContentView {
                         Button(L("删除", "Delete"), role: .destructive) { presentation.inlineDelete = nil; presentation.taskKey = nil; deleteTask(task) }
                             .keyboardShortcut(.defaultAction)
                     } else {
-                        Button(L("编辑", "Edit")) { afterDetail { editor = EditorRequest(task: task) } }
+                        Button(L("编辑", "Edit")) { afterDetail(presentation) { editor = EditorRequest(task: task) } }
                             .frame(minHeight: 44)
                         Spacer()
                         #if os(iOS)
-                        Button(L("删除", "Delete"), role: .destructive) { afterDetail { confirmingDelete = task.id } }.frame(minHeight: 44)
+                        Button(L("删除", "Delete"), role: .destructive) { afterDetail(presentation) { confirmingDelete = task.id } }.frame(minHeight: 44)
                         #else
                         Button(L("删除", "Delete"), role: .destructive) { presentation.inlineDelete = task.id }
                         #endif
@@ -180,13 +162,10 @@ extension ContentView {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         #endif
     }
-
-    // MARK: Month
-
 }
 
 extension ContentView {
-    func savedDayTaskRow(_ task: TaskItem) -> some View {
+    private func savedDayTaskRow(_ task: TaskItem, presentation: CalendarPresentation) -> some View {
         let expanded = presentation.expandedTask == task.id
         let note = task.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         return VStack(alignment: .leading, spacing: 6) {
@@ -227,10 +206,10 @@ extension ContentView {
                             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
-                    Button(L("编辑", "Edit")) { presentation.day = nil; afterDetail { editor = EditorRequest(task: task) } }
+                    Button(L("编辑", "Edit")) { presentation.day = nil; afterDetail(presentation) { editor = EditorRequest(task: task) } }
                         .buttonStyle(.borderless)
                     if planningView != "month" {
-                        Button { afterDetail { copyTask(task) } } label: {
+                        Button { afterDetail(presentation) { copyTask(task) } } label: {
                             Label(L("复制", "Copy"), systemImage: "doc.on.doc").frame(minHeight: 44)
                         }.buttonStyle(.borderless)
                     }
@@ -240,39 +219,6 @@ extension ContentView {
     }
 
     /// Mac chips open the task card; on a phone the whole cell opens that week instead.
-    @ViewBuilder func monthChip(_ task: TaskItem, day: Date, height: CGFloat) -> some View {
-        let color = planColor(task)
-        #if os(macOS)
-        let prefix = task.clockDate.map { Dates.sameDay($0, day) ? Dates.label($0, pattern: "HH:mm") + " " : L("续 ", "↳ ") } ?? ""
-        #else
-        let prefix = ""
-        #endif
-        let chip = HStack(spacing: 3) {
-            RoundedRectangle(cornerRadius: 1).fill(color).frame(width: 2)
-            Text(prefix + (task.previewSourceID == nil ? "" : "↻ ") + task.title).font(.caption2.weight(task.priority == 2 && !task.isDone ? .bold : .regular)).lineLimit(1).strikethrough(task.isDone)
-            Spacer(minLength: 0)
-            CalendarPriorityMark(priority: task.priority, isDone: task.isDone)
-        }.frame(height: height).frame(maxWidth: .infinity, alignment: .leading)
-            .background(color.opacity(task.isDone ? 0.05 : 0.14), in: RoundedRectangle(cornerRadius: 3))
-            .foregroundStyle(task.isDone ? Color.secondary : Color.primary)
-        #if os(macOS)
-        let key = detailID(task, day: day, allDay: true)
-        chip.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil)).contentShape(Rectangle())
-            .overlay { if locatedTask == task.id { RoundedRectangle(cornerRadius: 3).strokeBorder(Color.accentColor, lineWidth: 2) } }
-            .help([task.title, task.calendarList.map { ListTree.path($0, lists: lists) } ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
-            .onTapGesture { presentation.showTask(key) }
-            .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton)
-            .accessibilityLabel(prefix + task.title + (task.priority == 2 ? L("，高优先级", ", high priority") : task.priority == 1 ? L("，中优先级", ", medium priority") : ""))
-            .accessibilityAction { presentation.showTask(key) }
-            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { taskDetail(task) })
-            .modifier(WeekDragSource(task: task, color: color, grabOffset: { _ in 0 }, month: selectedDate, drop: monthDrop))
-        #else
-        chip.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
-            .overlay { if locatedTask == task.id { RoundedRectangle(cornerRadius: 3).strokeBorder(Color.accentColor, lineWidth: 2) } }
-            .allowsHitTesting(false)
-        #endif
-    }
-
 }
 
 struct RepeatPreviewStyle: ViewModifier {
@@ -283,5 +229,77 @@ struct RepeatPreviewStyle: ViewModifier {
                 if isPreview { RoundedRectangle(cornerRadius: 3).strokeBorder(.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 0.7, dash: [3, 2])).allowsHitTesting(false) }
             }
             .accessibilityHint(isPreview ? L("重复安排预览，点击查看原任务", "Repeat preview; open for the original task") : "")
+    }
+}
+
+extension ContentView {
+    func dayTasks(_ day: Date, items all: [TaskItem], presentation: CalendarPresentation) -> some View {
+        let range = Dates.calendar.dateInterval(of: .day, for: day)!
+        let matching = all.filter { $0.overlaps(range) }
+        let items = TaskItem.ordered(matching, incompleteFirst: planningView == "month")
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(Dates.label(day)).font(.headline)
+                Spacer()
+                Button { presentation.day = nil } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                    .buttonStyle(.borderless).accessibilityLabel(L("关闭", "Close"))
+            }
+            HStack(spacing: 8) {
+                if planningView != "week" {
+                    Button(L("查看这一周", "Open this week")) { openPlan(day, presentation: presentation, view: "week") }.frame(minHeight: 44)
+                }
+                Button(L("在列表中查看", "Open in list")) { openPlan(day, presentation: presentation, view: "list") }.frame(minHeight: 44)
+            }.buttonStyle(.bordered).controlSize(.small)
+            // A scroll view keeps whatever height it first got, so unfolding a row used to leave the note and
+            // subtasks hidden below the edge. It now takes the rows' own height, up to 360, and scrolls beyond that.
+            ScrollView {
+                #if os(macOS)
+                VStack(spacing: 0) { dayTaskRows(items, presentation: presentation) }
+                .onGeometryChange(for: CGFloat.self) { min(360, max(44, ceil($0.size.height))) } action: {
+                    presentation.updateRowsHeight($0, for: day)
+                }
+                #else
+                LazyVStack(spacing: 0) { dayTaskRows(items, presentation: presentation) }
+                #endif
+            }
+            #if os(macOS)
+            .frame(height: presentation.rowsHeight)
+            #else
+            .frame(maxHeight: .infinity, alignment: .top)
+            #endif
+            Button { presentation.day = nil; afterDetail(presentation) { editor = EditorRequest(date: day) } } label: {
+                Label(L("添加任务", "Add task"), systemImage: "plus").frame(minHeight: 44)
+            }.buttonStyle(.borderless)
+        }.padding(16)
+        #if os(macOS)
+        .frame(width: 320)
+            .presentationCompactAdaptation(.popover)
+        #else
+        .padding(.top, 12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        #endif
+    }
+
+    @ViewBuilder private func dayTaskRows(_ items: [TaskItem], presentation: CalendarPresentation) -> some View {
+        if items.isEmpty { Text(L("这一天还没有任务", "Nothing on this day")).foregroundStyle(.secondary).padding(.vertical, 12) }
+        ForEach(items) { task in
+            VStack(spacing: 0) {
+                dayTaskRow(task, presentation: presentation)
+                Divider()
+            }
+        }
+    }
+
+    /// Leaves the popover and shows that day in another view; the month stays where it was if the user comes back.
+    private func openPlan(_ day: Date, presentation: CalendarPresentation, view: String) {
+        presentation.day = nil
+        slideForward = true
+        selectedDate = day; wholeMonth = false
+        planningView = view
+    }
+
+    /// A row in the day popover. Tapping it unfolds the note and subtasks in place, so nothing is hidden behind "edit".
+    @ViewBuilder private func dayTaskRow(_ task: TaskItem, presentation: CalendarPresentation) -> some View {
+        if task.previewSourceID != nil { repeatPreviewDetail(task, presentation: presentation) }
+        else { savedDayTaskRow(task, presentation: presentation) }
     }
 }

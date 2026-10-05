@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3647594D772B55D604E073CC /* CalendarGridChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5BE043B38F7E9CFAF90FE98 /* CalendarGridChecks.swift */; };
+		58F867C4B10FAB2BB6277D5E /* CalendarGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22B6F847AC085BD71F9C00C6 /* CalendarGrid.swift */; };
 		00000000000000000000000A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000008 /* Assets.xcassets */; };
 		000000000000000000000202 /* Widget/JianshiWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001F7 /* Widget/JianshiWidget.swift */; };
 		000000000000000000000320 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000321 /* PrivacyInfo.xcprivacy */; };
@@ -74,6 +76,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		E5BE043B38F7E9CFAF90FE98 /* CalendarGridChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarGridChecks.swift; sourceTree = "<group>"; };
+		22B6F847AC085BD71F9C00C6 /* CalendarGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarGrid.swift; sourceTree = "<group>"; };
 		000000000000000000000006 /* 小记.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = "小记.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0000000000000000000001F7 /* Widget/JianshiWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Widget/JianshiWidget.swift; sourceTree = SOURCE_ROOT; };
@@ -194,6 +198,7 @@
 			children = (
 				56020032BB1E00843F669B0E /* AgendaView.swift */,
 				9DC546B15A3472FE375D1741 /* CalendarDetails.swift */,
+				22B6F847AC085BD71F9C00C6 /* CalendarGrid.swift */,
 				78DA599A0404FE45BFEF34FF /* CalendarLayout.swift */,
 				2BDA181B78899A398B27F8C1 /* CalendarNavigation.swift */,
 				ED59A26F307AF399FFB46CEA /* CalendarPresentation.swift */,
@@ -279,6 +284,7 @@
 			isa = PBXGroup;
 			children = (
 				5062033C7173C815D6945F49 /* EditingChecks.swift */,
+				E5BE043B38F7E9CFAF90FE98 /* CalendarGridChecks.swift */,
 				1BC53E8867C679F14AD33165 /* FinanceChecks.swift */,
 				947DDE6F11D0E1FF1D48198C /* SelfCheck.swift */,
 			);
@@ -381,6 +387,7 @@
 				846DF94314D8280863F47012 /* WorkspaceControls.swift in Sources */,
 				36A2F973F0AEABC2FAFE07F2 /* AgendaView.swift in Sources */,
 				7147E53802B48E0B9459BA71 /* CalendarDetails.swift in Sources */,
+				58F867C4B10FAB2BB6277D5E /* CalendarGrid.swift in Sources */,
 				B4C502B36DEE17E271AC914E /* CalendarLayout.swift in Sources */,
 				33BE0FB01D078CBE26DC51C0 /* CalendarNavigation.swift in Sources */,
 				7330D7956097B85CC7C2EEA3 /* CalendarPresentation.swift in Sources */,
@@ -431,6 +438,7 @@
 				775A0FA9EFB3260A1C86236D /* TaskRows.swift in Sources */,
 				1AEE198625C0F737A48ECB81 /* TaskRules.swift in Sources */,
 				8F6D624396C1985949CA846B /* EditingChecks.swift in Sources */,
+				3647594D772B55D604E073CC /* CalendarGridChecks.swift in Sources */,
 				8E11CD5899C7C57D8DBBD689 /* FinanceChecks.swift in Sources */,
 				16D36CC4DECF212943F94B04 /* SelfCheck.swift in Sources */,
 			);

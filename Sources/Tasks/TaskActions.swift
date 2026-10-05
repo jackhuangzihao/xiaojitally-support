@@ -110,7 +110,7 @@ extension ContentView {
 
     func copyTask(_ task: TaskItem) {
         guard task.previewSourceID == nil, task.deletedAt == nil else { return }
-        copiedTask = TaskBackup.TaskRecord(task); assigning = nil; presentation.taskKey = nil
+        copiedTask = TaskBackup.TaskRecord(task); assigning = nil
         #if os(macOS)
         notify(L("已复制，在周历空白处右键粘贴", "Copied. Right-click an empty week-calendar slot to paste."))
         #else
@@ -157,7 +157,7 @@ extension ContentView {
             let task = record.duplicate(at: moment, timed: timed, list: list)
             context.insert(task); duplicate = task
         }), let duplicate else { return false }
-        presentation.taskKey = nil; selectedDate = moment
+        selectedDate = moment
         locatedTask = duplicate.id; locateRequest = UUID()
         notify(L("已复制到 \(Dates.label(moment, pattern: timed ? "M月d日 HH:mm" : "M月d日"))", "Copied to \(Dates.label(moment, pattern: timed ? "M月d日 HH:mm" : "M月d日"))"))
         return true
@@ -289,18 +289,7 @@ extension ContentView {
 }
 
 extension ContentView {
-    func dropAllDay(_ values: [String], _ day: Date) -> Bool {
-        guard let task = droppedTask(values) else { return false }
-        makeAllDay(task, on: day)
-        return true
-    }
-
-    /// Dragging out of the timeline onto the all-day row keeps the day and removes the time.
-    private func makeAllDay(_ task: TaskItem, on day: Date, revealDate: Date? = nil) {
-        requestMove(task, to: day, kind: .allDay, revealDate: revealDate)
-    }
-
-    private func clearDate(_ task: TaskItem) {
+    func clearDate(_ task: TaskItem) {
         guard task.calendarDate != nil else { return }
         guard task.dueAt == nil, task.repeatRule == "none" else {
             notify(L("有截止日期或重复的任务不能去掉日期", "Tasks with a deadline or repeat keep their date")); return
@@ -318,34 +307,6 @@ extension ContentView {
         requestMove(task, to: day, kind: .day, revealDate: revealMonth ? day : nil, revealMonth: revealMonth)
     }
 
-    /// Where a task dragged inside the Mac week view was let go.
-    func weekDrop(_ task: TaskItem, _ zone: WeekDropGeometry.Zone, _ weekOffset: Int) {
-        let destination = Dates.calendar.date(byAdding: .day, value: weekOffset * 7, to: selectedDate)!
-        let days = Dates.weekCells(destination)
-        switch zone {
-        case .none: break
-        case .timed(let day, let minute):
-            // Same week: the block glides to its new place. Another week is already on screen, so no extra animation.
-            withAnimation(weekOffset == 0 && !reduceMotion ? .spring(response: 0.3, dampingFraction: 0.86) : nil) {
-                arrange(task, at: Dates.clockTime(on: days[day], minute: minute, reference: task.clockDate), revealDate: weekOffset == 0 ? nil : destination)
-            }
-        case .allDay(let day):
-            makeAllDay(task, on: days[day], revealDate: weekOffset == 0 ? nil : destination)
-        case .undated: clearDate(task)
-        case .day: break
-        }
-        }
-
-        /// Where a task dragged in the Mac month view was let go. A drop in another month stays in that month.
-        func monthDrop(_ task: TaskItem, _ zone: WeekDropGeometry.Zone, _ monthOffset: Int) {
-            if zone == .undated { clearDate(task); return }
-            guard case .day(let index) = zone else { return }
-            let cells = Dates.monthCells(Dates.shiftMonth(selectedDate, by: monthOffset))
-            guard cells.indices.contains(index) else { return }
-            let day = cells[index]
-            move(task, toDay: day, revealMonth: monthOffset != 0)
-        }
-
     func droppedTask(_ values: [String]) -> TaskItem? {
         guard values.count == 1, values[0].hasPrefix("jianshi-task:"), let id = UUID(uuidString: String(values[0].dropFirst(13))) else { return nil }
         return tasks.first { $0.id == id && $0.deletedAt == nil }
@@ -354,10 +315,6 @@ extension ContentView {
         let from = Dates.weekCells(selectedDate)[0], to = Dates.weekCells(date)[0]
         revealShift += (Dates.calendar.dateComponents([.day], from: from, to: to).day ?? 0) / 7
         selectedDate = date
-    }
-
-    func arrange(_ task: TaskItem, at moment: Date, revealDate: Date? = nil) {
-        requestMove(task, to: moment, kind: .timed, revealDate: revealDate)
     }
 
     func requestMove(_ task: TaskItem, to day: Date, kind: TaskMove.Kind, revealDate: Date? = nil, revealMonth: Bool = false) {
@@ -394,5 +351,4 @@ extension ContentView {
             movedMessage! += L(" · 与其他任务重叠", " · overlaps another task")
         }
     }
-
 }

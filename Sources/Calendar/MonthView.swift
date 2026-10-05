@@ -1,12 +1,59 @@
 import SwiftUI
-import SwiftData
-import UniformTypeIdentifiers
-import Observation
-#if os(iOS)
-import UIKit
-#endif
 
-extension ContentView {
+struct MonthCalendarView: View {
+    let data: CalendarGridData
+    @Binding var selectedDate: Date
+    let assigning: UUID?
+    let locateRequest: UUID
+    let revealShift: Int
+    let slideForward: Bool
+    let isPhone: Bool
+    let covered: Bool
+    let actions: CalendarGridActions
+    let details: CalendarGridDetails
+    @State private var presentation = CalendarPresentation()
+    @State private var weekDrag = WeekDrag()
+    @State private var repeatPreview = RepeatPreview()
+    @AppStorage("showPlanningCompleted") private var showPlanningCompleted = true
+    @AppStorage("showRepeatPreviews") private var showRepeatPreviews = true
+    @AppStorage("appLanguage") private var language = "system"
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private func stepPeriod(_ amount: Int) {
+        weekDrag.releaseHeldScroll(); presentation.close(); actions.step(amount)
+    }
+    private func today() {
+        weekDrag.releaseHeldScroll(); presentation.close(); actions.today()
+    }
+    private var pageTransition: AnyTransition { .push(from: slideForward ? .trailing : .leading) }
+    private var planTrailing: CGFloat { 0 }
+    private var previewMonthDate: Date { Dates.shiftMonth(selectedDate, by: weekDrag.weekOffset) }
+    private var planningTasks: [TaskItem] {
+        data.items(on: previewMonthDate, month: true, completed: showPlanningCompleted, repeats: showRepeatPreviews, cache: repeatPreview)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            CalendarPeriodNavigator(date: $selectedDate, displayedDate: previewMonthDate, week: false, isPhone: isPhone,
+                                    step: stepPeriod, today: today)
+            ZStack {
+                monthPanel.id(CalendarPageIdentity.month(selectedDate, revealed: revealShift)).transition(pageTransition)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).clipped()
+                .modifier(PageSwipe { if !weekDrag.isDragging { stepPeriod($0) } })
+        }.modifier(CalendarGridLifecycle(drag: weekDrag, presentation: presentation, locateRequest: locateRequest, covered: covered))
+    }
+    private func dropOnDay(_ values: [String], _ day: Date) -> Bool {
+        guard let task = data.droppedTask(values) else { return false }
+        actions.schedule(task, day, .day, nil, false); return true
+    }
+    private func monthDrop(_ task: TaskItem, _ zone: WeekDropGeometry.Zone, _ offset: Int) {
+        if zone == .undated { actions.clearDate(task); return }
+        guard case .day(let index) = zone else { return }
+        let cells = Dates.monthCells(Dates.shiftMonth(selectedDate, by: offset))
+        guard cells.indices.contains(index) else { return }
+        actions.schedule(task, cells[index], .day, offset == 0 ? nil : cells[index], offset != 0)
+    }
+
     private var monthMinCell: CGFloat {
         #if os(macOS)
         86
@@ -16,13 +63,9 @@ extension ContentView {
     }
 
     /// Written out in full: an icon alone did not say what it switched.
-    var completedSwitch: some View {
-        Toggle(L("显示已完成", "Show completed"), isOn: $showPlanningCompleted)
-            .toggleStyle(.switch).controlSize(.mini).font(.caption).foregroundStyle(.secondary)
-            .fixedSize()
-    }
 
-    var monthPanel: some View {
+
+    private var monthPanel: some View {
         let month = previewMonthDate
         let cells = Dates.monthCells(month)
         let rows = max(1, cells.count / 7)
@@ -39,7 +82,7 @@ extension ContentView {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 #if os(macOS)
-                completedSwitch
+                CalendarCompletedSwitch()
                 #endif
             }.padding(.bottom, 8)
             HStack(spacing: 0) {
@@ -79,7 +122,7 @@ extension ContentView {
     }
 
     private func monthDayCell(_ day: Date, items: [TaskItem], height: CGFloat) -> some View {
-        let today = Dates.sameDay(day, currentDay)
+        let today = Dates.sameDay(day, data.currentDay)
         let selected = Dates.sameDay(day, selectedDate)
         let inMonth = Dates.calendar.isDate(day, equalTo: previewMonthDate, toGranularity: .month)
         let line: CGFloat = 16
@@ -93,7 +136,7 @@ extension ContentView {
                     .background(today ? Color.accentColor : .clear, in: Circle())
                 Spacer(minLength: 0)
             }
-            ForEach(visiblePlanItems(items, count: shown)) { monthChip($0, day: day, height: line - 2) }
+            ForEach(data.visiblePlanItems(items, count: shown)) { monthChip($0, day: day, height: line - 2) }
             if items.count > shown {
                 Button("+\(items.count - shown)") { selectedDate = day; presentation.showDay(day) }.font(.caption2).buttonStyle(.plain)
                     .accessibilityLabel(L("查看当天全部任务", "Show all tasks for this day"))
@@ -102,89 +145,51 @@ extension ContentView {
         }.padding(3)
             .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
             .background(selected ? Color.accentColor.opacity(0.08) : .clear)
-            .overlay { if locatedTask != nil && items.contains(where: { $0.id == locatedTask }) { RoundedRectangle(cornerRadius: 4).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .overlay { if data.locatedTask != nil && items.contains(where: { $0.id == data.locatedTask }) { RoundedRectangle(cornerRadius: 4).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .overlay(alignment: .top) { Rectangle().fill(Color.secondary.opacity(0.18)).frame(height: 1) }
             .opacity(inMonth ? 1 : 0.55)
             .contentShape(Rectangle())
             .onTapGesture {
-                if let id = assigning { assign(id, to: day) }
+                if let id = assigning { actions.assign(id, day) }
                 else { selectedDate = day; presentation.showDay(day) }
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(L("\(Dates.label(day))，\(items.count) 项", "\(Dates.label(day)), \(items.count)"))
             .accessibilityAddTraits(.isButton)
             .dayDrop { dropOnDay($0, day) }
-            .modifier(CalendarDayPopover(presentation: presentation, day: day) { dayTasks(day) })
+            .modifier(CalendarDayPopover(presentation: presentation, day: day) { details.day(day, planningTasks, presentation) })
     }
 
-    func dayTasks(_ day: Date) -> some View {
-        let range = Dates.calendar.dateInterval(of: .day, for: day)!
-        let matching = planningTasks.filter { $0.overlaps(range) }
-        let items = TaskItem.ordered(matching, incompleteFirst: planningView == "month")
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(Dates.label(day)).font(.headline)
-                Spacer()
-                Button { presentation.day = nil } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                    .buttonStyle(.borderless).accessibilityLabel(L("关闭", "Close"))
-            }
-            HStack(spacing: 8) {
-                if planningView != "week" {
-                    Button(L("查看这一周", "Open this week")) { openPlan(day, view: "week") }.frame(minHeight: 44)
-                }
-                Button(L("在列表中查看", "Open in list")) { openPlan(day, view: "list") }.frame(minHeight: 44)
-            }.buttonStyle(.bordered).controlSize(.small)
-            // A scroll view keeps whatever height it first got, so unfolding a row used to leave the note and
-            // subtasks hidden below the edge. It now takes the rows' own height, up to 360, and scrolls beyond that.
-            ScrollView {
-                #if os(macOS)
-                VStack(spacing: 0) { dayTaskRows(items) }
-                .onGeometryChange(for: CGFloat.self) { min(360, max(44, ceil($0.size.height))) } action: {
-                    presentation.updateRowsHeight($0, for: day)
-                }
-                #else
-                LazyVStack(spacing: 0) { dayTaskRows(items) }
-                #endif
-            }
-            #if os(macOS)
-            .frame(height: presentation.rowsHeight)
-            #else
-            .frame(maxHeight: .infinity, alignment: .top)
-            #endif
-            Button { presentation.day = nil; afterDetail { editor = EditorRequest(date: day) } } label: {
-                Label(L("添加任务", "Add task"), systemImage: "plus").frame(minHeight: 44)
-            }.buttonStyle(.borderless)
-        }.padding(16)
+    @ViewBuilder private func monthChip(_ task: TaskItem, day: Date, height: CGFloat) -> some View {
+        let color = CalendarGridStyle.color(task)
         #if os(macOS)
-        .frame(width: 320)
-            .presentationCompactAdaptation(.popover)
+        let prefix = task.clockDate.map { Dates.sameDay($0, day) ? Dates.label($0, pattern: "HH:mm") + " " : L("续 ", "↳ ") } ?? ""
         #else
-        .padding(.top, 12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        let prefix = ""
+        #endif
+        let chip = HStack(spacing: 3) {
+            RoundedRectangle(cornerRadius: 1).fill(color).frame(width: 2)
+            Text(prefix + (task.previewSourceID == nil ? "" : "↻ ") + task.title).font(.caption2.weight(task.priority == 2 && !task.isDone ? .bold : .regular)).lineLimit(1).strikethrough(task.isDone)
+            Spacer(minLength: 0)
+            CalendarPriorityMark(priority: task.priority, isDone: task.isDone)
+        }.frame(height: height).frame(maxWidth: .infinity, alignment: .leading)
+            .background(color.opacity(task.isDone ? 0.05 : 0.14), in: RoundedRectangle(cornerRadius: 3))
+            .foregroundStyle(task.isDone ? Color.secondary : Color.primary)
+        #if os(macOS)
+        let key = CalendarGridStyle.detailID(task, day: day, allDay: true)
+        chip.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil)).contentShape(Rectangle())
+            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 3).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .help([task.title, task.calendarList.map { ListTree.path($0, lists: data.lists) } ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
+            .onTapGesture { presentation.showTask(key) }
+            .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton)
+            .accessibilityLabel(prefix + task.title + (task.priority == 2 ? L("，高优先级", ", high priority") : task.priority == 1 ? L("，中优先级", ", medium priority") : ""))
+            .accessibilityAction { presentation.showTask(key) }
+            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
+            .modifier(WeekDragSource(task: task, color: color, grabOffset: { _ in 0 }, month: selectedDate, drop: monthDrop))
+        #else
+        chip.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
+            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 3).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .allowsHitTesting(false)
         #endif
     }
-
-    @ViewBuilder private func dayTaskRows(_ items: [TaskItem]) -> some View {
-        if items.isEmpty { Text(L("这一天还没有任务", "Nothing on this day")).foregroundStyle(.secondary).padding(.vertical, 12) }
-        ForEach(items) { task in
-            VStack(spacing: 0) {
-                dayTaskRow(task)
-                Divider()
-            }
-        }
-    }
-
-    /// Leaves the popover and shows that day in another view; the month stays where it was if the user comes back.
-    private func openPlan(_ day: Date, view: String) {
-        presentation.day = nil
-        slideForward = true
-        selectedDate = day; wholeMonth = false
-        planningView = view
-    }
-
-    /// A row in the day popover. Tapping it unfolds the note and subtasks in place, so nothing is hidden behind "edit".
-    @ViewBuilder private func dayTaskRow(_ task: TaskItem) -> some View {
-        if task.previewSourceID != nil { repeatPreviewDetail(task) }
-        else { savedDayTaskRow(task) }
-    }
-
 }

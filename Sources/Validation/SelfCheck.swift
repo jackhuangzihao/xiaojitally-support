@@ -2367,6 +2367,7 @@ import AppKit
             try require(Set(before.tasks.map(\.id)) == Set(after.tasks.map(\.id)) && Set(before.lists.map(\.id)) == Set(after.lists.map(\.id)), "Migration preserves all task and list identities")
             try require(Set(after.lists.compactMap { $0.colorHex?.uppercased() }).count == after.lists.count, "Migrated store has distinct list colors")
         }
+        checkCount += try CalendarGridChecks.run()
         checkCount += try EditingChecks.run()
         checkCount += try FinanceChecks.run()
         checkCount += try CloudMerge.check()

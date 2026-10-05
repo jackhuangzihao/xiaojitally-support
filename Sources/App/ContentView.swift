@@ -6,7 +6,7 @@ import Observation
 import UIKit
 #endif
 
-/// Window navigation and calendar state. Calendar/ and Tasks/ extensions render this same owner.
+/// Window navigation and shared save/undo coordination. Week and month grids own their UI state.
 struct ContentView: View {
     let drafts: EditorDrafts
     let recoveryGeneration: Int
@@ -15,7 +15,6 @@ struct ContentView: View {
     @State private var windowReady = false
     @State var dragFeedback = DragFeedback()
     @AppStorage("appLanguage") var language = "system"
-    @State var presentation = CalendarPresentation()
     @State var slideForward = true
     @AppStorage("planningView") var planningView = "list"
     @AppStorage("showPlanningCompleted") var showPlanningCompleted = true
@@ -25,7 +24,7 @@ struct ContentView: View {
     @State var assigning: UUID?
 
     @State var filter = TaskFilter()
-    @State var repeatPreview = RepeatPreview()
+    @State private var repeatPreview = RepeatPreview()
     @State var history = TaskHistory()
     @AppStorage("showRepeatPreviews") var showRepeatPreviews = true
     @State var showingSettings = false
@@ -35,7 +34,6 @@ struct ContentView: View {
     @Query(sort: \CalendarWeekTitle.week) var weekTitles: [CalendarWeekTitle]
     @State var copyRequest: TaskCopyRequest?
     @State var copiedTask: TaskBackup.TaskRecord?
-    @AppStorage("weekZoom") var weekZoom = 1.0
     @AppStorage("initialListsCreated") private var initialListsCreated = false
     @State var selection: TaskScope = .calendar
     @FocusState private var sidebarFocused: Bool
@@ -53,10 +51,6 @@ struct ContentView: View {
     /// Groups open in the sidebar. Kept here (not inside an outline) so a drag knows which rows are on screen.
     @State private var expandedLists: Set<UUID> = []
     #endif
-    /// The zoom while two fingers are pinching the week view; saved to `weekZoom` when they lift.
-    @State var pinchZoom: Double?
-    @State var pinchBase = 1.0
-    @State var pinchAnchorY: Double?
     @ScaledMetric(relativeTo: .body) var calendarDayHeight: CGFloat = 48
     @State var wholeMonth = false
     #if os(iOS)
@@ -78,7 +72,6 @@ struct ContentView: View {
     @State var moveFeedbackID = UUID()
     @State var undoSchedule: (id: UUID, before: TaskSchedule, after: TaskSchedule)?
     @State var undoListMove: (id: UUID, before: UUID?, after: UUID)?
-    @State var weekDrag = WeekDrag()
     @AppStorage("overdueExpanded") var overdueExpanded = true
     @State var pendingMove: PendingMove?
     @State var deadlineMove: TaskMove?
@@ -225,8 +218,7 @@ struct ContentView: View {
             #endif
             .onChange(of: history.outcome) { _, value in if let value { notify(value) } }
             .environment(dragFeedback)
-            .environment(weekDrag)
-            .onDisappear { dragFeedback.end(); _ = weekDrag.finish() }
+            .onDisappear { dragFeedback.end() }
 
 
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in refreshDay() }
@@ -291,7 +283,7 @@ struct ContentView: View {
             .onChange(of: listEditor?.id) { _, value in if value == nil, recoveryGeneration == Store.recovery.generation { drafts.list = nil; drafts.listID = nil } }
             .onChange(of: Store.recovery.failure) { _, failure in
                 guard failure != nil else { openReminderIfReady(); return }
-                dragFeedback.end(); _ = weekDrag.finish()
+                dragFeedback.end()
                 #if os(macOS)
                 listDrag.cancel()
                 #endif
@@ -335,7 +327,7 @@ struct ContentView: View {
             return
         }
         financeMode = false
-        assigning = nil; copyRequest = nil; presentation.close()
+        assigning = nil; copyRequest = nil
         selection = .calendar; wholeMonth = false; search = ""; filter = TaskFilter()
         locate(task)
         editor = EditorRequest(task: task)

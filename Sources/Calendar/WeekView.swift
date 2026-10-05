@@ -7,20 +7,20 @@ import UIKit
 #endif
 
 private struct CalendarWeekTitleField: View {
-    @AppStorage("appLanguage") var language = "system"
+    @AppStorage("appLanguage") private var language = "system"
     let value: String
     let compact: Bool
     let save: (String, String) -> Bool
-    @State var draft: String
-    @State var original: String
+    @State private var draft: String
+    @State private var original: String
     @State private var syncPaused = false
-    @FocusState var focused: Bool
+    @FocusState private var focused: Bool
 
     init(value: String, compact: Bool = false, save: @escaping (String, String) -> Bool) {
         self.value = value; self.compact = compact; self.save = save
         _draft = State(initialValue: value); _original = State(initialValue: value)
     }
-    func commit() {
+    private func commit() {
         guard draft != original else { return }
         if save(draft, original) { draft = draft.trimmingCharacters(in: .whitespacesAndNewlines); original = draft }
     }
@@ -47,23 +47,82 @@ private struct CalendarWeekTitleField: View {
     }
 }
 
-extension ContentView {
-    var weekPanel: some View {
+struct WeekCalendarView: View {
+    let data: CalendarGridData
+    @Binding var selectedDate: Date
+    @Binding var assigning: UUID?
+    let locateRequest: UUID
+    let revealShift: Int
+    let slideForward: Bool
+    let isPhone: Bool
+    let covered: Bool
+    let actions: CalendarGridActions
+    let details: CalendarGridDetails
+    @State private var presentation = CalendarPresentation()
+    @State private var weekDrag = WeekDrag()
+    @State private var repeatPreview = RepeatPreview()
+    @AppStorage("showPlanningCompleted") private var showPlanningCompleted = true
+    @AppStorage("showRepeatPreviews") private var showRepeatPreviews = true
+    @AppStorage("appLanguage") private var language = "system"
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private func stepPeriod(_ amount: Int) {
+        weekDrag.releaseHeldScroll(); presentation.close(); actions.step(amount)
+    }
+    private func today() {
+        weekDrag.releaseHeldScroll(); presentation.close(); actions.today()
+    }
+    private var pageTransition: AnyTransition { .push(from: slideForward ? .trailing : .leading) }
+    private var planTrailing: CGFloat { 0 }
+    let weekTitles: [CalendarWeekTitle]
+    let canPaste: Bool
+    let saveWeekTitle: (String, String, String) -> Bool
+    @AppStorage("weekZoom") private var weekZoom = 1.0
+    @State private var pinchZoom: Double?
+    @State private var pinchBase = 1.0
+    @State private var pinchAnchorY: Double?
+    @Environment(DragFeedback.self) private var dragFeedback
+    private var zoomLevel: Double { min(1.5, max(0.25, pinchZoom ?? weekZoom)) }
+    private var planScale: Double { PlanBlock.displayScale * zoomLevel }
+    private var planGutter: CGFloat { isPhone ? 34 : 44 }
+    private var previewWeekDate: Date { Dates.calendar.date(byAdding: .day, value: weekDrag.weekOffset * 7, to: selectedDate)! }
+    private var planningTasks: [TaskItem] {
+        data.items(on: previewWeekDate, month: false, completed: showPlanningCompleted, repeats: showRepeatPreviews, cache: repeatPreview)
+    }
+    private var assigningTask: TaskItem? { assigning.flatMap { id in data.tasks.first { $0.id == id && $0.deletedAt == nil } } }
+    private var draggingTask: TaskItem? { dragFeedback.draggedID.flatMap { id in data.tasks.first { $0.id == id && $0.deletedAt == nil } } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            CalendarPeriodNavigator(date: $selectedDate, displayedDate: previewWeekDate, week: true, isPhone: isPhone,
+                                    zoom: $weekZoom, zoomLevel: zoomLevel, dragging: weekDrag.isDragging, step: stepPeriod, today: today)
+            ZStack {
+                weekPanel.id(CalendarPageIdentity.week(selectedDate, revealed: revealShift)).transition(pageTransition)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).clipped()
+                #if os(macOS)
+                .modifier(PageSwipe { if !weekDrag.isDragging { stepPeriod($0) } })
+                #endif
+        }.modifier(CalendarGridLifecycle(drag: weekDrag, presentation: presentation, locateRequest: locateRequest, covered: covered))
+    }
+
+
+    private var weekPanel: some View {
         let days = Dates.weekCells(previewWeekDate)
         let items = planningTasks
         let indexed = CalendarIndex.byDay(items, days: days)
         let perDay = days.map { PlanBlock.layout(indexed[$0] ?? [], day: $0) }
-        let todayIndex = days.firstIndex { Dates.sameDay($0, currentDay) }
+        let todayIndex = days.firstIndex { Dates.sameDay($0, data.currentDay) }
         let layout = TimelineLayout.make(blocks: perDay.flatMap { $0 }, fullDay: true, density: planScale,
-                                         nowMinute: todayIndex == nil ? nil : minuteOfDay(Date()))
+                                         nowMinute: todayIndex == nil ? nil : Int(Dates.clockMinute(Date())))
         let selectedIndex = days.firstIndex { Dates.sameDay($0, selectedDate) } ?? 0
         return VStack(alignment: .leading, spacing: 8) {
             if !isPhone || !dynamicTypeSize.isAccessibilitySize {
                 HStack(spacing: 12) {
-                    freeTimeLine(perDay[selectedIndex])
+                    CalendarFreeTimeSummary(blocks: perDay[selectedIndex], selectedDate: selectedDate)
                     Spacer(minLength: 0)
                     #if os(macOS)
-                    completedSwitch
+                    CalendarCompletedSwitch()
                     #endif
                 }
             }
@@ -75,7 +134,7 @@ extension ContentView {
         let key = CalendarWeekTitle.key(for: days[0])
         let title = weekTitles.first { $0.week == key }?.title ?? ""
         return VStack(spacing: 0) {
-            CalendarWeekTitleField(value: title, compact: isPhone) { draft, original in saveWeekTitle(draft, week: key, original: original) }
+            CalendarWeekTitleField(value: title, compact: isPhone) { draft, original in saveWeekTitle(draft, key, original) }
                 .id(key).padding(.bottom, isPhone ? 0 : 8)
                 .dynamicTypeSize(...(isPhone ? DynamicTypeSize.xxxLarge : .accessibility5))
                 .disabled(weekDrag.isDragging)
@@ -133,20 +192,20 @@ extension ContentView {
                     }
                     .task(id: locateRequest) {
                         do { try await Task.sleep(for: .milliseconds(90)) } catch { return }
-                        if let minute = locatedMinute(days: days) { proxy.scrollTo(minute, anchor: .top) }
+                        if let minute = data.locatedMinute(days: days, selectedDate: selectedDate) { proxy.scrollTo(minute, anchor: .top) }
                     }
                     .onChange(of: locateRequest) { _, _ in
                         let now = Date()
-                        guard locatedTask == nil, Dates.sameDay(selectedDate, now), days.contains(where: { Dates.sameDay($0, now) }) else { return }
-                        proxy.scrollTo(anchorHour(layout, now: minuteOfDay(now)), anchor: .top)
+                        guard data.locatedTask == nil, Dates.sameDay(selectedDate, now), days.contains(where: { Dates.sameDay($0, now) }) else { return }
+                        proxy.scrollTo(anchorHour(layout, now: Int(Dates.clockMinute(now))), anchor: .top)
                     }
                     .task(id: days[0]) {
                         guard !weekDrag.isDragging else { return }
                         do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
                         guard !weekDrag.isDragging else { return }
-                        if let minute = locatedMinute(days: days) { proxy.scrollTo(minute, anchor: .top); return }
+                        if let minute = data.locatedMinute(days: days, selectedDate: selectedDate) { proxy.scrollTo(minute, anchor: .top); return }
                         guard !weekDrag.restoreHeldScroll() else { return }
-                        proxy.scrollTo(anchorHour(layout, now: todayIndex == nil ? nil : minuteOfDay(Date())), anchor: .top)
+                        proxy.scrollTo(anchorHour(layout, now: todayIndex == nil ? nil : Int(Dates.clockMinute(Date()))), anchor: .top)
                     }
                 }
             }
@@ -158,10 +217,10 @@ extension ContentView {
     }
 
     private func weekHeader(_ day: Date) -> some View {
-        let today = Dates.sameDay(day, currentDay)
+        let today = Dates.sameDay(day, data.currentDay)
         let selected = Dates.sameDay(day, selectedDate)
         return Button {
-            if let id = assigning { assign(id, to: day) } else {
+            if let id = assigning { actions.assign(id, day) } else {
                 selectedDate = day
                 if isPhone { presentation.showDay(day) }
             }
@@ -185,7 +244,7 @@ extension ContentView {
     private func allDayCell(_ day: Date, index: Int, items all: [TaskItem]) -> some View {
         let items = TaskItem.ordered(all.filter { $0.clockDate == nil })
         return VStack(alignment: .leading, spacing: 2) {
-            ForEach(visiblePlanItems(items, count: 2)) { allDayChip($0, day: day) }
+            ForEach(data.visiblePlanItems(items, count: 2)) { allDayChip($0, day: day) }
             if items.count > 2 {
                 Button("+\(items.count - 2)") { presentation.showDay(day) }
                     .font(.caption2).buttonStyle(.borderless)
@@ -198,16 +257,16 @@ extension ContentView {
             .dayDrop { dropAllDay($0, day) }
             .contextMenu {
                 #if os(macOS)
-                if let copiedTask {
-                    Button(L("粘贴为全天任务", "Paste as all-day task")) { pasteTask(copiedTask, at: day, timed: false) }
+                if canPaste {
+                    Button(L("粘贴为全天任务", "Paste as all-day task")) { actions.paste(day, false) }
                 }
                 #else
-                if copiedTask != nil {
-                    Button(L("粘贴为全天任务", "Paste as all-day task")) { preparePaste(on: day, allDay: true) }
+                if canPaste {
+                    Button(L("粘贴为全天任务", "Paste as all-day task")) { actions.paste(day, false) }
                 }
                 #endif
             }
-            .modifier(CalendarDayPopover(presentation: presentation, day: day) { dayTasks(day) })
+            .modifier(CalendarDayPopover(presentation: presentation, day: day) { details.day(day, planningTasks, presentation) })
     }
 
     private func calendarCategory(_ list: TaskList, color: Color, isDone: Bool = false) -> some View {
@@ -224,8 +283,8 @@ extension ContentView {
     }
 
     private func allDayChip(_ task: TaskItem, day: Date) -> some View {
-        let key = detailID(task, day: day, allDay: true)
-        let color = planColor(task)
+        let key = CalendarGridStyle.detailID(task, day: day, allDay: true)
+        let color = CalendarGridStyle.color(task)
         let chip = VStack(alignment: .leading, spacing: 1) {
             Text((task.previewSourceID == nil ? "" : "↻ ") + task.title).font(.caption2.weight(task.priority == 2 && !task.isDone ? .bold : .regular)).lineLimit(1).strikethrough(task.isDone)
             if !isPhone {
@@ -236,22 +295,22 @@ extension ContentView {
             .padding(.horizontal, 4).padding(.vertical, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(color.opacity(task.isDone ? 0.06 : 0.2), in: RoundedRectangle(cornerRadius: 4))
-            .overlay { if locatedTask == task.id { RoundedRectangle(cornerRadius: 4).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 4).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .foregroundStyle(task.isDone ? Color.secondary : Color.primary)
         #if os(macOS)
         return chip.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil)).contentShape(Rectangle())
             .onTapGesture { presentation.showTask(key) }
             .accessibilityElement(children: .combine).accessibilityAddTraits(.isButton)
             .accessibilityAction { presentation.showTask(key) }
-            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { taskDetail(task) })
+            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
             .modifier(WeekDragSource(task: task, color: color, grabOffset: { _ in 12 }, drop: weekDrop))
-            .contextMenu { taskCopyMenu(task) }
+            .contextMenu { details.copyMenu(task) }
         #else
         return Button { presentation.showTask(key) } label: { chip }.buttonStyle(.plain)
             .modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
-            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { taskDetail(task) })
+            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
             .modifier(TaskDragSource(task: task, showPreview: false))
-            .contextMenu { taskCopyMenu(task) }
+            .contextMenu { details.copyMenu(task) }
         #endif
     }
 
@@ -259,11 +318,11 @@ extension ContentView {
         let column = max(1, (width - planGutter - planTrailing) / CGFloat(days.count))
         return ZStack(alignment: .topLeading) {
             TimelineView(.everyMinute) { clock in
-            let nowMinute = minuteOfDay(clock.date)
+            let nowMinute = Int(Dates.clockMinute(clock.date))
             VStack(spacing: 0) {
                 ForEach(layout.hours, id: \.self) { minute in
                     HStack(alignment: .top, spacing: 4) {
-                        Text(clockLabel(minute)).font(isPhone ? .system(size: 9).monospacedDigit() : .caption2.monospacedDigit()).foregroundStyle(.secondary)
+                        Text(CalendarGridStyle.clockLabel(minute)).font(isPhone ? .system(size: 9).monospacedDigit() : .caption2.monospacedDigit()).foregroundStyle(.secondary)
                             .frame(width: planGutter - 6, alignment: .trailing)
                             .opacity(todayIndex != nil && abs(nowMinute - minute) < 20 ? 0 : 1)
                         Rectangle().fill(Color.secondary.opacity(0.18)).frame(height: 1)
@@ -298,25 +357,25 @@ extension ContentView {
         .contentShape(Rectangle())
         #if os(macOS)
         .background {
-            if let copiedTask {
+            if canPaste {
                 CalendarPasteMenu { point in
                     guard !weekDrag.isDragging,
                           let slot = PlanSlot.emptyPoint(point, column: column, gutter: planGutter, layout: layout,
                                                         occupied: weekTaskFrames(perDay, column: column, layout: layout)) else { return nil }
                     let moment = Dates.clockTime(on: days[slot.day], minute: slot.minute)
                     return (L("粘贴到这里 · ", "Paste here · ") + Dates.label(moment, pattern: "M月d日 HH:mm"),
-                            { pasteTask(copiedTask, at: moment) })
+                            { actions.paste(moment, true) })
                 }
             }
         }
         .simultaneousGesture(SpatialTapGesture(count: 2).exclusively(before: SpatialTapGesture(count: 1)).onEnded { event in
             switch event {
             case .first(let tap):
-                guard editor == nil, assigningTask == nil, !weekDrag.isDragging else { return }
+                guard !covered, assigningTask == nil, !weekDrag.isDragging else { return }
                 let occupied = weekTaskFrames(perDay, column: column, layout: layout)
                 guard let slot = PlanSlot.emptyPoint(tap.location, column: column, gutter: planGutter, layout: layout, occupied: occupied, dayCount: days.count) else { return }
                 let moment = Dates.clockTime(on: days[slot.day], minute: slot.minute)
-                selectedDate = days[slot.day]; editor = EditorRequest(date: moment, timed: true)
+                selectedDate = days[slot.day]; actions.create(moment, true)
             case .second(let tap):
                 guard let slot = planSlot(tap.location, column: column, layout: layout, dayCount: days.count) else { return }
                 guard let task = assigningTask else { return }
@@ -327,7 +386,7 @@ extension ContentView {
         #else
         // A standard tap yields to a vertical pan; no exclusive single/double recognizer on iOS.
         .onTapGesture(coordinateSpace: .local) { point in
-            guard editor == nil, let slot = planSlot(point, column: column, layout: layout, dayCount: days.count) else { return }
+            guard !covered, let slot = planSlot(point, column: column, layout: layout, dayCount: days.count) else { return }
             if let task = assigningTask {
                 let moment = Dates.clockTime(on: days[slot.day], minute: slot.minute, reference: task.clockDate)
                 assigning = nil; arrange(task, at: moment)
@@ -335,8 +394,8 @@ extension ContentView {
                 guard PlanSlot.emptyPoint(point, column: column, gutter: planGutter, layout: layout,
                                           occupied: weekTaskFrames(perDay, column: column, layout: layout), dayCount: days.count) != nil else { return }
                 selectedDate = days[slot.day]
-                if copiedTask != nil { preparePaste(on: days[slot.day], minute: slot.minute) }
-                else { editor = EditorRequest(date: Dates.clockTime(on: days[slot.day], minute: slot.minute), timed: true) }
+                if canPaste { actions.paste(Dates.clockTime(on: days[slot.day], minute: slot.minute), true) }
+                else { actions.create(Dates.clockTime(on: days[slot.day], minute: slot.minute), true) }
             }
         }
         #endif
@@ -347,7 +406,7 @@ extension ContentView {
                 if let task = draggingTask { dropPreview(task, slot: slot, layout: layout, column: column, day: days[slot.day]) }
             },
             receive: { value, point in
-                if let slot = planSlot(point, column: column, layout: layout, dayCount: days.count), let task = droppedTask([value]) {
+                if let slot = planSlot(point, column: column, layout: layout, dayCount: days.count), let task = data.droppedTask([value]) {
                     arrange(task, at: Dates.clockTime(on: days[slot.day], minute: slot.minute, reference: task.clockDate))
                 }
             })
@@ -391,7 +450,7 @@ extension ContentView {
 
     @ViewBuilder private func nowMarker(layout: TimelineLayout, column: CGFloat, todayIndex: Int, width: CGFloat) -> some View {
         TimelineView(.everyMinute) { clock in
-            let minute = minuteOfDay(clock.date)
+            let minute = Int(Dates.clockMinute(clock.date))
             // TimelineView supplies one layout child; keep every marker anchored to the canvas origin.
             ZStack(alignment: .topLeading) {
                 if minute >= layout.startMinute && minute <= layout.endMinute {
@@ -425,7 +484,7 @@ extension ContentView {
         let task = block.task
         let height = layout.intervalHeight(from: block.start, to: end)
         let edgeHeight = task.previewSourceID == nil ? TaskResize.handleHeight(for: height) : 0
-        let key = detailID(task, day: day)
+        let key = CalendarGridStyle.detailID(task, day: day)
         let time = task.timeLabel
         let note = task.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let midnight = Dates.calendar.startOfDay(for: day)
@@ -433,8 +492,8 @@ extension ContentView {
         let fromPrevious = task.clockDate.map { $0 < midnight } ?? false
         let toNext = task.endAt.map { $0 > nextDay } ?? false
         let card = RoundedRectangle(cornerRadius: min(5, height / 2))
-            .fill(planColor(task).opacity(task.isDone ? 0.09 : 0.22))
-            .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 1).fill(planColor(task)).frame(width: 3) }
+            .fill(CalendarGridStyle.color(task).opacity(task.isDone ? 0.09 : 0.22))
+            .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 1).fill(CalendarGridStyle.color(task)).frame(width: 3) }
             .overlay(alignment: .topLeading) {
                 if height >= 14 {
                     VStack(alignment: .leading, spacing: 1) {
@@ -450,7 +509,7 @@ extension ContentView {
                         }
                         if !isPhone && height >= 30 {
                             HStack(spacing: 3) {
-                                if let list = task.calendarList { calendarCategory(list, color: planColor(task), isDone: task.isDone) }
+                                if let list = task.calendarList { calendarCategory(list, color: CalendarGridStyle.color(task), isDone: task.isDone) }
                                 Spacer(minLength: 0)
                                 CalendarPriorityMark(priority: task.priority, isDone: task.isDone)
                             }
@@ -469,7 +528,7 @@ extension ContentView {
             .foregroundStyle(task.isDone ? Color.secondary : Color.primary)
             .clipped()
             .dynamicTypeSize(...(isPhone ? DynamicTypeSize.xxxLarge : .accessibility5))
-        let help = [task.title, task.timeLabel, task.calendarList.map { ListTree.path($0, lists: lists) } ?? "", note].filter { !$0.isEmpty }.joined(separator: "\n")
+        let help = [task.title, task.timeLabel, task.calendarList.map { ListTree.path($0, lists: data.lists) } ?? "", note].filter { !$0.isEmpty }.joined(separator: "\n")
         #if os(macOS)
         return card.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil)).contentShape(Rectangle())
             .onTapGesture { presentation.showTask(key) }
@@ -477,10 +536,10 @@ extension ContentView {
             .accessibilityLabel([task.title, task.timeLabel, task.calendarList?.name ?? "", task.priority == 2 ? L("高优先级", "High priority") : task.priority == 1 ? L("中优先级", "Medium priority") : ""].filter { !$0.isEmpty }.joined(separator: "，"))
             .accessibilityAction { presentation.showTask(key) }
             .help(help)
-            .contextMenu { taskCopyMenu(task) }
-            .overlay { if locatedTask == task.id { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) } }
-            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { taskDetail(task) })
-            .modifier(WeekDragSource(task: task, color: planColor(task), grabOffset: { start in
+            .contextMenu { details.copyMenu(task) }
+            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
+            .modifier(WeekDragSource(task: task, color: CalendarGridStyle.color(task), grabOffset: { start in
                 // How far below the task's own start the pointer went down, so the task keeps that spot while moving.
                 guard let clock = task.clockDate else { return 12 }
                 let offset = Dates.calendar.dateComponents([.day], from: Dates.calendar.startOfDay(for: day), to: Dates.calendar.startOfDay(for: clock)).day ?? 0
@@ -493,10 +552,10 @@ extension ContentView {
         return Button { presentation.showTask(key) } label: { card }.buttonStyle(.plain)
             .accessibilityLabel(help)
             .modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
-            .overlay { if locatedTask == task.id { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .help(help)
-            .contextMenu { taskCopyMenu(task) }
-            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { taskDetail(task) })
+            .contextMenu { details.copyMenu(task) }
+            .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
             .modifier(TaskDragSource(task: task, showPreview: false))
         #endif
     }
@@ -508,14 +567,45 @@ extension ContentView {
             .onHover { inside in if inside { NSCursor.resizeUpDown.set() } else { NSCursor.arrow.set() } }
             .highPriorityGesture(DragGesture(minimumDistance: 3, coordinateSpace: .named(WeekDrag.space))
                 .onChanged { value in
-                    weekDrag.updateResize(task, color: planColor(task), range: range, point: value.location, others: tasks) { endpoint, offset in
+                    weekDrag.updateResize(task, color: CalendarGridStyle.color(task), range: range, point: value.location, others: data.tasks) { endpoint, offset in
                         let destination = Dates.calendar.date(byAdding: .day, value: offset * 7, to: range.day)!
-                        requestMove(task, to: endpoint, kind: range.top ? .resizeStart : .resizeEnd, revealDate: offset == 0 ? nil : destination)
+                        actions.schedule(task, endpoint, range.top ? .resizeStart : .resizeEnd, offset == 0 ? nil : destination, false)
                     }
                 }
                 .onEnded { _ in if weekDrag.taskID == task.id { weekDrag.complete() } })
             .accessibilityElement().accessibilityLabel(range.top ? L("调整开始时间", "Adjust start time") : L("调整结束时间", "Adjust end time"))
     }
     #endif
+
+    private func weekDrop(_ task: TaskItem, _ zone: WeekDropGeometry.Zone, _ weekOffset: Int) {
+        let destination = Dates.calendar.date(byAdding: .day, value: weekOffset * 7, to: selectedDate)!
+        let days = Dates.weekCells(destination)
+        switch zone {
+        case .none: break
+        case .timed(let day, let minute):
+            // Same week: the block glides to its new place. Another week is already on screen, so no extra animation.
+            withAnimation(weekOffset == 0 && !reduceMotion ? .spring(response: 0.3, dampingFraction: 0.86) : nil) {
+                arrange(task, at: Dates.clockTime(on: days[day], minute: minute, reference: task.clockDate), revealDate: weekOffset == 0 ? nil : destination)
+            }
+        case .allDay(let day):
+            makeAllDay(task, on: days[day], revealDate: weekOffset == 0 ? nil : destination)
+        case .undated: actions.clearDate(task)
+        case .day: break
+        }
+    }
+    private func arrange(_ task: TaskItem, at date: Date, revealDate: Date? = nil) {
+        actions.schedule(task, date, .timed, revealDate, false)
+    }
+    private func makeAllDay(_ task: TaskItem, on date: Date, revealDate: Date? = nil) {
+        actions.schedule(task, date, .allDay, revealDate, false)
+    }
+    private func dropAllDay(_ values: [String], _ day: Date) -> Bool {
+        guard let task = data.droppedTask(values) else { return false }
+        makeAllDay(task, on: day); return true
+    }
+    private func dropOnDay(_ values: [String], _ day: Date) -> Bool {
+        guard let task = data.droppedTask(values) else { return false }
+        actions.schedule(task, day, .day, nil, false); return true
+    }
 
 }

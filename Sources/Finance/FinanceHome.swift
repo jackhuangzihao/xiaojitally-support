@@ -10,7 +10,7 @@ import UIKit
 
 #if os(macOS)
 struct FinanceSidebar: View {
-    @AppStorage("appLanguage") var language = "system"
+    @AppStorage("appLanguage") private var language = "system"
     @Binding var selection: String
     var body: some View {
         List(selection: $selection) {
@@ -84,7 +84,7 @@ struct FinanceHome: View {
     @Environment(\.modelContext) private var context
     @Query private var records: [FinanceLedger]
     @AppStorage("hideMoney") var hidden = false
-    @AppStorage("appLanguage") var language = "system"
+    @AppStorage("appLanguage") private var language = "system"
     @AppStorage("moneyBookScope") var scope = ""
     @AppStorage("moneyAutoRates") var automaticRates = true
     @State var data = FinanceData.initial

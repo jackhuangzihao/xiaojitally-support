@@ -37,7 +37,6 @@ extension ContentView {
                             Button(L("清除", "Clear")) { filter = TaskFilter() }.buttonStyle(.borderless).font(.caption)
                         }
                     }
-                    if planningView != "list" && !searchingCalendar { dateNavigator }
                 }
                 #if os(iOS)
                 if !(selection == .calendar && planningView == "month"), selection != .trash { taskClipboardBar }
@@ -45,20 +44,8 @@ extension ContentView {
                 if searchingCalendar && planningView != "list" {
                     calendarSearchResults
                 } else if selection == .calendar && !searchingCalendar && planningView != "list" {
-                    ZStack {
-                        if planningView == "month" {
-                            monthPanel.id(Dates.shiftMonth(Dates.monthStart(selectedDate), by: -monthRevealShift)).transition(pageTransition)
-                                #if os(iOS)
-                                .modifier(PageSwipe { stepPeriod($0) })
-                                #endif
-                        } else {
-                            weekPanel.id(Dates.calendar.date(byAdding: .day, value: -7 * revealShift, to: Dates.weekCells(selectedDate)[0])!).transition(pageTransition)
-                        }
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).clipped()
-                        #if os(macOS)
-                        .modifier(PageSwipe { stepPeriod($0) })
-                        #endif
-                    } else {
+                    calendarGrid
+                } else {
                 #if os(iOS)
                 iosTaskList
                 #else
@@ -549,8 +536,8 @@ extension ContentView {
     private func overlapLabel(_ items: [TaskItem], day: Date) -> String {
         let title = L("\(items.count) 项时间重叠", "\(items.count) overlap")
         guard let span = DaySchedule.span(items, day: day) else { return title }
-        let end = span.end == 1440 ? "24:00" : clockLabel(span.end)
-        let range = clockLabel(span.start) + "–" + end
+        let end = span.end == 1440 ? "24:00" : CalendarGridStyle.clockLabel(span.end)
+        let range = CalendarGridStyle.clockLabel(span.start) + "–" + end
         let duration = Dates.durationLabel(minutes: span.end - span.start)
         return title + " · " + range + L(" · 共占用 \(duration)", " · \(duration) total")
     }
@@ -561,4 +548,39 @@ extension ContentView {
             .padding(.leading, min(dayTimeWidth, 78) + 16).padding(.vertical, 4)
     }
 
+}
+
+extension ContentView {
+    private var calendarGridData: CalendarGridData {
+        CalendarGridData(tasks: tasks, lists: lists, filter: filter, currentDay: currentDay, locatedTask: locatedTask)
+    }
+    private var calendarGridActions: CalendarGridActions {
+        CalendarGridActions(assign: assign, schedule: requestMove, clearDate: clearDate,
+                            create: { date, timed in editor = EditorRequest(date: date, timed: timed) },
+                            paste: { date, timed in
+                                #if os(macOS)
+                                if let copiedTask { pasteTask(copiedTask, at: date, timed: timed) }
+                                #else
+                                preparePaste(on: date, minute: timed ? Int(Dates.clockMinute(date)) : nil, allDay: !timed)
+                                #endif
+                            }, step: stepPeriod, today: goToToday)
+    }
+    private var calendarGridDetails: CalendarGridDetails {
+        CalendarGridDetails(task: { AnyView(taskDetail($0, presentation: $1)) },
+                            day: { AnyView(dayTasks($0, items: $1, presentation: $2)) },
+                            copyMenu: { AnyView(taskCopyMenu($0)) })
+    }
+    private var calendarCovered: Bool { editor != nil || listEditor != nil || showingSettings || copyRequest != nil || confirmingDelete != nil }
+    @ViewBuilder var calendarGrid: some View {
+        if planningView == "month" {
+            MonthCalendarView(data: calendarGridData, selectedDate: $selectedDate, assigning: assigning,
+                              locateRequest: locateRequest, revealShift: monthRevealShift, slideForward: slideForward,
+                              isPhone: isPhone, covered: calendarCovered, actions: calendarGridActions, details: calendarGridDetails)
+        } else {
+            WeekCalendarView(data: calendarGridData, selectedDate: $selectedDate, assigning: $assigning,
+                             locateRequest: locateRequest, revealShift: revealShift, slideForward: slideForward,
+                             isPhone: isPhone, covered: calendarCovered, actions: calendarGridActions, details: calendarGridDetails,
+                             weekTitles: weekTitles, canPaste: copiedTask != nil, saveWeekTitle: saveWeekTitle)
+        }
+    }
 }
