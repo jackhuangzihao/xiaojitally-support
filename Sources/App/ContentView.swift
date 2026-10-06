@@ -32,6 +32,7 @@ struct ContentView: View {
     @Query(sort: \TaskItem.createdAt) var tasks: [TaskItem]
     @Query(sort: \TaskList.createdAt) var lists: [TaskList]
     @Query(sort: \CalendarWeekTitle.week) var weekTitles: [CalendarWeekTitle]
+    @State var undoCopy = false
     @State var copyRequest: TaskCopyRequest?
     @State var copiedTask: TaskBackup.TaskRecord?
     @AppStorage("initialListsCreated") private var initialListsCreated = false
@@ -255,10 +256,10 @@ struct ContentView: View {
             }
             .overlay(alignment: .bottomTrailing) {
                 if let movedMessage, assigning == nil, undoDeletedIDs.isEmpty {
-                    MoveFeedback(message: movedMessage, canUndo: undoSchedule != nil || undoListMove != nil,
+                    MoveFeedback(message: movedMessage, canUndo: undoSchedule != nil || undoListMove != nil || (undoCopy && history.canUndo),
                                  canShiftDeadline: deadlineMove != nil && undoSchedule != nil, shiftDeadline: shiftMovedDeadline,
-                                 undo: { if undoListMove != nil { restoreListMove() } else { restoreSchedule() } },
-                                 dismiss: { self.movedMessage = nil; undoSchedule = nil; undoListMove = nil; deadlineMove = nil })
+                                 undo: { if undoCopy { history.undo() } else if undoListMove != nil { restoreListMove() } else { restoreSchedule() } },
+                                 dismiss: { self.movedMessage = nil; undoSchedule = nil; undoListMove = nil; deadlineMove = nil; undoCopy = false })
                         .id(moveFeedbackID).padding(10)
                 }
             }

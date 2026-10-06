@@ -2248,6 +2248,39 @@ import AppKit
             try require(TaskSchedule(next) == original && !coalesced.canUndo, "Optional deadline shift and move undo as one action")
             coalesced.redo()
             try require(TaskSchedule(next) == withDeadline, "Redo restores both the moved schedule and deadline")
+            // Copy uses the same guarded undo stack as moves on Mac and iPhone.
+            let sourceRecord = TaskBackup.TaskRecord(next)
+            let copied = sourceRecord.duplicate(at: date(2031, 1, 7), timed: true, list: other)
+            context.insert(copied); try Store.save(context)
+            let copyHistory = TaskHistory(), createdCopy = TaskBackup.TaskRecord(copied)
+            copyHistory.recordCopy(copied)
+            copyHistory.undo()
+            try require(copied.deletedAt != nil && copyHistory.canRedo && TaskBackup.TaskRecord(next) == sourceRecord,
+                        "Undo copy removes only the new task and leaves the source intact")
+            copyHistory.redo()
+            try require(TaskBackup.TaskRecord(copied) == createdCopy && copyHistory.canUndo,
+                        "Redo copy restores the same task ID, subtask IDs and schedule without creating another copy")
+            let copySchedule = TaskSchedule(copied)
+            copied.schedule(at: date(2031, 1, 8)); try Store.save(context)
+            copyHistory.record(copied, before: .schedule(copySchedule), after: .schedule(TaskSchedule(copied)), name: "Move copy")
+            copyHistory.undo(); copyHistory.undo()
+            try require(copied.deletedAt != nil && TaskSchedule(copied) == copySchedule,
+                        "Undo can reverse a copy's move then its creation in order")
+            copyHistory.redo(); copyHistory.redo()
+            try require(copied.deletedAt == nil && copied.calendarDate == date(2031, 1, 8),
+                        "Redo restores copy then its move in order")
+            copied.notes = "Edited after copy"; try Store.save(context)
+            copyHistory.undo()
+            try require(copied.deletedAt == nil && copied.notes == "Edited after copy" && !copyHistory.canUndo,
+                        "Undo copy history never removes a subsequently edited task")
+            let unsavedCopy = sourceRecord.duplicate(at: date(2031, 1, 9), timed: false, list: other)
+            context.insert(unsavedCopy); try Store.save(context)
+            let unsavedHistory = TaskHistory(); unsavedHistory.recordCopy(unsavedCopy)
+            unsavedCopy.title = "Pending edit"
+            unsavedHistory.undo()
+            try require(unsavedCopy.deletedAt == nil && unsavedCopy.title == "Pending edit" && !unsavedHistory.canUndo,
+                        "Copy undo also preserves pending unsaved edits by checking the complete task snapshot")
+            try Store.save(context)
             next.repeatUntil = next.calendarDate
             try require(preview.items([next], in: DateInterval(start: date(2031,1,1), end: date(2032,1,1)), now: base).isEmpty, "Preview respects the final repeat day")
         }

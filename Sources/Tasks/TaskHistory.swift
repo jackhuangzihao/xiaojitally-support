@@ -1,9 +1,9 @@
 import SwiftUI
 import SwiftData
 
-/// Uses the system undo stack and the existing schedule snapshot; no database-wide copies on each drag.
+/// Shared system undo stack. Each entry captures only the task affected by that action.
 @MainActor @Observable final class TaskHistory {
-    enum State: Equatable { case schedule(TaskSchedule), list(UUID?) }
+    enum State: Equatable { case schedule(TaskSchedule), list(UUID?), copy(TaskBackup.TaskRecord) }
     private final class Entry {
         let task: TaskItem
         let before: State
@@ -38,6 +38,12 @@ import SwiftData
         manager.endUndoGrouping()
         revision += 1
     }
+    func recordCopy(_ task: TaskItem) {
+        let created = TaskBackup.TaskRecord(task)
+        var removed = created
+        removed.deletedAt = Date()
+        record(task, before: .copy(removed), after: .copy(created), name: L("复制任务", "Copy task"))
+    }
     private func register(_ entry: Entry, reverse: Bool) {
         manager.registerUndo(withTarget: self) { history in history.apply(entry, reverse: reverse) }
         manager.setActionName(entry.name)
@@ -45,11 +51,21 @@ import SwiftData
     private func apply(_ entry: Entry, reverse: Bool) {
         let task = entry.task, expected = reverse ? entry.before : entry.after, destination = reverse ? entry.after : entry.before
         guard savedRevision == Store.revision, let context = task.modelContext,
-              (try? Store.recovery.requireWritable(context)) != nil, task.deletedAt == nil else { stale(); return }
-        let current: State = switch expected { case .schedule: .schedule(TaskSchedule(task)); case .list: .list(task.list?.id) }
+              (try? Store.recovery.requireWritable(context)) != nil else { stale(); return }
+        let current: State
+        switch expected {
+        case .copy: current = .copy(TaskBackup.TaskRecord(task))
+        case .schedule:
+            guard task.deletedAt == nil else { stale(); return }
+            current = .schedule(TaskSchedule(task))
+        case .list:
+            guard task.deletedAt == nil else { stale(); return }
+            current = .list(task.list?.id)
+        }
         guard current == expected else { stale(); return }
         do {
             switch destination {
+            case .copy(let snapshot): task.deletedAt = snapshot.deletedAt
             case .schedule(let snapshot): snapshot.restore(task); task.reminderNeedsAttention = task.reminderRequiresAttention()
             case .list(let id):
                 let lists = try context.fetch(FetchDescriptor<TaskList>())

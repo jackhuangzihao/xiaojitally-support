@@ -114,7 +114,7 @@ extension ContentView {
         #if os(macOS)
         notify(L("已复制，在周历空白处右键粘贴", "Copied. Right-click an empty week-calendar slot to paste."))
         #else
-        notify(L("已复制，可选择日期粘贴，或轻点周历空白时段。", "Copied. Choose a date to paste, or tap an empty week-calendar slot."))
+        notify(L("已复制，长按周历空白时段粘贴，也可点“粘贴…”选择日期。", "Copied. Hold an empty week-calendar slot to paste, or choose a date with Paste…."))
         #endif
     }
 
@@ -125,7 +125,6 @@ extension ContentView {
         copyRequest = TaskCopyRequest(record: copiedTask, on: day, minute: minute, allDay: allDay)
     }
 
-    #if os(iOS)
     @ViewBuilder var taskClipboardBar: some View {
         if let copiedTask {
             HStack(spacing: 8) {
@@ -142,7 +141,6 @@ extension ContentView {
             .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
         }
     }
-    #endif
 
     private func duplicateNext(_ task: TaskItem) {
         let record = TaskBackup.TaskRecord(task)
@@ -157,9 +155,14 @@ extension ContentView {
             let task = record.duplicate(at: moment, timed: timed, list: list)
             context.insert(task); duplicate = task
         }), let duplicate else { return false }
+        history.recordCopy(duplicate)
+        // A fresh copy is unfinished and dated: Completed/Unscheduled and old filters can hide it.
+        if selection != .calendar || planningView == "month" { planningView = "list" }
+        selection = .calendar; search = ""; filter = TaskFilter(); wholeMonth = false
         selectedDate = moment
         locatedTask = duplicate.id; locateRequest = UUID()
         notify(L("已复制到 \(Dates.label(moment, pattern: timed ? "M月d日 HH:mm" : "M月d日"))", "Copied to \(Dates.label(moment, pattern: timed ? "M月d日 HH:mm" : "M月d日"))"))
+        undoCopy = true
         return true
     }
 
@@ -218,7 +221,7 @@ extension ContentView {
 
     func commit(_ change: () -> Void) -> Bool {
         guard (try? Store.recovery.requireWritable(context)) != nil else { return false }
-        undoSchedule = nil; undoListMove = nil; deadlineMove = nil
+        undoSchedule = nil; undoListMove = nil; deadlineMove = nil; undoCopy = false
         change()
         do { try Store.save(context); ReminderScheduler.shared.refresh(context); return true }
         catch { errorMessage = Store.recovery.failure == nil ? error.localizedDescription : nil; return false }
@@ -238,7 +241,7 @@ extension ContentView {
 
     /// A message that is not about a schedule change just made, so it never shows that change's undo button.
     func notify(_ message: String) {
-        undoSchedule = nil; undoListMove = nil; deadlineMove = nil
+        undoSchedule = nil; undoListMove = nil; deadlineMove = nil; undoCopy = false
         moveFeedbackID = UUID()
         movedMessage = message
     }

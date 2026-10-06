@@ -47,7 +47,7 @@ struct TaskCopySheet: View {
                         LabeledContent(L("结束时间", "End time"), value: Dates.label(moment.addingTimeInterval(end.timeIntervalSince(start)), pattern: "M月d日 HH:mm"))
                     }
                 } footer: {
-                    Text(L("创建一项独立任务，保留时长、备注和子任务；原任务不变。", "Creates an independent task with the same duration, notes and subtasks. The original stays in place."))
+                    Text(L("保留备注、清单和子任务，完成状态重置；不复制重复规则或关联账单。指定时间时保留原时长，全天任务不保留时段。原任务不变。", "Keeps notes, list and subtasks; resets completion. Repeat rules and linked entries are not copied. Timed copies keep the duration; all-day copies have no time interval. The original is unchanged."))
                 }
             }.formStyle(.grouped)
                 .navigationTitle(L("粘贴任务", "Paste task"))
@@ -63,7 +63,66 @@ struct TaskCopySheet: View {
         .onDisappear { CloudSync.shared.editing(false) }
         .modifier(SaveRecoveryGuard())
         #if os(macOS)
-        .frame(width: 420, height: 360)
+        .frame(width: 420, height: 430)
         #endif
     }
 }
+
+#if os(iOS)
+/// Location-aware long press on empty space. No timer or per-frame state lives in the calendar.
+struct CalendarSlotInteraction: ViewModifier {
+    let tap: (CGPoint) -> Void
+    let pasteAt: (CGPoint) -> (() -> Void)?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.onTapGesture(coordinateSpace: .local, perform: tap)
+                .gesture(SlotPastePress(actionAt: pasteAt))
+        } else {
+            content.gesture(LongPressGesture(minimumDuration: 0.45, maximumDistance: 10)
+                .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+                .exclusively(before: SpatialTapGesture())
+                .onEnded { value in
+                    switch value {
+                    case .first(.second(true, let drag?)): pasteAt(drag.startLocation)?()
+                    case .second(let event): tap(event.location)
+                    default: break
+                    }
+                })
+        }
+    }
+}
+
+@available(iOS 18, *)
+private struct SlotPastePress: UIGestureRecognizerRepresentable {
+    let actionAt: (CGPoint) -> (() -> Void)?
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator(converter: converter, actionAt: actionAt)
+    }
+    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
+        let gesture = UILongPressGestureRecognizer()
+        gesture.minimumPressDuration = 0.45
+        gesture.allowableMovement = 10
+        gesture.delegate = context.coordinator
+        return gesture
+    }
+    func updateUIGestureRecognizer(_ gesture: UILongPressGestureRecognizer, context: Context) {
+        context.coordinator.actionAt = actionAt
+    }
+    func handleUIGestureRecognizerAction(_ gesture: UILongPressGestureRecognizer, context: Context) {
+        guard gesture.state == .began else { return }
+        actionAt(context.converter.localLocation)?()
+    }
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        let converter: CoordinateSpaceConverter
+        var actionAt: (CGPoint) -> (() -> Void)?
+        init(converter: CoordinateSpaceConverter, actionAt: @escaping (CGPoint) -> (() -> Void)?) {
+            self.converter = converter; self.actionAt = actionAt
+        }
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            // Reject task cards and the time gutter, preserving their own menus and drag recognizers.
+            actionAt(converter.localLocation) != nil
+        }
+    }
+}
+#endif

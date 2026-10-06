@@ -38,9 +38,7 @@ extension ContentView {
                         }
                     }
                 }
-                #if os(iOS)
                 if !(selection == .calendar && planningView == "month"), selection != .trash { taskClipboardBar }
-                #endif
                 if searchingCalendar && planningView != "list" {
                     calendarSearchResults
                 } else if selection == .calendar && !searchingCalendar && planningView != "list" {
@@ -53,14 +51,19 @@ extension ContentView {
                     HStack(alignment: .top, spacing: 24) {
                         ScrollView { calendarPanel }.frame(width: 282)
                         Divider()
-                        ScrollView { taskPanel }.frame(maxWidth: .infinity)
+                        ScrollViewReader { proxy in
+                            ScrollView { taskPanel }
+                                .task(id: locateRequest) { await revealTask(using: proxy) }
+                        }.frame(maxWidth: .infinity)
                     }
                 } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            if selection == .calendar { calendarPanel; Divider() }
-                            taskPanel
-                        }
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 20) {
+                                if selection == .calendar { calendarPanel; Divider() }
+                                taskPanel
+                            }
+                        }.task(id: locateRequest) { await revealTask(using: proxy) }
                     }
                 }
                 #endif
@@ -174,6 +177,12 @@ extension ContentView {
             .overlay { if today { RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 1) } }
             .contentShape(Rectangle())
         }.buttonStyle(.plain)
+            .contextMenu {
+                if copiedTask != nil {
+                    Button(L("粘贴到这一天…", "Paste on this day…")) { preparePaste(on: date) }
+                    Button(L("粘贴为全天任务…", "Paste as all-day task…")) { preparePaste(on: date, allDay: true) }
+                }
+            }
             .accessibilityLabel(L("\(Dates.label(date))，\(count)项未完成\(count == 0 && planned ? "，全部已完成" : "")\(today ? "，今天" : "")", "\(Dates.label(date)), \(count) unfinished\(count == 0 && planned ? ", all done" : "")\(today ? ", today" : "")"))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .help(L("实心圆点是未完成的任务，空心代表当天已全部完成；描边代表今天。可拖动任务到这里改期。", "A solid dot counts unfinished tasks, a hollow one means all done; the outline marks Today. Drop a task here to reschedule."))
@@ -285,6 +294,7 @@ extension ContentView {
     }
 
     private var iosTaskList: some View {
+        ScrollViewReader { proxy in
         List {
             if selection == .calendar && !searchingCalendar {
                 if isPhone { phoneCalendarRows }
@@ -345,8 +355,18 @@ extension ContentView {
             }.listStyle(.plain).scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.interactively)
             .environment(\.defaultMinListRowHeight, 1)
+            .task(id: locateRequest) { await revealTask(using: proxy) }
+        }
     }
     #endif
+
+    private func revealTask(using proxy: ScrollViewProxy) async {
+        guard let id = locatedTask else { return }
+        // Allow the saved SwiftData row and a changed date/scope to reach List before locating it.
+        do { try await Task.sleep(for: .milliseconds(90)) } catch { return }
+        guard locatedTask == id else { return }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .center) }
+    }
 
     private var taskPanel: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -519,6 +539,7 @@ extension ContentView {
                                 })
             }
         }
+        .id(task.id)
         .contextMenu { taskMenu(task) }
         .modifier(TaskDragSource(task: task))
         #if os(iOS)

@@ -248,13 +248,20 @@ struct MoveFeedback: View {
     let undo: () -> Void
     let dismiss: () -> Void
     @State private var brief = true
+    private var touchSize: CGFloat {
+        #if os(iOS)
+        44
+        #else
+        24
+        #endif
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             if brief { Text(message).lineLimit(2) }
             if canShiftDeadline { Button(L("截止也一起移", "Move deadline too"), action: shiftDeadline).buttonStyle(.borderless).fixedSize() }
-            if canUndo { Button(L("撤销", "Undo"), action: undo).buttonStyle(.borderless) }
-            Button(action: dismiss) { Image(systemName: "xmark").frame(width: 24, height: 24) }
+            if canUndo { Button(action: undo) { Text(L("撤销", "Undo")).frame(minWidth: touchSize, minHeight: touchSize) }.buttonStyle(.borderless) }
+            Button(action: dismiss) { Image(systemName: "xmark").frame(width: touchSize, height: touchSize) }
                 .buttonStyle(.plain).accessibilityLabel(L("关闭提示", "Dismiss message"))
         }.font(.caption).padding(.horizontal, 10).padding(.vertical, 3)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))

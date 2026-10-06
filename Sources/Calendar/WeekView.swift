@@ -256,15 +256,9 @@ struct WeekCalendarView: View {
             .modifier(WeekZoneHighlight(zone: .allDay(index)))
             .dayDrop { dropAllDay($0, day) }
             .contextMenu {
-                #if os(macOS)
                 if canPaste {
                     Button(L("粘贴为全天任务", "Paste as all-day task")) { actions.paste(day, false) }
                 }
-                #else
-                if canPaste {
-                    Button(L("粘贴为全天任务", "Paste as all-day task")) { actions.paste(day, false) }
-                }
-                #endif
             }
             .modifier(CalendarDayPopover(presentation: presentation, day: day) { details.day(day, planningTasks, presentation) })
     }
@@ -384,8 +378,8 @@ struct WeekCalendarView: View {
             }
         })
         #else
-        // A standard tap yields to a vertical pan; no exclusive single/double recognizer on iOS.
-        .onTapGesture(coordinateSpace: .local) { point in
+        // Tapping always creates; copying never silently changes the normal tap action.
+        .modifier(CalendarSlotInteraction(tap: { point in
             guard !covered, let slot = planSlot(point, column: column, layout: layout, dayCount: days.count) else { return }
             if let task = assigningTask {
                 let moment = Dates.clockTime(on: days[slot.day], minute: slot.minute, reference: task.clockDate)
@@ -394,10 +388,15 @@ struct WeekCalendarView: View {
                 guard PlanSlot.emptyPoint(point, column: column, gutter: planGutter, layout: layout,
                                           occupied: weekTaskFrames(perDay, column: column, layout: layout), dayCount: days.count) != nil else { return }
                 selectedDate = days[slot.day]
-                if canPaste { actions.paste(Dates.clockTime(on: days[slot.day], minute: slot.minute), true) }
-                else { actions.create(Dates.clockTime(on: days[slot.day], minute: slot.minute), true) }
+                actions.create(Dates.clockTime(on: days[slot.day], minute: slot.minute), true)
             }
-        }
+        }, pasteAt: { point in
+            guard canPaste, !covered, assigningTask == nil, !weekDrag.isDragging,
+                  let slot = PlanSlot.emptyPoint(point, column: column, gutter: planGutter, layout: layout,
+                                                occupied: weekTaskFrames(perDay, column: column, layout: layout), dayCount: days.count) else { return nil }
+            let moment = Dates.clockTime(on: days[slot.day], minute: slot.minute)
+            return { actions.paste(moment, true) }
+        }))
         #endif
         .weekCanvasDrop(
             drag: weekDrag, layout: layout,
