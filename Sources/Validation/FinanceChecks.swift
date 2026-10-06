@@ -1180,6 +1180,65 @@ import SwiftData
             try require(ledger.categories.first { $0.id == child.id }?.archived == true,
                         "restoring a preset leaves individually archived children under user control")
         }
+        // Editing a posted income/expense reverses its old effect without duplicating money.
+        do {
+            var ledger = FinanceData.initial
+            let account = MoneyAccount(name: "Posting account", currency: "AUD", opening: 1000)
+            ledger.accounts = [account]
+            var expense = MoneyEntry(); expense.title = "Corrected entry"; expense.kind = .expense
+            expense.currency = "USD"; expense.amount = 10; expense.accountAmount = 15; expense.baseAmount = 70
+            expense.accountID = account.id; expense.bookID = ledger.books[0].id
+            try ledger.updateEntry(expense, expected: nil, baseCurrency: "CNY")
+            try require(ledger.balance(account.id) == 985 && ledger.entryKindChangeBlock(expense) == nil, "ordinary posted expenses can change type")
+            var income = expense; income.kind = .income
+            try ledger.updateEntry(income, expected: expense, baseCurrency: "CNY"); try ledger.validate()
+            try require(ledger.entries == [income] && ledger.balance(account.id) == 1015, "expense to income replaces the posting instead of appending another one")
+            try require(ledger.statisticsTotal(ledger.entries, income: true, in: "CNY", history: nil, days: nil).total == 70 && ledger.statisticsTotal(ledger.entries, income: false, in: "CNY", history: nil, days: nil).total == 0, "type change updates both statistics directions and preserves recorded FX")
+            try ledger.updateEntry(expense, expected: income, baseCurrency: "CNY"); try ledger.validate()
+            try require(ledger.balance(account.id) == 985 && ledger.entries == [expense], "income can change back without changing original or account currency amounts")
+            var refund = expense; refund.id = UUID(); refund.kind = .refund; refund.refundOf = expense.id
+            try ledger.updateEntry(refund, expected: nil, baseCurrency: "CNY")
+            let withRefund = ledger
+            try rejects("a refund arriving after the editor opened blocks changing its purchase to income") { try ledger.updateEntry(income, expected: expense, baseCurrency: "CNY") }
+            try require(ledger == withRefund, "blocked kind change leaves all postings untouched")
+            try ledger.trash(refund)
+            try require(ledger.entryKindChangeBlock(expense) != nil, "a deleted refund still protects its restorable purchase")
+            try rejects("deleted refund references also prevent kind changes at save time") { try ledger.updateEntry(income, expected: expense, baseCurrency: "CNY") }
+            ledger.entries = [expense]
+            var transfer = expense; transfer.kind = .transfer
+            try rejects("existing income/expense cannot become a transfer") { try ledger.updateEntry(transfer, expected: expense, baseCurrency: "CNY") }
+            ledger.entries = [transfer]
+            try rejects("existing transfer cannot become ordinary income") { try ledger.updateEntry(income, expected: transfer, baseCurrency: "CNY") }
+            ledger.entries = [expense]
+            var changed = expense; changed.title = "Newer edit"
+            ledger.entries = [changed]
+            try rejects("type change cannot overwrite a concurrent entry edit") { try ledger.updateEntry(income, expected: expense, baseCurrency: "CNY") }
+        }
+        // The visible account actions retain the same history and concurrent-edit protections as the editor.
+        do {
+            var ledger = FinanceData.initial
+            let account = MoneyAccount(name: "Unused account", opening: 200)
+            ledger.accounts = [account]; ledger.books[0].defaultAccountID = account.id
+            let original = ledger
+            try ledger.remove(.account, id: account.id, expected: original)
+            try require(ledger.accounts.isEmpty && ledger.books[0].defaultAccountID == nil, "deleting an unused account clears its default-account references")
+            ledger = original
+            var changed = account; changed.opening = 300
+            try ledger.updateAccount(changed, expected: account)
+            try rejects("account deletion confirmation cannot discard a newer balance edit") { try ledger.remove(.account, id: account.id, expected: original) }
+            ledger = original
+            var entry = MoneyEntry(); entry.title = "New posting"; entry.amount = 20; entry.accountAmount = 20; entry.baseAmount = 20
+            entry.accountID = account.id; entry.bookID = ledger.books[0].id
+            try ledger.updateEntry(entry, expected: nil, baseCurrency: "CNY")
+            try rejects("a posting arriving during account deletion confirmation blocks removal") { try ledger.remove(.account, id: account.id, expected: original) }
+            var archived = account; archived.archived = true
+            try ledger.updateAccount(archived, expected: account)
+            try require(ledger.balance(account.id) == 180 && ledger.entries == [entry], "archiving a used account keeps its balance and entries")
+            try ledger.trash(entry)
+            try require(ledger.removalBlock(.account, id: account.id) != nil, "Recently deleted entries still protect their account")
+            ledger.entries = [entry]; ledger.entries[0].accountID = nil; ledger.entries[0].destinationID = account.id
+            try require(ledger.removalBlock(.account, id: account.id) != nil, "incoming transfers protect their destination account")
+        }
         print("FINANCE PASS: \(checks) checks — accounts, books, transfers, refunds, FX, backup and persistence")
         return checks
     }

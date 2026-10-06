@@ -13,6 +13,7 @@ extension FinanceHome {
     }
     private func intervalTitle(_ interval: DateInterval) -> String {
         let end = interval.end.addingTimeInterval(-1)
+        if Dates.calendar.isDate(interval.start, inSameDayAs: end) { return Dates.label(interval.start, pattern: "yyyy年M月d日") }
         let sameYear = Dates.calendar.component(.year, from: interval.start) == Dates.calendar.component(.year, from: end)
         return Dates.label(interval.start, pattern: "yyyy年M月d日") + " – " + Dates.label(end, pattern: sameYear ? "M月d日" : "yyyy年M月d日")
     }

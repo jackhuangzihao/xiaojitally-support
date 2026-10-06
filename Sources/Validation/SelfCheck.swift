@@ -2254,7 +2254,9 @@ import AppKit
             context.insert(copied); try Store.save(context)
             let copyHistory = TaskHistory(), createdCopy = TaskBackup.TaskRecord(copied)
             copyHistory.recordCopy(copied)
+            let undoBegan = Date()
             copyHistory.undo()
+            try require(copied.deletedAt.map { $0 >= undoBegan && $0 <= Date() } == true, "Copy deletion is dated at Undo, not when the copy was created")
             try require(copied.deletedAt != nil && copyHistory.canRedo && TaskBackup.TaskRecord(next) == sourceRecord,
                         "Undo copy removes only the new task and leaves the source intact")
             copyHistory.redo()
@@ -2263,7 +2265,9 @@ import AppKit
             let copySchedule = TaskSchedule(copied)
             copied.schedule(at: date(2031, 1, 8)); try Store.save(context)
             copyHistory.record(copied, before: .schedule(copySchedule), after: .schedule(TaskSchedule(copied)), name: "Move copy")
+            let secondUndoBegan = Date()
             copyHistory.undo(); copyHistory.undo()
+            try require(copied.deletedAt.map { $0 >= secondUndoBegan } == true, "A second copy undo records a fresh deletion time for redo and sync")
             try require(copied.deletedAt != nil && TaskSchedule(copied) == copySchedule,
                         "Undo can reverse a copy's move then its creation in order")
             copyHistory.redo(); copyHistory.redo()

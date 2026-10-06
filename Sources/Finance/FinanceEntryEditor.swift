@@ -96,6 +96,7 @@ struct FinanceEntryEditor: View {
         #endif
     }
     private var simpleKind: Bool { draft.kind == .expense || draft.kind == .income || draft.kind == .transfer }
+    private var kindChangeBlock: String? { expected.flatMap { ledger.entryKindChangeBlock($0) } }
     private var signedAmount: Bool { draft.kind == .adjustment }
     private var activeAccounts: [MoneyAccount] { ledger.accounts.filter { ledger.allowsAccount($0.id, for: draft, replacing: expected) } }
 
@@ -116,6 +117,9 @@ struct FinanceEntryEditor: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if showMore { moreFields }
+                    if let kindChangeBlock, expected?.kind == .expense {
+                        Text(kindChangeBlock).font(.caption).foregroundStyle(.secondary)
+                    }
                     switch draft.kind {
                     case .expense, .income: categoryGrid
                     case .transfer: transferFields
@@ -237,8 +241,8 @@ struct FinanceEntryEditor: View {
         HStack(spacing: 12) {
             if simpleKind {
                 Picker(L("类型", "Type"), selection: $draft.kind) {
-                    ForEach([MoneyKind.expense, .income, .transfer]) { Text($0.label).tag($0) }
-                }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 230).disabled(expected != nil)
+                    ForEach(expected == nil ? [MoneyKind.expense, .income, .transfer] : expected?.kind == .transfer ? [.transfer] : [.expense, .income]) { Text($0.label).tag($0) }
+                }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 230).disabled(kindChangeBlock != nil)
             } else { Text(draft.kind.label).font(.headline) }
             Spacer()
             if !compact { Text(expected == nil ? L("新增账单", "New entry") : L("编辑已有账单", "Edit existing entry")).font(.subheadline).foregroundStyle(.secondary) }

@@ -260,9 +260,24 @@ struct FinanceData: Codable, Equatable {
             }
         }
     }
+    func entryKindChangeBlock(_ entry: MoneyEntry) -> String? {
+        guard entry.kind == .expense || entry.kind == .income else {
+            return L("转账、退款和余额调整不能改为普通收支。", "Transfers, refunds and balance adjustments cannot change to income or spending.")
+        }
+        if entries.contains(where: { $0.refundOf == entry.id }) {
+            return L("此支出有关联退款（含最近删除），不能改为收入；金额和其他信息仍可编辑。", "This expense has linked refunds, including Recently deleted, so it cannot become income. You can still edit its amount and other details.")
+        }
+        return nil
+    }
     mutating func updateEntry(_ entry: MoneyEntry, expected: MoneyEntry?, baseCurrency: String, referenceRates: [MoneyRate] = []) throws {
         try requireBaseCurrency(baseCurrency)
         guard entries.first(where: { $0.id == entry.id }) == expected else { throw TaskBackup.invalid(L("账单已在其他窗口修改。请重新打开再编辑。", "This entry changed in another window. Reopen it before editing.")) }
+        if let expected, expected.kind != entry.kind {
+            if let reason = entryKindChangeBlock(expected) { throw TaskBackup.invalid(reason) }
+            guard entry.kind == .expense || entry.kind == .income else {
+                throw TaskBackup.invalid(L("已有收支账单只能在收入和支出之间切换。", "An existing income or expense can only switch between income and spending."))
+            }
+        }
         try checkAccounts(for: entry, replacing: expected)
         // Older editor state can contain asset quotes; actual posting amounts remain authoritative.
         try mergeReferenceRates(referenceRates.filter { !$0.isManual })

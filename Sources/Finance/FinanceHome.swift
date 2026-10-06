@@ -94,6 +94,7 @@ struct FinanceHome: View {
     @State var anchor = Date()
     @State var period = MoneyPeriod.month
     @State var statsIncome = false
+    @State var statsSelectedDate: Date?
     @State var dateRange = MoneyDateRange.month
     @State var showDateRange = false
     @State var fixedRange: DateInterval?
@@ -110,6 +111,7 @@ struct FinanceHome: View {
     @State var entity: EntityRequest?
     @State private var lastDeleted: MoneyEntry?
     @State var confirmDelete: MoneyEntry?
+    @State var removingAccount: MoneyAccount?
     @State var showArchivedAccounts = false
     @State var rangeBeforeAccount: MoneyDateRange?
     @State var confirmSamples = false
@@ -119,7 +121,7 @@ struct FinanceHome: View {
     @AppStorage("moneyStatsCalendar") var statsCalendar = false
     @State var rankingExpansion = MoneyRankingExpansion()
     /// Where Statistics was when one of its bars, days or categories opened the entry list.
-    struct StatsPlace { var anchor: Date; var period: MoneyPeriod; var income: Bool; var expanded: MoneyCategoryKey?; var billRange: MoneyDateRange }
+    struct StatsPlace { var anchor: Date; var period: MoneyPeriod; var income: Bool; var expanded: MoneyCategoryKey?; var selectedDate: Date?; var billRange: MoneyDateRange }
     @State var statsReturn: StatsPlace?
     @State var rateHistory: RateHistory?
     @State var loadingRates = false
@@ -136,7 +138,7 @@ struct FinanceHome: View {
 
     private var presentationActive: Bool {
         editor != nil || entity != nil || conversionRequest != nil || showAssetRates || exporting || showDateRange
-            || error != nil || info != nil || confirmDelete != nil || confirmSamples
+            || error != nil || info != nil || confirmDelete != nil || removingAccount != nil || confirmSamples
     }
 
     /// Nil means every book.

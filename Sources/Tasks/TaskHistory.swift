@@ -6,7 +6,7 @@ import SwiftData
     enum State: Equatable { case schedule(TaskSchedule), list(UUID?), copy(TaskBackup.TaskRecord) }
     private final class Entry {
         let task: TaskItem
-        let before: State
+        var before: State
         var after: State
         let name: String
         init(task: TaskItem, before: State, after: State, name: String) {
@@ -65,7 +65,9 @@ import SwiftData
         guard current == expected else { stale(); return }
         do {
             switch destination {
-            case .copy(let snapshot): task.deletedAt = snapshot.deletedAt
+            case .copy(let snapshot):
+                // Keep a deletion record for sync and redo, dated when Undo actually runs.
+                task.deletedAt = reverse ? snapshot.deletedAt : Date()
             case .schedule(let snapshot): snapshot.restore(task); task.reminderNeedsAttention = task.reminderRequiresAttention()
             case .list(let id):
                 let lists = try context.fetch(FetchDescriptor<TaskList>())
@@ -74,6 +76,7 @@ import SwiftData
                 task.list = list
             }
             try Store.save(context)
+            if case .copy = destination, !reverse { entry.before = .copy(TaskBackup.TaskRecord(task)) }
             savedRevision = Store.revision
             ReminderScheduler.shared.refresh(context)
             register(entry, reverse: !reverse)

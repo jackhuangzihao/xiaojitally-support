@@ -120,7 +120,7 @@ extension FinanceHome {
             }
             if !archived {
                 Button { entity = EntityRequest(kind: .category, income: income) } label: { Label(L("新增大类", "New main category"), systemImage: "plus") }
-                    .frame(minHeight: 44)
+                    .buttonStyle(.borderless).frame(minHeight: 44)
                 Text(L("点 … 可编辑或归档任何分类，包括预设分类。归档后新增账单不再显示，历史账目保留；大类的子分类会一起归档。", "Use … to edit or archive any category, including presets. Archived categories disappear from new entries and keep their history. Archiving a main category includes its children."))
                     .font(.caption).foregroundStyle(.secondary)
             }

@@ -66,6 +66,17 @@ extension FinanceHome {
     private func statsSum(_ entries: [MoneyEntry], income: Bool, days: [String]?) -> MoneyStatisticsTotal {
         data.statisticsTotal(entries, income: income, in: statsCurrency, history: rateHistory, days: days)
     }
+    private var selectedStatsRange: DateInterval? {
+        guard statsCalendar, let date = statsSelectedDate, date >= range.start, date < range.end else { return nil }
+        return Dates.calendar.dateInterval(of: statsUnit, for: date)
+    }
+    private var categoryStatsRange: DateInterval { selectedStatsRange ?? range }
+    private var categoryRangeLabel: String {
+        let span = categoryStatsRange
+        if selectedStatsRange != nil { return Dates.label(span.start, pattern: statsUnit == .month ? "yyyy年M月" : "M月d日") }
+        if period != .week { return Dates.label(span.start, pattern: period == .year ? "yyyy年" : "yyyy年M月") }
+        return Dates.label(span.start, pattern: "M月d日") + " – " + Dates.label(span.end.addingTimeInterval(-1), pattern: "M月d日")
+    }
     var statisticsPage: some View {
         let span = range, days = rateHistory?.sortedDays
         let entries = statsEntries(span)
@@ -73,7 +84,7 @@ extension FinanceHome {
         let previousAnchor = Dates.calendar.date(byAdding: period.component, value: -1, to: anchor) ?? anchor
         let before = statsSum(statsEntries(Dates.calendar.dateInterval(of: period.component, for: previousAnchor)!), income: false, days: days)
         let value: (MoneyEntry) -> Decimal? = { statsValue($0, income: statsIncome, days: days) }
-        let rows = categoryRows(entries)
+        let rows = categoryRows(selectedStatsRange.map { statsEntries($0) } ?? entries)
         let earliest = data.entries.filter { $0.deletedAt == nil }.map(\.date).min() ?? Date()
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -110,7 +121,7 @@ extension FinanceHome {
                     Text(L("图表和分类仅显示已折算部分，空白不代表零收支。", "Charts and categories show converted amounts only; gaps do not mean zero activity."))
                         .font(.caption).foregroundStyle(.orange)
                 }
-                if rows.isEmpty {
+                if !statsCalendar && rows.isEmpty {
                     Text(selectedTotal.missing > 0 ? L("本期账单尚待折算，补全后显示图表。", "Complete the pending conversions to see this period’s charts.") : statsIncome ? L("这段时间没有可统计的收入。", "No income in this period.") : L("这段时间没有可统计的支出或退款。", "No spending or refunds in this period."))
                         .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 120)
                 } else {
@@ -118,7 +129,12 @@ extension FinanceHome {
                     MoneyChartHover { hovered in
                         if statsCalendar { calendarGrid(points, hovered: hovered) } else { trend(points, hovered: hovered) }
                     }.id(span.start)
-                    ranking(rows)
+                    if let selectedSpan = selectedStatsRange { AnyView(statsBucketSummary(selectedSpan)) }
+                    Text(categoryRangeLabel + L(" · 分类汇总", " · Category totals")).font(.subheadline.weight(.semibold))
+                    if rows.isEmpty {
+                        Text(statsIncome ? L("所选日期没有收入。", "No income for the selected date.") : L("所选日期没有支出或退款。", "No spending or refunds for the selected date."))
+                            .foregroundStyle(.secondary)
+                    } else { ranking(rows) }
                 }
                 if !statsIncome {
                     Text(L("支出包含手续费，并扣除退款；负数表示本期退款多于消费。", "Spending includes fees minus refunds. Negative amounts mean refunds exceeded spending in this period."))
@@ -126,6 +142,8 @@ extension FinanceHome {
                 }
             }.padding(compact ? 16 : 24)
         }
+        .onChange(of: span.start) { _, _ in statsSelectedDate = nil; rankingExpansion.key = nil }
+        .onChange(of: period) { _, _ in statsSelectedDate = nil; rankingExpansion.key = nil }
         .task(id: "\(statsCurrency)-\(data.baseCurrency)-\(Int(earliest.timeIntervalSince1970 / 86400))") { await loadRates(since: earliest) }
     }
     func loadRates(since: Date, currency: String? = nil) async {
@@ -314,9 +332,9 @@ extension FinanceHome {
             Group {
                 if let selected {
                     Text(Dates.label(selected.date, pattern: unit == .month ? "yyyy年M月" : "M月d日 EEEE") + " · " + pointDisplay(selected)
-                         + " · " + (selected.count + selected.missing == 0 ? L("没有账单", "No entries") : L("\(selected.count + selected.missing) 笔，点击查看", "\(selected.count + selected.missing) entries, click to open")))
+                         + " · " + (selected.count + selected.missing == 0 ? L("没有账单", "No entries") : L("\(selected.count + selected.missing) 笔", "\(selected.count + selected.missing) entries")))
                 } else {
-                    Text(compact ? L("颜色越深金额越大，点按日期查看账单。", "Darker means more. Tap a date to view entries.") : L("颜色越深金额越大，鼠标放上去看具体数字。", "Darker means more. Hover to see the amount."))
+                    Text(L("颜色越深金额越大，选择日期查看下方汇总。", "Darker means more. Select a date to see its summary below."))
                 }
             }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: compact ? 4 : 6), count: unit == .day ? 7 : 4), spacing: compact ? 4 : 6) {
@@ -336,28 +354,49 @@ extension FinanceHome {
                     }
                     .padding(5).frame(maxWidth: .infinity, minHeight: 44, alignment: .topLeading)
                     .background(RoundedRectangle(cornerRadius: 7).fill(tint.opacity(point.count > 0 ? 0.12 + 0.6 * strength : 0.04)))
-                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.primary.opacity(hovered.wrappedValue == point.date ? 0.4 : 0), lineWidth: 1.5))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.accentColor.opacity(statsSelectedDate == point.date ? 1 : hovered.wrappedValue == point.date ? 0.4 : 0), lineWidth: 1.5))
                     .opacity(point.date > Date() ? 0.4 : 1)
                     .contentShape(Rectangle())
                     .onHover { inside in
                         if inside { hovered.wrappedValue = point.date } else if hovered.wrappedValue == point.date { hovered.wrappedValue = nil }
                     }
-                    .onTapGesture { openBucket(point.date, unit: unit) }
+                    .onTapGesture { selectStatsDate(point.date) }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(Dates.label(point.date, pattern: unit == .month ? "yyyy年M月" : "M月d日"))
                     .accessibilityValue(pointDisplay(point))
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityAction { openBucket(point.date, unit: unit) }
+                    .accessibilityAddTraits(statsSelectedDate == point.date ? [.isButton, .isSelected] : [.isButton])
+                    .accessibilityAction { selectStatsDate(point.date) }
                 }
             }
         }
     }
+    private func selectStatsDate(_ date: Date) {
+        statsSelectedDate = date
+        rankingExpansion.key = nil
+    }
+    private func statsBucketSummary(_ span: DateInterval) -> some View {
+        let entries = statsEntries(span), days = rateHistory?.sortedDays
+        let spent = statsSum(entries, income: false, days: days), earned = statsSum(entries, income: true, days: days)
+        return VStack(alignment: .leading, spacing: 12) {
+            Text(Dates.label(span.start, pattern: statsUnit == .month ? "yyyy年M月" : "M月d日 EEEE")).font(.headline)
+            metricPair((totalLabel(L("支出", "Spending"), spent), totalDisplay(spent, currency: statsCurrency)),
+                       (totalLabel(L("收入", "Income"), earned), totalDisplay(earned, currency: statsCurrency)))
+            Text(L("结余：", "Net: ") + balanceDisplay(spent: spent, earned: earned, currency: statsCurrency)).font(.subheadline).monospacedDigit()
+            missingAmounts(spent.missing + earned.missing)
+            rateNote(entries, estimates: spent.estimateDates.union(earned.estimateDates))
+            (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 16))) {
+                Button(statsUnit == .month ? L("查看这个月的账单", "View this month’s entries") : L("查看当天账单", "View this day’s entries")) { openBucket(span.start, unit: statsUnit) }
+                    .frame(minHeight: 44)
+                Button(L("返回整期汇总", "Show the full period")) { statsSelectedDate = nil; rankingExpansion.key = nil }.frame(minHeight: 44)
+            }
+        }.padding(16).background(RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.08)))
+    }
     private func rememberStats() {
-        statsReturn = StatsPlace(anchor: anchor, period: period, income: statsIncome, expanded: rankingExpansion.key, billRange: dateRange)
+        statsReturn = StatsPlace(anchor: anchor, period: period, income: statsIncome, expanded: rankingExpansion.key, selectedDate: statsSelectedDate, billRange: dateRange)
     }
     func backToStats(_ place: StatsPlace) {
         drilldown = nil; dateRange = place.billRange
-        anchor = place.anchor; period = place.period; statsIncome = place.income; rankingExpansion.key = place.expanded
+        anchor = place.anchor; period = place.period; statsIncome = place.income; rankingExpansion.key = place.expanded; statsSelectedDate = place.selectedDate
         selection = "stats"
     }
     private func openBucket(_ date: Date, unit: Calendar.Component) {
@@ -416,7 +455,7 @@ extension FinanceHome {
         if case .category(let id) = key, let id {
             let children = data.categories.filter { $0.parentID == id }
             if !children.isEmpty {
-                let periodEntries = statsEntries(range)
+                let periodEntries = statsEntries(categoryStatsRange)
                 let days = rateHistory?.sortedDays
                 VStack(spacing: 0) {
                     ForEach([data.category(id)].compactMap { $0 } + children) { category in
@@ -450,7 +489,7 @@ extension FinanceHome {
                 Text(breakdownLabel(key) + L(" · 近 6 个月", " · last 6 months"))
                     .font(.caption).foregroundStyle(.secondary)
                 if !compact { Spacer() }
-                Button(L("查看本期账单", "Show this period’s entries")) { drill(key) }
+                Button(L("查看此分类账单 · ", "View category entries · ") + categoryRangeLabel) { drill(key) }
                     .controlSize(.small).frame(minHeight: compact ? 44 : nil)
             }
             Text(L("月均：", "Monthly average: ") + (average.map { display(Money.round($0, currency: statsCurrency), statsCurrency) }
@@ -506,7 +545,7 @@ extension FinanceHome {
     }
     private func drill(_ key: MoneyCategoryKey, includeSubcategories: Bool = true) {
         rememberStats()
-        drilldown = MoneyDrilldown(range: range, key: key, income: statsIncome, includeSubcategories: includeSubcategories)
+        drilldown = MoneyDrilldown(range: categoryStatsRange, key: key, income: statsIncome, includeSubcategories: includeSubcategories)
         categoryFilter = nil; kindFilter = nil; accountFilter = nil; accountDetailID = nil; search = ""; dateRange = .month
         selection = "all"
     }
