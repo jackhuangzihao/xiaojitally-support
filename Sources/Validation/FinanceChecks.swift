@@ -881,7 +881,7 @@ import SwiftData
             let original = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
             defer { for (key, value) in original { UserDefaults.standard.set(value, forKey: key) } }
             var ledger = FinanceData.initial
-            let cny = MoneyAccount(name: "CNY"), usd = MoneyAccount(name: "USD", currency: "USD")
+            let cny = MoneyAccount(name: "CNY"), usd = MoneyAccount(name: "USD", currency: "USD", opening: 10000)
             ledger.accounts = [cny, usd]; ledger.books[0].defaultAccountID = usd.id
             UserDefaults.standard.set(ledger.books[0].id.uuidString, forKey: "lastMoneyBook")
             UserDefaults.standard.set(cny.id.uuidString, forKey: "lastMoneyAccount")
@@ -889,9 +889,31 @@ import SwiftData
             let entry = ledger.newEntry(preferredBook: ledger.books[0].id)
             try require(defaults.account?.id == usd.id && defaults.account?.currency == "USD" && entry.currency == "USD" && entry.accountID == usd.id, "book default USD overrides remembered CNY in both overview and entry")
             try require(ledger.entryDefaults(preferredBook: nil, preferredAccount: cny.id).account?.id == cny.id && ledger.newEntry(preferredBook: nil, preferredAccount: cny.id).currency == "CNY", "explicit active account overrides the book default")
+            let shown = ledger.balanceAccount(bookID: ledger.books[0].id, filteredAccountID: nil)
+            try require(shown?.id == usd.id && shown?.currency == "USD" && ledger.balance(shown!.id) == 10000, "empty book shows the existing asset balance in the account currency")
+            try require(ledger.entries.isEmpty && ledger.totals(ledger.entries).income == 0, "showing opening funds never creates income or postings")
+            try require(ledger.balanceAccount(bookID: nil, filteredAccountID: nil) == nil, "all-books overview cannot borrow a recent book's account")
+            try require(ledger.balanceAccount(bookID: UUID(), filteredAccountID: nil) == nil, "missing book cannot fall back to remembered defaults")
+            try require(ledger.balanceAccount(bookID: ledger.books[0].id, filteredAccountID: cny.id)?.id == cny.id, "explicit account filter takes precedence over the book's default balance")
+            try require(ledger.balanceAccount(bookID: nil, filteredAccountID: usd.id)?.id == usd.id, "all-books account filter shows the selected account")
+            try require(ledger.balanceAccount(bookID: ledger.books[0].id, filteredAccountID: UUID()) == nil, "stale account filter cannot show another account's balance")
+            let otherBook = MoneyBook(name: "Other book", defaultAccountID: usd.id)
+            ledger.books.append(otherBook)
+            var spend = ledger.newEntry(preferredBook: otherBook.id)
+            spend.amount = 50; spend.accountAmount = 50; spend.baseAmount = 350
+            ledger.entries = [spend]
+            try require(ledger.balance(shown!.id) == 9950 && ledger.entries.filter { $0.bookID == ledger.books[0].id }.isEmpty, "empty book balance reflects shared-account spending in another book")
+            ledger.accounts[1].opening = 12000
+            try require(ledger.balance(ledger.balanceAccount(bookID: ledger.books[0].id, filteredAccountID: nil)!.id) == 11950, "asset opening-balance edits immediately feed the book overview")
+            ledger.books[0].defaultAccountID = cny.id
+            try require(ledger.balanceAccount(bookID: ledger.books[0].id, filteredAccountID: nil)?.id == cny.id && ledger.balance(usd.id) == 11950, "changing a book default selects another balance without moving money")
+            ledger.books[0].defaultAccountID = usd.id
             ledger.accounts[1].archived = true
+            try require(ledger.balanceAccount(bookID: ledger.books[0].id, filteredAccountID: nil) == nil, "archived default is unavailable rather than replaced with a remembered account")
+            try require(ledger.balanceAccount(bookID: nil, filteredAccountID: usd.id)?.id == usd.id, "explicit historical account filter retains its archived account balance")
             try require(ledger.entryDefaults(preferredBook: nil).account == nil && ledger.newEntry(preferredBook: nil).accountID == nil, "an archived book default never silently charges the remembered account")
             ledger.books[0].defaultAccountID = nil
+            try require(ledger.balanceAccount(bookID: ledger.books[0].id, filteredAccountID: nil) == nil, "book without an explicit default asks to choose one instead of showing a recent account")
             UserDefaults.standard.set("none", forKey: "lastMoneyAccount")
             try require(ledger.entryDefaults(preferredBook: nil).account == nil && ledger.newEntry(preferredBook: nil).currency == ledger.baseCurrency, "deliberate no-account choice retains the base currency")
             UserDefaults.standard.set(cny.id.uuidString, forKey: "lastMoneyAccount")

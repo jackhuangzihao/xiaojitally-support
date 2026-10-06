@@ -167,29 +167,39 @@ extension FinanceHome {
         let hasFilters = accountFilter != nil || categoryFilter != nil || kindFilter != nil || drilldown != nil || !search.isEmpty
         let budget: Decimal? = isMonth && !hasFilters ? data.budget(for: bookFilterID, in: entries) : nil
         return VStack(alignment: .leading, spacing: 10) {
+            if let account = data.balanceAccount(bookID: bookFilterID, filteredAccountID: accountFilter) {
+                bookAccountBalance(account)
+                Divider().padding(.vertical, 4)
+            } else if let book = data.book(bookFilterID), accountFilter == nil {
+                Button { entity = EntityRequest(kind: .book, existingID: book.id) } label: {
+                    Label(L("选择默认账户", "Choose a default account"), systemImage: "creditcard")
+                        .frame(minHeight: compact ? 44 : nil)
+                }.buttonStyle(.borderless)
+                Text(data.account(book.defaultAccountID)?.archived == true
+                     ? L("原默认账户已归档，请选择其他账户。", "The previous default account is archived. Choose another account.")
+                     : L("选定后，这里会显示资产中的账户余额。", "Choose an account to see its balance from Assets here."))
+                    .font(.caption).foregroundStyle(.secondary)
+                Divider().padding(.vertical, 4)
+            }
             (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16)) : AnyLayout(HStackLayout(spacing: 32))) {
                 metric(totalLabel(L("支出", "Spending"), spent), totalDisplay(spent), size: compact ? 24 : 30)
                 if !compact { Spacer(minLength: 0) }
                 metricPair((totalLabel(L("收入", "Income"), earned), totalDisplay(earned)),
-                           (L("结余", "Balance"), balanceDisplay(spent: spent, earned: earned, currency: entriesCurrency)))
+                           (L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: entriesCurrency)))
             }
+            Text(L("本期结余为所选范围的收入减支出，不含账户初始余额。", "Period net is income minus spending in this view; it excludes opening balances."))
+                .font(.caption).foregroundStyle(.secondary)
             if let budget {
                 budgetBar(spent: data.budgetSpending(entries, for: bookFilterID), budget: budget,
                           books: data.budgetBooks(for: bookFilterID, in: entries), entries: entries)
             }
             VStack(alignment: .leading, spacing: 6) {
-                if let account = data.account(accountFilter) {
-                    Label(L("筛选账户：", "Filtered account: ") + account.name + " · " + account.currency, systemImage: "creditcard")
-                } else if let book = entryDefaults.book {
-                    Button { entity = EntityRequest(kind: .book, existingID: book.id) } label: {
-                        Label(L("默认账户：", "Default account: ") + (entryDefaults.account.map { $0.name + " · " + $0.currency } ?? L("未设置", "Not set")), systemImage: "creditcard")
-                    }.buttonStyle(.borderless).help(L("修改此账本的默认账户；新账单和合计会跟随它的币种", "Change the book's default account; new entries and totals follow its currency"))
-                }
-                HStack(spacing: 8) {
-                    Text(entriesCurrencyRaw.isEmpty
-                         ? L("合计跟随默认账户 · ", "Totals follow default account · ") + entriesCurrency
-                         : L("合计暂以 ", "Totals temporarily in ") + entriesCurrency)
-                    if !entriesCurrencyRaw.isEmpty { Button(L("恢复跟随", "Follow default")) { entriesCurrencyRaw = "" }.buttonStyle(.borderless) }
+                (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 8))) {
+                    Text(L("合计币种 · ", "Totals currency · ") + entriesCurrency)
+                    if !entriesCurrencyRaw.isEmpty {
+                        Button(L("恢复自动币种", "Use automatic currency")) { entriesCurrencyRaw = "" }
+                            .buttonStyle(.borderless).frame(minHeight: compact ? 44 : nil)
+                    }
                 }.foregroundStyle(.secondary)
             }.font(.caption)
             if !balance.estimateDates.isEmpty {
@@ -199,6 +209,31 @@ extension FinanceHome {
             missingAmounts(balance.missing)
         }
         .padding(18).background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.045)))
+    }
+    private func bookAccountBalance(_ account: MoneyAccount) -> some View {
+        let label = accountFilter == nil ? L("默认账户余额", "Default account balance") : L("账户余额", "Account balance")
+        return VStack(alignment: .leading, spacing: 6) {
+            Button { showAccount(account.id) } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .top, spacing: 8) {
+                            MoneyIcon(symbol: account.iconSymbol, emoji: account.emoji, tint: .accentColor, size: 28)
+                            Text(account.name + " · " + account.currency)
+                                .font(.subheadline.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+                        }
+                        metric(label, display(data.balance(account.id), account.currency), size: compact ? 24 : 26)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                }.frame(minHeight: 44).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .accessibilityHint(L("查看这个账户在所有账本中的账单", "View this account's entries across all books"))
+            Text(L("与资产页一致 · 含初始余额及所有账本、所有日期的变动。", "Same balance as Assets: opening funds plus activity across all books and dates."))
+                .font(.caption).foregroundStyle(.secondary)
+            if accountFilter == nil, let book = data.book(bookFilterID) {
+                Button(L("更改默认账户", "Change default account")) { entity = EntityRequest(kind: .book, existingID: book.id) }
+                    .buttonStyle(.borderless).font(.caption).frame(minHeight: compact ? 44 : nil)
+            }
+        }
     }
     var sampleMessage: String {
         guard let c = data.sampleCleanup else { return "" }

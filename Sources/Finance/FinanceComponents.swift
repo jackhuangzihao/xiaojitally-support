@@ -250,7 +250,13 @@ extension FinanceData {
 }
 
 extension FinanceData {
-    /// Shared by the entry form and its overview; resolving defaults does not create a temporary entry.
+    /// Overview balances describe an explicit scope, never the last-used entry defaults.
+    func balanceAccount(bookID: UUID?, filteredAccountID: UUID?) -> MoneyAccount? {
+        if let filteredAccountID { return account(filteredAccountID) }
+        return account(defaultAccount(for: bookID))
+    }
+
+    /// Shared entry/currency defaults; resolving these never creates a temporary entry.
     func entryDefaults(preferredBook: UUID?, preferredAccount: UUID? = nil) -> (book: MoneyBook?, account: MoneyAccount?) {
         let active = books.filter { !$0.archived }
         let recent = active.first { $0.id.uuidString == UserDefaults.standard.string(forKey: "lastMoneyBook") }

@@ -86,8 +86,10 @@ extension FinanceHome {
                         }
                         if !compact { Spacer(minLength: 0) }
                         metricPair((totalLabel(L("收入", "Income"), earned), totalDisplay(earned, currency: statsCurrency)),
-                                   (L("结余", "Balance"), balanceDisplay(spent: spent, earned: earned, currency: statsCurrency)))
+                                   (L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: statsCurrency)))
                     }
+                    Text(L("本期结余为所选范围的收入减支出，不含账户初始余额。", "Period net is income minus spending in this view; it excludes opening balances."))
+                        .font(.caption).foregroundStyle(.secondary)
                     originalSplit(entries)
                     rateNote(entries, estimates: spent.estimateDates.union(earned.estimateDates))
                 }.padding(18).background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.045)))
