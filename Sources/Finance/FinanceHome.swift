@@ -205,9 +205,29 @@ struct FinanceHome: View {
         }
     }
 
+    private var phonePages: some View {
+        let active = accountDetailID == nil ? selection : "accounts"
+        return (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 4)) : AnyLayout(HStackLayout(spacing: 4))) {
+            ForEach([("all", L("账单", "Entries")), ("stats", L("统计", "Statistics")), ("accounts", L("资产", "Assets"))], id: \.0) { key, title in
+                Button {
+                    accountDetailID = nil
+                    selection = key
+                } label: {
+                    Text(title).font(.subheadline.weight(active == key ? .semibold : .regular))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(active == key ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 9))
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(active == key ? Color.accentColor : .secondary)
+                    .accessibilityAddTraits(active == key ? [.isSelected] : [])
+            }
+        }.padding(4).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 16).padding(.vertical, 6)
+    }
+
     var body: some View {
-        ZStack {
-            page.id(selection).transition(.opacity)
+        VStack(spacing: 0) {
+            if compact { phonePages }
+            ZStack { page.id(selection).transition(.opacity) }
         }
         .animation(compact && !reduceMotion ? .easeInOut(duration: 0.18) : nil, value: selection)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -223,16 +243,18 @@ struct FinanceHome: View {
             #if os(iOS)
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
-                    Button(L("账单", "Entries"), systemImage: "list.bullet.rectangle") { selection = "all" }
-                    Button(L("统计", "Statistics"), systemImage: "chart.bar") { selection = "stats" }
-                    Button(L("资产", "Assets"), systemImage: "wallet.pass") { selection = "accounts" }
-                    Divider()
+                    if !compact {
+                        Button(L("账单", "Entries"), systemImage: "list.bullet.rectangle") { selection = "all" }
+                        Button(L("统计", "Statistics"), systemImage: "chart.bar") { selection = "stats" }
+                        Button(L("资产", "Assets"), systemImage: "wallet.pass") { selection = "accounts" }
+                        Divider()
+                    }
                     Button(L("记账管理", "Manage finance"), systemImage: "slider.horizontal.3") { selection = "manage" }
                     Button(L("最近删除", "Recently deleted"), systemImage: "trash") { selection = "trash" }
                     Divider()
                     Button(hidden ? L("显示金额", "Show amounts") : L("隐藏金额", "Hide amounts"), systemImage: hidden ? "eye.slash" : "eye") { hidden.toggle() }
                     Button(L("设置与备份", "Settings & backup"), systemImage: "gearshape", action: settings)
-                } label: { Label(L("记账页面", "Finance pages"), systemImage: "line.3.horizontal") }
+                } label: { Label(L("更多财务操作", "More finance options"), systemImage: compact ? "ellipsis.circle" : "line.3.horizontal") }
             }
             #endif
 

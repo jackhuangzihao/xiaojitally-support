@@ -111,6 +111,10 @@ struct FinanceEntryEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if compact { amountRow; chips; Divider() }
+                    if draft.accountID == nil && (draft.kind == .expense || draft.kind == .income) {
+                        Text(L("未选择账户：这笔只计入收支，不改变资产余额。点“账户”可选择或添加账户。", "No account selected: this entry counts in totals but won't change an account balance. Use Account to choose or add one."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     if showMore { moreFields }
                     switch draft.kind {
                     case .expense, .income: categoryGrid
@@ -250,6 +254,7 @@ struct FinanceEntryEditor: View {
         let roots = ledger.categories.filter { $0.parentID == nil && (($0.isIncome == income && !$0.archived) || $0.id == selectedRoot) }
         let children = ledger.categories.filter { selectedRoot != nil && $0.parentID == selectedRoot && (($0.isIncome == income && !$0.archived) || $0.id == draft.categoryID) }
         return VStack(alignment: .leading, spacing: 12) {
+            Text(L("分类", "Category")).font(.subheadline.weight(.medium))
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: compact ? (dynamicTypeSize.isAccessibilitySize ? 2 : 4) : 6), spacing: 8) {
                 ForEach(roots) { category in categoryButton(category, selected: category.id == selectedRoot) }
                 addCategoryButton(income: income, parentID: nil)

@@ -467,6 +467,12 @@ extension ContentView {
                           systemImage: items.isEmpty ? "sun.max" : "checkmark.circle")
                 } description: {
                     Text(items.isEmpty ? L("添加一件想做的事，慢慢完成。", "Add something you want to do.") : L("已完成的任务收在下方，随时可以查看。", "You can review completed tasks below."))
+                } actions: {
+                    if isPhone && items.isEmpty && tasks.isEmpty {
+                        Button(action: addTask) {
+                            Label(L("添加第一个任务", "Add your first task"), systemImage: "plus").frame(minHeight: 44)
+                        }.buttonStyle(.borderedProminent)
+                    }
                 }
             }
             if !completed.isEmpty {

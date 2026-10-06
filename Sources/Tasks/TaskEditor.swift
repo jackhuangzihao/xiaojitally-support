@@ -113,6 +113,10 @@ struct TaskEditor: View {
                             .background(SuggestionKeys(active: showSuggestions && focus == .title, handle: suggestionKey))
                             #endif
                         if showSuggestions { suggestionList }
+                        if request.task == nil && allTasks.isEmpty {
+                            Text(L("填写任务名称即可保存，日期和提醒按需设置。", "A title is enough to save. Add a date or reminder if you need one."))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         TextField("", text: $notes, prompt: Text(L("写点备注…", "Add a note…")), axis: .vertical)
                             .lineLimit(1...10).textFieldStyle(.plain).foregroundStyle(.secondary)
                             .focused($focus, equals: .notes)

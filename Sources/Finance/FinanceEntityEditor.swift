@@ -130,6 +130,13 @@ struct FinanceEntityEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                if kind == .account {
+                    Text(L("账户是钱放在哪里，例如银行卡或现金。所有账本共用账户余额。", "An account is where you keep money, such as a bank account or cash. Its balance is shared across books."))
+                        .font(.callout).foregroundStyle(.secondary)
+                } else if kind == .book {
+                    Text(L("账本用来归类收支，例如日常、旅行。钱仍由账户管理，不用在新账本里重新录入余额。", "A book groups entries for a purpose, such as everyday spending or travel. Money stays in your accounts; you don't need to enter the balance again."))
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 HStack(spacing: 12) {
                     Button { showIconPicker = true } label: {
                         VStack(spacing: 4) {
@@ -189,7 +196,7 @@ struct FinanceEntityEditor: View {
                             Text(L("仅用于修正最初填错的金额，会同步改变所有历史余额。调整现在的余额请用“核对当前余额”。", "Use this only to correct the original amount; every historical balance changes. To adjust today's balance, use Check current balance.")).font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    else { Text(L("信用卡欠款可填负数，例如 -1200。", "For a credit card balance owed, enter a negative number such as -1200.")).font(.caption).foregroundStyle(.secondary) }
+                    else { Text(L("填开始记账时已有的钱，不算新增收入。信用卡欠款填负数，例如 -1200。", "Enter the money you already have when you start tracking; this is not new income. Enter credit card debt as a negative amount, such as -1200.")).font(.caption).foregroundStyle(.secondary) }
                 } else if kind == .book {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(L("每月预算", "Monthly budget") + " · " + original.baseCurrency).font(.subheadline.weight(.medium))
@@ -199,7 +206,7 @@ struct FinanceEntityEditor: View {
                             .keyboardType(.decimalPad)
                             #endif
                     }
-                    Picker(L("常用账户", "Default account"), selection: $accountID) {
+                    Picker(L("默认账户", "Default account"), selection: $accountID) {
                         Text(L("每次选择", "Choose each time")).tag(nil as UUID?)
                         ForEach(original.accounts.filter { !$0.archived || $0.id == accountID }) { Text($0.name + " · " + $0.currency).tag(Optional($0.id)) }
                     }

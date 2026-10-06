@@ -31,7 +31,7 @@ extension FinanceHome {
                     filterChips
                     if !trash {
                         if let account = selectedAccount { accountOverview(account, entries: entries) }
-                        else { overview(entries) }
+                        else if !data.accounts.isEmpty || !data.entries.isEmpty || data.books.contains(where: { $0.budget != nil }) { overview(entries) }
                     }
                 }.padding(.horizontal, compact ? 4 : 24).padding(.top, 18).padding(.bottom, 6)
                 if entries.isEmpty { emptyState.padding(.top, 40).frame(maxWidth: .infinity) }
@@ -71,6 +71,17 @@ extension FinanceHome {
         } else if drilldown != nil || accountFilter != nil || categoryFilter != nil || kindFilter != nil || !search.isEmpty {
             ContentUnavailableView { Label(L("没有符合条件的账单", "No matching entries"), systemImage: "line.3.horizontal.decrease.circle") } actions: {
                 Button(L("清除筛选", "Clear filters")) { drilldown = nil; accountFilter = nil; categoryFilter = nil; kindFilter = nil; search = "" }
+            }
+        } else if data.entries.isEmpty && data.accounts.isEmpty {
+            ContentUnavailableView {
+                Label(L("记下第一笔收支", "Record your first entry"), systemImage: "square.and.pencil")
+            } description: {
+                Text(L("直接记一笔，或先添加银行卡、现金等账户来管理余额。账本用于归类这些收支。", "Record an entry now, or add a bank or cash account to track its balance. Books organise your entries."))
+            } actions: {
+                Button(L("记一笔", "New entry"), action: newEntry).buttonStyle(.borderedProminent)
+                Button { entity = EntityRequest(kind: .account) } label: {
+                    Label(L("添加账户", "Add account"), systemImage: "plus").frame(minHeight: 44)
+                }.buttonStyle(.borderless)
             }
         } else {
             ContentUnavailableView { Label(L("这段时间还没有账单", "No entries yet"), systemImage: "tray") } description: {
