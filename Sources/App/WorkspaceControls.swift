@@ -18,11 +18,62 @@ struct AppSectionPicker: View {
 }
 
 #if os(iOS)
-struct PhoneSearchToolbar: ViewModifier {
+/// Keep search presentation local to the visible page. The automatically minimized
+/// iOS toolbar search controller can retain focus after a tab/page has disappeared.
+struct PhoneWorkspaceSearch<Scope: Hashable>: ViewModifier {
+    @Binding var text: String
+    let prompt: String
+    let scope: Scope
+    var enabled = true
+    @State private var presented = false
+    @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), UIDevice.current.userInterfaceIdiom == .phone {
-            content.searchToolbarBehavior(.minimize)
-        } else { content }
+        content
+            .toolbar {
+                if enabled {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { presented.toggle() }
+                            if !presented { close() }
+                        } label: { Label(L("搜索", "Search"), systemImage: "magnifyingglass") }
+                        .keyboardShortcut("f", modifiers: .command)
+                    }
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if presented && enabled {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField(prompt, text: $text)
+                            .focused($focused)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .submitLabel(.search).onSubmit { focused = false }
+                            .task {
+                                guard presented && enabled && !Task.isCancelled else { return }
+                                focused = true
+                            }
+                        Button {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { close() }
+                        } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                            .accessibilityLabel(L("关闭搜索", "Close search"))
+                    }
+                    .padding(.leading, 12).background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+                    .background(Color.appBackground)
+                    .transition(.opacity)
+                }
+            }
+            .onChange(of: enabled) { _, value in if !value { close() } }
+            .onChange(of: scope) { _, _ in close() }
+            .onDisappear { close() }
+    }
+
+    private func close() {
+        focused = false
+        presented = false
+        text = ""
     }
 }
 #endif

@@ -348,8 +348,31 @@ struct FinanceEntryRow<Actions: View>: View {
     @ViewBuilder let actions: () -> Actions
     @State var hovering = false
     var body: some View {
+        HStack(spacing: 0) {
+            if restore == nil {
+                Button(action: open) { entryContent }
+                    .buttonStyle(.plain)
+            } else { entryContent }
+            if let restore {
+                Button(L("恢复", "Restore"), action: restore).controlSize(.small)
+                    .frame(minHeight: 44)
+            } else {
+                Menu { actions() } label: {
+                    Label(L("账单操作", "Entry actions"), systemImage: "ellipsis.circle")
+                        .labelStyle(.iconOnly).frame(width: 44, height: 44)
+                }.menuStyle(.borderlessButton).menuIndicator(.hidden)
+                    .accessibilityLabel(L("账单操作：", "Entry actions: ") + entry.title)
+            }
+        }
+        .padding(.leading, 10).padding(.trailing, 2).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(hovering ? Color.primary.opacity(0.05) : .clear))
+        .onHover { hovering = $0 }
+        .contextMenu(menuItems: actions)
+        .accessibilityElement(children: .contain)
+    }
+    private var entryContent: some View {
         let icon = data.icon(entry)
-        HStack(spacing: 12) {
+        return HStack(spacing: 12) {
             MoneyIcon(symbol: icon.symbol, emoji: icon.emoji, tint: icon.tint, size: 34)
             VStack(alignment: .leading, spacing: 3) {
                 Text(entry.title).lineLimit(1)
@@ -365,17 +388,10 @@ struct FinanceEntryRow<Actions: View>: View {
                         .help(L("这笔之后的账户账面余额，包含未显示的其他流水。相同时间按列表顺序计算。", "Account balance after this entry, including other hidden entries. Equal timestamps follow list order."))
                 }
             }
-            if let restore { Button(L("恢复", "Restore"), action: restore).controlSize(.small) }
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(hovering ? Color.primary.opacity(0.05) : .clear))
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture(perform: open)
-        .contextMenu(menuItems: actions)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(restore == nil ? [.isButton] : [])
-        .accessibilityAction { if restore == nil { open() } }
     }
     var detail: String {
         var parts = [Dates.label(entry.date, pattern: "HH:mm")]

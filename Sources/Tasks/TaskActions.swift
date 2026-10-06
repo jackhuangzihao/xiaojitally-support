@@ -111,11 +111,15 @@ extension ContentView {
     func copyTask(_ task: TaskItem) {
         guard task.previewSourceID == nil, task.deletedAt == nil else { return }
         copiedTask = TaskBackup.TaskRecord(task); assigning = nil
-        #if os(macOS)
-        notify(L("已复制，在周历空白处右键粘贴", "Copied. Right-click an empty week-calendar slot to paste."))
-        #else
-        notify(L("已复制，长按周历空白时段粘贴，也可点“粘贴…”选择日期。", "Copied. Hold an empty week-calendar slot to paste, or choose a date with Paste…."))
-        #endif
+        if selection == .calendar && planningView == "week" {
+            #if os(macOS)
+            notify(L("已复制，在周历空白处右键粘贴，也可点“粘贴…”选择日期。", "Copied. Right-click an empty week slot, or choose a date with Paste…."))
+            #else
+            notify(L("已复制，长按周历空白时段粘贴，也可点“粘贴…”选择日期。", "Copied. Hold an empty week slot, or choose a date with Paste…."))
+            #endif
+        } else {
+            notify(L("已复制，点上方“粘贴…”选择日期和时间。", "Copied. Use Paste… above to choose a date and time."))
+        }
     }
 
     /// Both platforms copy the same immutable snapshot. A phone confirms the destination
@@ -128,9 +132,13 @@ extension ContentView {
     @ViewBuilder var taskClipboardBar: some View {
         if let copiedTask {
             HStack(spacing: 8) {
-                Label(copiedTask.title, systemImage: "doc.on.doc")
-                    .font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel(L("已复制：", "Copied: ") + copiedTask.title)
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(copiedTask.title, systemImage: "doc.on.doc")
+                        .lineLimit(1)
+                        .accessibilityLabel(L("已复制：", "Copied: ") + copiedTask.title)
+                    Text(L("粘贴到 ", "Paste on ") + Dates.label(selectedDate, pattern: "M月d日"))
+                        .foregroundStyle(.secondary)
+                }.font(.caption).frame(maxWidth: .infinity, alignment: .leading)
                 Button(L("粘贴…", "Paste…")) { preparePaste(on: selectedDate) }
                     .font(.callout.weight(.medium)).frame(minHeight: 44)
                 Button { self.copiedTask = nil } label: {
@@ -201,8 +209,11 @@ extension ContentView {
         } label: {
             Label(filter.isActive ? L("筛选 \(filter.count)", "Filters \(filter.count)") : L("筛选", "Filter"),
                   systemImage: filter.isActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                .font(.caption)
+                .font(isPhone ? .callout : .caption)
                 .dynamicTypeSize(...(isPhone ? DynamicTypeSize.xxxLarge : .accessibility5))
+                .padding(.horizontal, isPhone ? 10 : 4)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }.menuIndicator(.hidden).fixedSize()
             .accessibilityLabel(L("筛选任务", "Filter tasks"))
     }

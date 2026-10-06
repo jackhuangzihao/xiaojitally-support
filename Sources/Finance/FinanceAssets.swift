@@ -232,14 +232,6 @@ extension FinanceHome {
         }
         .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 4))
         .contextMenu { accountActions(account) }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if data.removalBlock(.account, id: account.id) == nil {
-                Button(L("删除", "Delete"), systemImage: "trash", role: .destructive) { removingAccount = account }
-            }
-            Button(account.archived ? L("恢复", "Restore") : L("归档", "Archive"), systemImage: account.archived ? "arrow.uturn.backward" : "archivebox") {
-                toggleAccountArchive(account)
-            }.tint(.orange)
-        }
     }
     @ViewBuilder private func accountActions(_ account: MoneyAccount) -> some View {
         Button(L("查看账单", "Show entries")) { showAccount(account.id) }

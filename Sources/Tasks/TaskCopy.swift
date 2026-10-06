@@ -29,6 +29,7 @@ struct TaskCopySheet: View {
     @AppStorage("appLanguage") private var language = "system"
     @State private var moment: Date
     @State private var timed: Bool
+    @State private var didCopy = false
 
     init(record: TaskBackup.TaskRecord, moment: Date, timed: Bool, copy: @escaping (Date, Bool) -> Bool) {
         self.record = record; self.copy = copy
@@ -54,8 +55,14 @@ struct TaskCopySheet: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(L("创建副本", "Create copy")) { if copy(moment, timed) { dismiss() } }
-                            .keyboardShortcut(.defaultAction)
+                        Button(L("创建副本", "Create copy")) {
+                            guard !didCopy else { return }
+                            didCopy = true
+                            if copy(moment, timed) { dismiss() }
+                            else { didCopy = false }
+                        }
+                        .disabled(didCopy)
+                        .keyboardShortcut(.defaultAction)
                     }
                 }
         }

@@ -9,6 +9,9 @@ import UIKit
 /// Left and right swipes turn the page: a finger drag on iPhone, a two-finger trackpad swipe on Mac.
 struct PageSwipe: ViewModifier {
     let step: (Int) -> Void
+    #if os(iOS)
+    @Environment(DragFeedback.self) private var dragFeedback
+    #endif
     static func direction(_ translation: CGSize) -> Int? {
         let dx = translation.width, dy = translation.height
         guard abs(dx) > 70, abs(dx) > abs(dy) * 1.6 else { return nil }
@@ -19,10 +22,10 @@ struct PageSwipe: ViewModifier {
         content.background(MacPageSwipe(step: step))
         #else
         if #available(iOS 18, *) {
-            content.gesture(HorizontalPageDrag(step: step))
+            content.gesture(HorizontalPageDrag(step: step, canBegin: { dragFeedback.payload == nil }))
         } else {
             content.simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
-                if let direction = Self.direction(value.translation) { step(direction) }
+                if dragFeedback.payload == nil, let direction = Self.direction(value.translation) { step(direction) }
             })
         }
         #endif
@@ -84,7 +87,11 @@ private struct MacPageSwipe: NSViewRepresentable {
 @available(iOS 18, *)
 private struct HorizontalPageDrag: UIGestureRecognizerRepresentable {
     let step: (Int) -> Void
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+    let canBegin: () -> Bool
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator(canBegin: canBegin) }
+    func updateUIGestureRecognizer(_ gesture: UIPanGestureRecognizer, context: Context) {
+        context.coordinator.canBegin = canBegin
+    }
     func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
         let gesture = UIPanGestureRecognizer()
         gesture.maximumNumberOfTouches = 1
@@ -92,13 +99,16 @@ private struct HorizontalPageDrag: UIGestureRecognizerRepresentable {
         return gesture
     }
     func handleUIGestureRecognizerAction(_ gesture: UIPanGestureRecognizer, context: Context) {
-        guard gesture.state == .ended else { return }
+        guard gesture.state == .ended, canBegin() else { return }
         let delta = gesture.translation(in: gesture.view)
         if let direction = PageSwipe.direction(CGSize(width: delta.x, height: delta.y)) { step(direction) }
     }
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var canBegin: () -> Bool
+        init(canBegin: @escaping () -> Bool) { self.canBegin = canBegin }
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            // Reject before claiming the finger: a task drag owns edge navigation.
+            guard canBegin(), let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
             let velocity = pan.velocity(in: pan.view)
             return abs(velocity.x) > abs(velocity.y) * 1.6
         }

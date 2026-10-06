@@ -212,16 +212,25 @@ struct ContentView: View {
             .modifier(SaveRecoveryGuard(active: editor == nil && listEditor == nil && copyRequest == nil && !showingSettings))
     }
 
-    private var editingContent: some View {
+    private var dragNavigation: some View {
         navigation
+            .environment(dragFeedback)
+            .onDisappear { dragFeedback.end() }
+            // Plain lists have no native drop-session observer. Leaving their navigation scope
+            // must clear a cancelled drag too; date changes stay excluded for edge paging.
+            .onChange(of: selection) { _, _ in dragFeedback.end() }
+            .onChange(of: planningView) { _, _ in dragFeedback.end() }
+            .onChange(of: financeMode) { _, _ in dragFeedback.end() }
+            .onChange(of: searchingCalendar) { _, _ in dragFeedback.end() }
+            .onChange(of: wholeMonth) { _, _ in dragFeedback.end() }
+    }
+
+    private var editingContent: some View {
+        dragNavigation
             #if os(macOS)
             .focusedSceneValue(\.taskHistory, financeMode ? nil : history)
             #endif
             .onChange(of: history.outcome) { _, value in if let value { notify(value) } }
-            .environment(dragFeedback)
-            .onDisappear { dragFeedback.end() }
-
-
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in refreshDay() }
             .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange).receive(on: RunLoop.main)) { _ in refreshDay() }
             .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now in
@@ -231,37 +240,7 @@ struct ContentView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { refreshDay(); receiveReminder() }
-            }
-            .safeAreaInset(edge: .bottom) {
-                BackupStatusNotice { showingSettings = true }
-                if let id = assigning, let task = tasks.first(where: { $0.id == id }) {
-                    HStack {
-                        Label(L("改期：\(task.title)", "Reschedule: \(task.title)"), systemImage: "calendar.badge.clock").lineLimit(1)
-                        Spacer()
-                        Text(L("点一个日期或时间段", "Tap a date or a time slot")).font(.caption).foregroundStyle(.secondary)
-                        Button(L("取消", "Cancel")) { assigning = nil }.fontWeight(.semibold)
-                    }.padding(.horizontal, 16).padding(.vertical, 6).background(.regularMaterial)
-                } else if !undoDeletedIDs.isEmpty {
-                    HStack {
-                        Text(L("已删除 \(undoDeletedIDs.count) 项", "Deleted \(undoDeletedIDs.count) tasks"))
-                        Spacer()
-                        Button(L("撤销", "Undo"), action: undoDeletion).fontWeight(.semibold)
-                        Button { undoDeletedIDs = [] } label: { Image(systemName: "xmark").frame(width: 32, height: 32) }.accessibilityLabel(L("关闭提示", "Dismiss message"))
-                    }.padding(.horizontal, 16).padding(.vertical, 6).background(.regularMaterial)
-                    .task(id: undoDeletedIDs) {
-                        do { try await Task.sleep(for: .seconds(8)); undoDeletedIDs = [] } catch {}
-                    }
-
-                }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if let movedMessage, assigning == nil, undoDeletedIDs.isEmpty {
-                    MoveFeedback(message: movedMessage, canUndo: undoSchedule != nil || undoListMove != nil || (undoCopy && history.canUndo),
-                                 canShiftDeadline: deadlineMove != nil && undoSchedule != nil, shiftDeadline: shiftMovedDeadline,
-                                 undo: { if undoCopy { history.undo() } else if undoListMove != nil { restoreListMove() } else { restoreSchedule() } },
-                                 dismiss: { self.movedMessage = nil; undoSchedule = nil; undoListMove = nil; deadlineMove = nil; undoCopy = false })
-                        .id(moveFeedbackID).padding(10)
-                }
+                else { dragFeedback.end() }
             }
             .confirmationDialog(pendingMoveTitle, isPresented: Binding(get: { pendingMove != nil }, set: { if !$0 { pendingMove = nil } }), titleVisibility: .visible, presenting: pendingMove) { move in
                 let plan = move.proposal
@@ -324,7 +303,7 @@ struct ContentView: View {
             || Store.recovery.failure != nil || recoveryGeneration != Store.recovery.generation
         guard let id = drafts.reminder.take(blocked: blocked) else { return }
         guard let task = tasks.first(where: { $0.id == id && $0.deletedAt == nil }) else {
-            notify(L("这项任务已删除或不在当前设备上。", "This task was deleted or is not on this device."))
+            errorMessage = L("这项任务已删除或不在当前设备上。", "This task was deleted or is not on this device.")
             return
         }
         financeMode = false
@@ -445,11 +424,11 @@ struct ContentView: View {
         } detail: {
             if financeMode {
                 financeContent
-            } else { mainContent }
+            } else { taskContent }
         }
         #else
         TabView(selection: $financeMode) {
-            NavigationStack { mainContent }
+            NavigationStack { taskContent }
                 .tabItem { Label(L("待办", "Tasks"), systemImage: "checklist") }.tag(false)
             NavigationStack { financeContent }
                 .tabItem { Label(L("财务", "Finance"), systemImage: "wallet.pass") }.tag(true)
@@ -457,11 +436,52 @@ struct ContentView: View {
         #endif
     }
 
+    // Notices belong to a page's safe area, above the native tab bar. An overlay
+    // on TabView itself can obscure its buttons and does not reserve scrolling space.
+    private var taskContent: some View {
+        mainContent.safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                BackupStatusNotice { showingSettings = true }
+                taskNotice
+            }
+        }
+    }
+
+    @ViewBuilder private var taskNotice: some View {
+        if let id = assigning, let task = tasks.first(where: { $0.id == id }) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label(L("改期：\(task.title)", "Reschedule: \(task.title)"), systemImage: "calendar.badge.clock").lineLimit(1)
+                    Text(L("点一个日期或时间段", "Tap a date or a time slot")).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Button { assigning = nil } label: { Text(L("取消", "Cancel")).frame(minHeight: 44) }.fontWeight(.semibold)
+            }.padding(.horizontal, 16).padding(.vertical, 6).background(.regularMaterial)
+        } else if !undoDeletedIDs.isEmpty {
+            HStack {
+                Text(L("已删除 \(undoDeletedIDs.count) 项", "Deleted \(undoDeletedIDs.count) tasks"))
+                Spacer(minLength: 8)
+                Button(action: undoDeletion) { Text(L("撤销", "Undo")).frame(minWidth: 44, minHeight: 44) }.fontWeight(.semibold)
+                Button { undoDeletedIDs = [] } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }.accessibilityLabel(L("关闭提示", "Dismiss message"))
+            }.padding(.horizontal, 16).padding(.vertical, 6).background(.regularMaterial)
+            .task(id: undoDeletedIDs) {
+                do { try await Task.sleep(for: .seconds(8)); undoDeletedIDs = [] } catch {}
+            }
+        } else if let movedMessage {
+            MoveFeedback(message: movedMessage, canUndo: undoSchedule != nil || undoListMove != nil || (undoCopy && history.canUndo),
+                         canShiftDeadline: deadlineMove != nil && undoSchedule != nil, shiftDeadline: shiftMovedDeadline,
+                         undo: { if undoCopy { history.undo() } else if undoListMove != nil { restoreListMove() } else { restoreSchedule() } },
+                         dismiss: { self.movedMessage = nil; undoSchedule = nil; undoListMove = nil; deadlineMove = nil; undoCopy = false })
+                .id(moveFeedbackID).padding(10).frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
     private var financeContent: some View {
         FinanceHome(selection: $financeSelection, openTask: { id in
-            guard let task = tasks.first(where: { $0.id == id && $0.deletedAt == nil }) else { notify(L("关联任务已删除或不在本机。", "Linked task was deleted or is unavailable.")); return }
+            guard let task = tasks.first(where: { $0.id == id && $0.deletedAt == nil }) else { errorMessage = L("关联任务已删除或不在本机。", "Linked task was deleted or is unavailable."); return }
             financeMode = false; editor = EditorRequest(task: task)
         }, settings: { showingSettings = true })
+            .safeAreaInset(edge: .bottom, spacing: 0) { BackupStatusNotice { showingSettings = true } }
     }
 
     #if os(macOS)

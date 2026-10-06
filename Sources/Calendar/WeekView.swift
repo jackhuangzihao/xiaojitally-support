@@ -82,7 +82,6 @@ struct WeekCalendarView: View {
     @State private var pinchZoom: Double?
     @State private var pinchBase = 1.0
     @State private var pinchAnchorY: Double?
-    @Environment(DragFeedback.self) private var dragFeedback
     private var zoomLevel: Double { min(1.5, max(0.25, pinchZoom ?? weekZoom)) }
     private var planScale: Double { PlanBlock.displayScale * zoomLevel }
     private var planGutter: CGFloat { isPhone ? 34 : 44 }
@@ -91,7 +90,6 @@ struct WeekCalendarView: View {
         data.items(on: previewWeekDate, month: false, completed: showPlanningCompleted, repeats: showRepeatPreviews, cache: repeatPreview)
     }
     private var assigningTask: TaskItem? { assigning.flatMap { id in data.tasks.first { $0.id == id && $0.deletedAt == nil } } }
-    private var draggingTask: TaskItem? { dragFeedback.draggedID.flatMap { id in data.tasks.first { $0.id == id && $0.deletedAt == nil } } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -128,6 +126,8 @@ struct WeekCalendarView: View {
             }
             weekGrid(days, perDay: perDay, layout: layout, todayIndex: todayIndex, items: indexed)
         }.weekDragPanel(weekDrag)
+            .mobileCalendarDrop(drag: weekDrag, task: { id in data.tasks.first { $0.id == id && $0.deletedAt == nil } }, drop: weekDrop)
+            .onAppear { weekDrag.gutter = Double(planGutter); weekDrag.touchEdges = isPhone }
     }
 
     private func weekGrid(_ days: [Date], perDay: [[PlanBlock]], layout: TimelineLayout, todayIndex: Int?, items: [Date: [TaskItem]]) -> some View {
@@ -238,7 +238,9 @@ struct WeekCalendarView: View {
             .accessibilityLabel(Dates.label(day) + (today ? L("，今天", ", today") : ""))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityHint(isPhone ? L("查看当天全部任务", "Show all tasks for this day") : "")
+            #if os(macOS)
             .dayDrop { dropOnDay($0, day) }
+            #endif
     }
 
     private func allDayCell(_ day: Date, index: Int, items all: [TaskItem]) -> some View {
@@ -251,10 +253,12 @@ struct WeekCalendarView: View {
                     .dynamicTypeSize(...(isPhone ? DynamicTypeSize.xxxLarge : .accessibility5))
                     .accessibilityLabel(L("查看当天全部任务", "Show all tasks for this day"))
             }
-        }.padding(.horizontal, 1).frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
+        }.padding(.horizontal, 1).frame(maxWidth: .infinity, minHeight: isPhone ? 44 : 22, alignment: .topLeading)
             .contentShape(Rectangle())
             .modifier(WeekZoneHighlight(zone: .allDay(index)))
+            #if os(macOS)
             .dayDrop { dropAllDay($0, day) }
+            #endif
             .contextMenu {
                 if canPaste {
                     Button(L("粘贴为全天任务", "Paste as all-day task")) { actions.paste(day, false) }
@@ -303,7 +307,7 @@ struct WeekCalendarView: View {
         return Button { presentation.showTask(key) } label: { chip }.buttonStyle(.plain)
             .modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
             .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
-            .modifier(TaskDragSource(task: task, showPreview: false))
+            .modifier(TaskDragSource(task: task))
             .contextMenu { details.copyMenu(task) }
         #endif
     }
@@ -343,9 +347,7 @@ struct WeekCalendarView: View {
             if let todayIndex { nowMarker(layout: layout, column: column, todayIndex: todayIndex, width: width) }
             }.frame(width: width, height: CGFloat(layout.height), alignment: .topLeading)
                 .modifier(WeekPageSlide())
-            #if os(macOS)
             WeekDragGhost(layout: layout, column: column, gutter: planGutter, days: days)
-            #endif
             }
             .frame(width: width, height: CGFloat(layout.height), alignment: .topLeading)
         .contentShape(Rectangle())
@@ -398,17 +400,7 @@ struct WeekCalendarView: View {
             return { actions.paste(moment, true) }
         }))
         #endif
-        .weekCanvasDrop(
-            drag: weekDrag, layout: layout,
-            slotAt: { planSlot($0, column: column, layout: layout, dayCount: days.count) },
-            preview: { slot in
-                if let task = draggingTask { dropPreview(task, slot: slot, layout: layout, column: column, day: days[slot.day]) }
-            },
-            receive: { value, point in
-                if let slot = planSlot(point, column: column, layout: layout, dayCount: days.count), let task = data.droppedTask([value]) {
-                    arrange(task, at: Dates.clockTime(on: days[slot.day], minute: slot.minute, reference: task.clockDate))
-                }
-            })
+        .weekCanvasDrop(drag: weekDrag, layout: layout)
         }
 
     private func weekTaskFrames(_ perDay: [[PlanBlock]], column: CGFloat, layout: TimelineLayout) -> [CGRect] {
@@ -427,24 +419,6 @@ struct WeekCalendarView: View {
     private func planSlot(_ point: CGPoint, column: CGFloat, layout: TimelineLayout, dayCount: Int = 7) -> PlanSlot? {
         guard dayCount > 0, point.x >= planGutter, point.x < planGutter + CGFloat(dayCount) * column else { return nil }
         return PlanSlot(day: min(dayCount - 1, max(0, Int((point.x - planGutter) / column))), minute: layout.snapped(Double(point.y)))
-    }
-
-    private func dropPreview(_ task: TaskItem, slot: PlanSlot, layout: TimelineLayout, column: CGFloat, day: Date) -> some View {
-        let start = Dates.clockTime(on: day, minute: slot.minute, reference: task.clockDate)
-        let end = task.proposedEnd(at: start)
-        let span = Dates.clockSpan(from: start, to: end, on: start)
-        let height = layout.intervalHeight(from: span.start, to: span.end)
-        return RoundedRectangle(cornerRadius: min(5, height / 2)).fill(Color.accentColor.opacity(0.12))
-            .frame(width: max(10, column - 2), height: height)
-            .overlay(RoundedRectangle(cornerRadius: min(5, height / 2)).strokeBorder(Color.accentColor, lineWidth: 1))
-            .overlay(alignment: .bottomLeading) {
-                Text(Dates.label(start, pattern: "HH:mm") + "–" + Dates.label(end, pattern: Dates.sameDay(start, end) ? "HH:mm" : "M月d日 HH:mm"))
-                    .font(.caption2.monospacedDigit()).padding(3).background(Color.appBackground, in: RoundedRectangle(cornerRadius: 3))
-                    .offset(y: height < 28 ? -height - 2 : 0)
-            }
-            .offset(x: planGutter + CGFloat(slot.day) * column + 1, y: CGFloat(layout.y(span.start)))
-            .allowsHitTesting(false)
-            .animation(reduceMotion ? nil : .linear(duration: 0.06), value: slot)
     }
 
     @ViewBuilder private func nowMarker(layout: TimelineLayout, column: CGFloat, todayIndex: Int, width: CGFloat) -> some View {
@@ -555,7 +529,7 @@ struct WeekCalendarView: View {
             .help(help)
             .contextMenu { details.copyMenu(task) }
             .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
-            .modifier(TaskDragSource(task: task, showPreview: false))
+            .modifier(TaskDragSource(task: task))
         #endif
     }
 

@@ -245,6 +245,9 @@ struct WeekDropGeometry {
     /// An empty strip right of Sunday. On the Mac it is where "next week" lives, so no day column doubles as an edge.
     var trailing: Double = 0
     var layout: TimelineLayout
+    /// Touch screens need an edge band inside the display; desktop keeps the full day columns.
+    var edgeInset: Double = 0
+    var scrollBand: Double = 32
 
     var column: Double { max(1, (Double(canvas.width) - gutter - trailing) / 7) }
 
@@ -259,15 +262,15 @@ struct WeekDropGeometry {
         if undated.width > 0, undated.contains(pointer) { return 0 }
         let x = Double(pointer.x)
         if x < Double(canvas.minX) + gutter { return -1 }
-        if x > Double(canvas.maxX) - trailing { return 1 }
+        if x >= Double(canvas.maxX) - max(trailing, edgeInset) { return 1 }
         return 0
     }
 
     /// Scrolls only within a thin band at the top or bottom of the grid (or below it), slowly at first:
     /// a slot near the edge can still be picked without the grid running away.
-    static func scrollSpeed(pointer: CGPoint, viewport: CGRect) -> Double {
+    static func scrollSpeed(pointer: CGPoint, viewport: CGRect, band: Double = 32) -> Double {
         guard pointer.x >= viewport.minX, pointer.x <= viewport.maxX, pointer.y >= viewport.minY else { return 0 }
-        let band = 32.0, fastest = 10.0
+        let fastest = 10.0
         let top = Double(pointer.y - viewport.minY), bottom = Double(viewport.maxY - pointer.y)
         if top < band { let depth = (band - top) / band; return -fastest * depth * depth }
         if bottom < band { let depth = min(1, (band - bottom) / band); return fastest * depth * depth }
@@ -282,7 +285,7 @@ struct WeekDropGeometry {
     func scrollSpeed(pointer: CGPoint) -> Double {
         if undated.width > 0, undated.contains(pointer) { return 0 }
         if allDay.height > 0, pointer.y < allDay.minY, pointer.x >= viewport.minX, pointer.x <= viewport.maxX { return -10 }
-        return Self.scrollSpeed(pointer: pointer, viewport: viewport)
+        return Self.scrollSpeed(pointer: pointer, viewport: viewport, band: scrollBand)
     }
 
     /// `grabOffset` is how far below the task's top edge it was picked up; the task keeps that offset.
@@ -320,13 +323,14 @@ struct MonthDropGeometry {
     var viewport: CGRect
     /// One flag per cell: is it a day of the month shown (the rest are blank)?
     var inMonth: [Bool]
+    var edgeInset: Double = 0
 
     var rows: Int { inMonth.count / 7 }
 
     func edgeDirection(pointer: CGPoint) -> Int {
         guard pointer.y >= viewport.minY, pointer.y <= viewport.maxY else { return 0 }
-        if pointer.x < viewport.minX { return -1 }
-        if pointer.x > viewport.maxX { return 1 }
+        if pointer.x < viewport.minX + edgeInset { return -1 }
+        if pointer.x >= viewport.maxX - edgeInset { return 1 }
         return 0
     }
 

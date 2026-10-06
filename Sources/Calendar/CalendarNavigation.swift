@@ -83,11 +83,20 @@ extension ContentView {
 
     var calendarDisplayMenu: some View {
         Menu {
-            Toggle(L("显示已完成", "Show completed"), isOn: $showPlanningCompleted)
-            Toggle(L("预览重复安排", "Preview repeats"), isOn: $showRepeatPreviews)
+            if planningView == "list" {
+                Toggle(L("显示空闲时段", "Show free time"), isOn: $showDayFreeTime)
+                    .disabled(wholeMonth || searchingCalendar)
+            } else {
+                Toggle(L("显示已完成", "Show completed"), isOn: $showPlanningCompleted)
+                Toggle(L("预览重复安排", "Preview repeats"), isOn: $showRepeatPreviews)
+            }
         } label: {
-            Label(L("显示", "Display"), systemImage: "slider.horizontal.3").font(.caption).frame(minHeight: 44)
+            Label(L("显示", "Display"), systemImage: "slider.horizontal.3")
+                .font(isPhone ? .callout : .caption)
                 .dynamicTypeSize(...(isPhone ? DynamicTypeSize.xxxLarge : .accessibility5))
+                .padding(.horizontal, isPhone ? 10 : 4)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
             .menuIndicator(.hidden).fixedSize()
     }

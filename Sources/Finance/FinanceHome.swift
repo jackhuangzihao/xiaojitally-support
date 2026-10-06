@@ -29,16 +29,17 @@ struct FinanceSidebar: View {
 
 private struct FinanceSearch: ViewModifier {
     let enabled: Bool
+    let scope: String
     @Binding var text: String
     @ViewBuilder func body(content: Content) -> some View {
+        #if os(iOS)
+        content.modifier(PhoneWorkspaceSearch(text: $text,
+            prompt: L("搜索账单、备注、标签", "Search entries, notes and tags"), scope: scope, enabled: enabled))
+        #else
         if enabled {
-            #if os(iOS)
-            content.searchable(text: $text, placement: .toolbar, prompt: L("搜索账单、备注、标签", "Search entries, notes and tags"))
-                .modifier(PhoneSearchToolbar())
-            #else
             content.searchable(text: $text, prompt: L("搜索账单、备注、标签", "Search entries, notes and tags"))
-            #endif
         } else { content }
+        #endif
     }
 }
 
@@ -226,12 +227,23 @@ struct FinanceHome: View {
             .padding(.horizontal, 16).padding(.vertical, 6)
     }
 
+    private var pageIdentity: String {
+        if selection == "all", let accountDetailID { return "account:\(accountDetailID)" }
+        return selection
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if compact { phonePages }
-            ZStack { page.id(selection).transition(.opacity) }
+            ZStack {
+                page
+                    #if os(macOS)
+                    .modifier(FinanceSearch(enabled: selection == "all" || selection == "trash", scope: pageIdentity, text: $search))
+                    #endif
+                    .id(pageIdentity).transition(.opacity)
+            }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: pageIdentity)
         }
-        .animation(compact && !reduceMotion ? .easeInOut(duration: 0.18) : nil, value: selection)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.appBackground)
         .navigationTitle(title)
@@ -275,7 +287,9 @@ struct FinanceHome: View {
                     .keyboardShortcut("n", modifiers: .command).disabled(loadingError != nil)
             }
         }
-        .modifier(FinanceSearch(enabled: selection == "all" || selection == "trash", text: $search))
+        #if os(iOS)
+        .modifier(FinanceSearch(enabled: selection == "all" || selection == "trash", scope: pageIdentity, text: $search))
+        #endif
         .task(id: records.first?.payload) { reload() }
         .onAppear {
             if let kept = drafts.finance { editor = EntryRequest(entry: kept.entry, expected: kept.expected) }
@@ -322,9 +336,9 @@ struct FinanceHome: View {
             if let lastDeleted {
                 HStack {
                     Text(L("已删除账单", "Entry deleted")); Spacer()
-                    Button(L("撤销", "Undo")) { restore(lastDeleted) }
-                    Button { self.lastDeleted = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).accessibilityLabel(L("关闭提示", "Dismiss"))
-                }.padding(12).background(.regularMaterial)
+                    Button { restore(lastDeleted) } label: { Text(L("撤销", "Undo")).frame(minWidth: 44, minHeight: 44) }
+                    Button { self.lastDeleted = nil } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }.buttonStyle(.borderless).accessibilityLabel(L("关闭提示", "Dismiss"))
+                }.padding(.horizontal, 12).background(.regularMaterial)
             }
         }
     }

@@ -5,6 +5,7 @@ struct DayTimelineCard: View {
     let task: TaskItem
     let compact: Bool
     var showTime = false
+    var onRestore: (() -> Void)? = nil
     let onComplete: () -> Void
     let onEdit: () -> Void
     let onCopy: () -> Void
@@ -34,16 +35,18 @@ struct DayTimelineCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 4) {
-                Button(action: onComplete) {
-                    Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                        .foregroundStyle(task.isDone ? Color.accentColor : .secondary)
-                        .frame(width: controlSize, height: controlSize)
-                        .contentShape(Rectangle())
+                if onRestore == nil {
+                    Button(action: onComplete) {
+                        Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                            .foregroundStyle(task.isDone ? Color.accentColor : .secondary)
+                            .frame(width: controlSize, height: controlSize)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel((task.isDone ? L("恢复为未完成", "Mark incomplete") : L("完成", "Complete")) + "：" + task.title)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel((task.isDone ? L("恢复为未完成", "Mark incomplete") : L("完成", "Complete")) + "：" + task.title)
 
                 Button {
                     detailsLoaded = true
@@ -101,7 +104,10 @@ struct DayTimelineCard: View {
                 .accessibilityHint(expanded ? L("收起任务详情", "Collapse task details") : L("展开任务详情", "Expand task details"))
             }
 
-            if task.dueAt != nil || (!task.isDone && task.reminderAt != nil) {
+            if let deletedAt = task.deletedAt {
+                Label(L("删除于 ", "Deleted ") + Dates.label(deletedAt, pattern: "M月d日 HH:mm"), systemImage: "trash")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if task.dueAt != nil || (!task.isDone && task.reminderAt != nil) {
                 TimelineView(.everyMinute) { clock in metadata(now: clock.date) }
                     .padding(.leading, compact ? 4 : controlSize + 4)
             }
@@ -215,12 +221,12 @@ struct DayTimelineCard: View {
                             .frame(maxWidth: .infinity, minHeight: controlSize, alignment: .leading)
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.plain).disabled(onRestore != nil)
                         .accessibilityLabel((subtask.isDone ? L("取消完成子任务", "Mark subtask incomplete") : L("完成子任务", "Complete subtask")) + "：" + subtask.title)
                     }
                 }
             }
-            if task.reminderWarning != nil {
+            if onRestore == nil, task.reminderWarning != nil {
                 if dynamicTypeSize.isAccessibilitySize {
                     VStack(alignment: .leading, spacing: 0) { reminderActions }
                 } else {
@@ -243,14 +249,25 @@ struct DayTimelineCard: View {
     }
 
     @ViewBuilder private var taskActions: some View {
-        Button(action: onEdit) {
-            Label(L("编辑", "Edit"), systemImage: "pencil").frame(minWidth: controlSize, minHeight: controlSize)
-        }
-        Button(action: onCopy) {
-            Label(L("复制", "Copy"), systemImage: "doc.on.doc").frame(minWidth: controlSize, minHeight: controlSize)
-        }
-        Button(role: .destructive, action: onDelete) {
-            Label(L("删除", "Delete"), systemImage: "trash").frame(minWidth: controlSize, minHeight: controlSize)
+        if let onRestore {
+            Button(action: onRestore) {
+                Label(L("恢复任务", "Restore task"), systemImage: "arrow.uturn.backward")
+                    .frame(minWidth: controlSize, minHeight: controlSize)
+            }
+            Button(role: .destructive, action: onDelete) {
+                Label(L("彻底删除", "Delete permanently"), systemImage: "trash")
+                    .frame(minWidth: controlSize, minHeight: controlSize)
+            }
+        } else {
+            Button(action: onEdit) {
+                Label(L("编辑", "Edit"), systemImage: "pencil").frame(minWidth: controlSize, minHeight: controlSize)
+            }
+            Button(action: onCopy) {
+                Label(L("复制", "Copy"), systemImage: "doc.on.doc").frame(minWidth: controlSize, minHeight: controlSize)
+            }
+            Button(role: .destructive, action: onDelete) {
+                Label(L("删除", "Delete"), systemImage: "trash").frame(minWidth: controlSize, minHeight: controlSize)
+            }
         }
     }
 

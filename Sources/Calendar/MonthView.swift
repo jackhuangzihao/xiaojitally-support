@@ -100,6 +100,7 @@ struct MonthCalendarView: View {
                     }
                     .modifier(WeekPageSlide())
                     .reportWeekFrame { weekDrag.monthCanvas = $0 }
+                    .calendarScrollProbe(weekDrag)
                 }
                 .scrollDisabled(height * CGFloat(rows) <= geometry.size.height + 1)
                 .reportWeekFrame { weekDrag.monthViewport = $0 }
@@ -108,6 +109,9 @@ struct MonthCalendarView: View {
             .padding(.trailing, planTrailing)
         }
         .weekDragPanel(weekDrag)
+        .mobileCalendarDrop(drag: weekDrag, month: selectedDate,
+                            task: { id in data.tasks.first { $0.id == id && $0.deletedAt == nil } }, drop: monthDrop)
+        .onAppear { weekDrag.touchEdges = isPhone }
     }
 
     @ViewBuilder private func monthCell(_ day: Date, index: Int, month: Date, items: [TaskItem], height: CGFloat) -> some View {
@@ -156,7 +160,9 @@ struct MonthCalendarView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(L("\(Dates.label(day))，\(items.count) 项", "\(Dates.label(day)), \(items.count)"))
             .accessibilityAddTraits(.isButton)
+            #if os(macOS)
             .dayDrop { dropOnDay($0, day) }
+            #endif
             .modifier(CalendarDayPopover(presentation: presentation, day: day) { details.day(day, planningTasks, presentation) })
     }
 
@@ -189,7 +195,8 @@ struct MonthCalendarView: View {
         #else
         chip.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
             .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 3).strokeBorder(Color.accentColor, lineWidth: 2) } }
-            .allowsHitTesting(false)
+            .contentShape(Rectangle())
+            .modifier(TaskDragSource(task: task))
         #endif
     }
 }

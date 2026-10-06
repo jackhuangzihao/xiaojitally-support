@@ -11,27 +11,22 @@ extension ContentView {
         GeometryReader { geometry in
             VStack(alignment: .leading, spacing: 12) {
                 if selection == .calendar {
-                    if isPhone && dynamicTypeSize.isAccessibilitySize {
+                    if isPhone {
                         planningPicker.dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                        if planningView != "list" {
-                            HStack(spacing: 8) {
-                                Spacer(minLength: 0)
-                                filterMenu.labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                                calendarDisplayMenu.labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                            }
+                        HStack(spacing: 12) {
+                            Spacer(minLength: 0)
+                            filterMenu
+                            calendarDisplayMenu
                         }
                     } else {
                         HStack {
-                            planningPicker
-                            if planningView != "list" {
-                                if isPhone {
-                                    filterMenu.labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                                    calendarDisplayMenu.labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                                } else { filterMenu; calendarDisplayMenu }
-                            }
+                            planningPicker.frame(width: 260)
+                            Spacer(minLength: 12)
+                            filterMenu
+                            calendarDisplayMenu
                         }
                     }
-                    if planningView != "list", filter.isActive {
+                    if filter.isActive {
                         HStack {
                             Text(filterSummary).font(.caption).foregroundStyle(.secondary).lineLimit(isPhone ? 2 : nil)
                             Button(L("清除", "Clear")) { filter = TaskFilter() }.buttonStyle(.borderless).font(.caption)
@@ -42,10 +37,15 @@ extension ContentView {
                 if searchingCalendar && planningView != "list" {
                     calendarSearchResults
                 } else if selection == .calendar && !searchingCalendar && planningView != "list" {
-                    calendarGrid
+                    calendarGrid.padding(.horizontal, isPhone && planningView == "week" ? -8 : 0)
                 } else {
                 #if os(iOS)
-                iosTaskList
+                VStack(spacing: 8) {
+                    if isPhone && selection == .calendar && !searchingCalendar {
+                        VStack(spacing: 2) { phoneCalendarRows }
+                    }
+                    iosTaskList
+                }
                 #else
                 if selection == .calendar && geometry.size.width >= 680 {
                     HStack(alignment: .top, spacing: 24) {
@@ -68,7 +68,7 @@ extension ContentView {
                 }
                 #endif
                 }
-            }.padding(.horizontal, isPhone && selection == .calendar && planningView == "week" ? 8 : geometry.size.width > 600 ? 28 : 16)
+            }.padding(.horizontal, geometry.size.width > 600 ? 28 : 16)
                 .padding(.vertical, isPhone ? 8 : geometry.size.width > 600 ? 28 : 16)
             .background(Color.appBackground)
         }
@@ -77,8 +77,8 @@ extension ContentView {
             locatedTask = nil
         }
         #if os(iOS)
-        .searchable(text: $search, placement: .toolbar, prompt: selection == .calendar ? L("搜索全部任务", "Search all tasks") : L("搜索当前范围的任务", "Search tasks in this view"))
-        .modifier(PhoneSearchToolbar())
+        .modifier(PhoneWorkspaceSearch(text: $search,
+            prompt: selection == .calendar ? L("搜索全部任务", "Search all tasks") : L("搜索当前范围的任务", "Search tasks in this view"), scope: selection))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle("")
         #else
@@ -186,14 +186,12 @@ extension ContentView {
             .accessibilityLabel(L("\(Dates.label(date))，\(count)项未完成\(count == 0 && planned ? "，全部已完成" : "")\(today ? "，今天" : "")", "\(Dates.label(date)), \(count) unfinished\(count == 0 && planned ? ", all done" : "")\(today ? ", today" : "")"))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .help(L("实心圆点是未完成的任务，空心代表当天已全部完成；描边代表今天。可拖动任务到这里改期。", "A solid dot counts unfinished tasks, a hollow one means all done; the outline marks Today. Drop a task here to reschedule."))
-            #if os(macOS)
             .dayDrop(warn: { id in tasks.first { $0.id == id }?.deadlineConflict(movingTo: date) == true }) { values in
                 guard values.count == 1, values[0].hasPrefix("jianshi-task:"), let id = UUID(uuidString: String(values[0].dropFirst(13))),
                       let task = tasks.first(where: { $0.id == id && $0.deletedAt == nil }) else { return false }
-                requestMove(task, to: date, kind: .day)
+                requestMove(task, to: date, kind: .day, revealDate: date)
                 return true
             }
-            #endif
         )
     }
 
@@ -223,13 +221,13 @@ extension ContentView {
                         .font(.title3.weight(.medium)).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 HStack {
-                    filterMenu
+                    if selection != .calendar { filterMenu }
                     Text(L("\(visibleTasks.count) 项", "\(visibleTasks.count) \(visibleTasks.count == 1 ? "task" : "tasks")")
                          + (hiddenCompletedCount > 0 ? L(" · 已隐藏 \(hiddenCompletedCount) 项已完成", " · \(hiddenCompletedCount) completed hidden") : ""))
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if filter.isActive {
+            if selection != .calendar && filter.isActive {
                 HStack(spacing: 6) {
                     Text(filterSummary).font(.caption).foregroundStyle(.secondary)
                     Button(L("清除筛选", "Clear")) { filter = TaskFilter() }.font(.caption).buttonStyle(.borderless)
@@ -264,14 +262,14 @@ extension ContentView {
         let selectedWeek = Dates.weekCells(selectedDate)[0]
         let weeks = stride(from: 0, to: days.count, by: 7).map { days[$0] }
         return Group {
-            dateNavigator
+            dateNavigator.taskDragPage(onStep: stepPeriod)
             HStack(spacing: 0) {
                 ForEach(Array(Dates.weekdays.enumerated()), id: \.offset) { _, day in
                     Text(day).font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
                 }
             }.padding(.top, 6)
-            // Let List insert/remove native rows, so dates and tasks animate together.
-            // The selected week keeps its identity when surrounding weeks are revealed.
+            // Keep date destinations above the task list while dragging. The selected
+            // week retains its identity when the month is expanded or collapsed.
             ForEach(weekOnly ? weeks.filter { $0 == selectedWeek } : weeks, id: \.self) { start in
                 HStack(spacing: 0) {
                     ForEach(Dates.weekCells(start), id: \.self) { date in
@@ -288,8 +286,6 @@ extension ContentView {
             }
         }
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
         .onChange(of: selectedDate) { _, _ in search = "" }
     }
 
@@ -297,8 +293,7 @@ extension ContentView {
         ScrollViewReader { proxy in
         List {
             if selection == .calendar && !searchingCalendar {
-                if isPhone { phoneCalendarRows }
-                else {
+                if !isPhone {
                     calendarPanel.listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                 }
@@ -328,7 +323,7 @@ extension ContentView {
                 Section {
                     ForEach(group.tasks) { task in
                         taskRow(task)
-                            .listRowInsets(isPhone ? EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0) : EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                            .listRowInsets(isPhone ? EdgeInsets(top: 5, leading: 0, bottom: 5, trailing: 0) : EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                             .listRowSeparator(.hidden)
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                 if selection != .trash {
@@ -383,7 +378,7 @@ extension ContentView {
                     Text(search.isEmpty ? L("添加一件想做的事，慢慢完成。", "Add something you want to do. Take it one step at a time.") : L("试试其他关键词或查看范围。", "Try another search or view."))
                 }
             } else {
-                LazyVStack(alignment: .leading, spacing: 2) {
+                LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(groups, id: \.date) { group in
                         Text(Dates.groupLabel(group.date, today: currentDay))
                             .font(.caption).foregroundStyle(.secondary).padding(.top, 8)
@@ -394,10 +389,8 @@ extension ContentView {
             }
             }
 
-            /// The row keeps its own hover state (for the delete button), so the pointer sliding over rows during a
-            /// scroll only redraws those rows — not the whole window, calendar included, once per row it crosses.
-            private func taskRow(_ task: TaskItem) -> some View {
-        RowHover { hovered in taskRowBody(task, hovered: hovered) }
+    private func taskRow(_ task: TaskItem) -> some View {
+        taskRowBody(task)
         .contextMenu { taskMenu(task) }
         .modifier(TaskDragSource(task: task))
     }
@@ -448,10 +441,6 @@ extension ContentView {
             return (first.id, overlapLabel(cluster, day: selectedDate))
         })
         return Group {
-            Toggle(L("显示空闲时段", "Show free time"), isOn: $showDayFreeTime)
-                .toggleStyle(.switch).controlSize(.small).font(.caption).fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.bottom, 4)
             ForEach(timed) { task in
                 dayTimelineTask(task, timed: true,
                                 gap: showDayFreeTime ? gaps[task.id] : nil, overlap: overlaps[task.id])

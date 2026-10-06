@@ -7,67 +7,25 @@ import UIKit
 #endif
 
 extension ContentView {
-    func taskRowBody(_ task: TaskItem, hovered: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-          HStack(alignment: .top, spacing: 8) {
-            if selection != .trash {
-                Button {
-                    toggleCompletion(task)
-                } label: {
-                    Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
-                        .font(.title3).foregroundStyle(task.isDone ? Color.accentColor : .secondary).frame(width: 44, height: 44)
-                }.buttonStyle(.plain).accessibilityLabel("\(task.isDone ? L("恢复为未完成", "Mark incomplete") : L("完成", "Complete"))：\(task.title)")
-            }
-            Button { editor = EditorRequest(task: task) } label: {
-                VStack(alignment: .leading, spacing: isPhone ? 4 : 7) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(task.title).fontWeight(task.priority == 2 && !task.isDone ? .semibold : .regular)
-                            .strikethrough(task.isDone).foregroundStyle(task.isDone ? .secondary : .primary).multilineTextAlignment(.leading)
-                        CalendarPriorityMark(priority: task.priority, isDone: task.isDone)
-                    }
-                    taskMetadata(task)
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, isPhone ? 4 : 9).contentShape(Rectangle())
-            }.buttonStyle(.plain)
-            #if os(macOS)
-            // The pointer reveals the actions; the context menu is the keyboard and VoiceOver path.
-            if selection != .trash {
-                Group {
-                    if hovered {
-                        Button(role: .destructive) { confirmingDelete = task.id } label: { Image(systemName: "trash").frame(width: 30, height: 30) }
-                            .buttonStyle(.borderless).accessibilityLabel(L("删除任务", "Delete task") + ": " + task.title)
-                    }
-                }.frame(width: 30)
-            } else {
-                Button { _ = commit { task.deletedAt = nil } } label: { Image(systemName: "arrow.uturn.backward").frame(width: 34, height: 34) }
-                    .buttonStyle(.borderless).help(L("恢复任务", "Restore task")).accessibilityLabel(L("恢复任务", "Restore task") + ": " + task.title)
-                Button(role: .destructive) { purgeIDs = [task.id] } label: { Image(systemName: "xmark.bin").frame(width: 34, height: 34) }
-                    .buttonStyle(.borderless).help(L("彻底删除", "Delete permanently")).accessibilityLabel(L("彻底删除", "Delete permanently") + ": " + task.title)
-            }
-            #endif
-          }
-          if task.reminderWarning != nil, selection != .trash {
-              VStack(alignment: .leading, spacing: 4) {
-                  HStack {
-                      Button(L("现在提醒", "Remind now")) { remindNow(task) }
-                      Button(L("调整时间", "Adjust time")) { editor = EditorRequest(task: task) }
-                  }.buttonStyle(.borderless).frame(minHeight: 44)
-              }.font(.caption).padding(.leading, 44)
-          }
-          if !task.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-              ExpandableNotes(notes: task.notes).padding(.leading, 44)
-          }
-          if !task.subtasks.isEmpty {
-              RegularTaskSubtasks(task: task, disabled: selection == .trash) { id in
-                  _ = commit {
-                      var updated = task.subtasks
-                      if let index = updated.firstIndex(where: { $0.id == id }) {
-                          updated[index].isDone.toggle(); task.subtasks = updated
-                      }
-                  }
-              }.padding(.leading, 44)
-          }
-        }.padding(.vertical, isPhone ? 4 : 10).padding(.bottom, isPhone ? 2 : 6).overlay(alignment: .bottom) { Rectangle().fill(.separator).frame(height: 1) }
-        .contentShape(Rectangle())
+    func taskRowBody(_ task: TaskItem) -> some View {
+        DayTimelineCard(task: task, compact: isPhone, showTime: true,
+                        onRestore: selection == .trash ? { _ = commit { task.deletedAt = nil } } : nil,
+                        onComplete: { toggleCompletion(task) },
+                        onEdit: { editor = EditorRequest(task: task) },
+                        onCopy: { copyTask(task) },
+                        onDelete: {
+                            if selection == .trash { purgeIDs = [task.id] }
+                            else { confirmingDelete = task.id }
+                        },
+                        onRemindNow: { remindNow(task) },
+                        onToggleSubtask: { id in
+                            _ = commit {
+                                var updated = task.subtasks
+                                if let index = updated.firstIndex(where: { $0.id == id }) {
+                                    updated[index].isDone.toggle(); task.subtasks = updated
+                                }
+                            }
+                        })
     }
 
     func taskMetadata(_ task: TaskItem) -> some View {
@@ -188,69 +146,6 @@ extension ContentView {
 
     // MARK: Day timeline
 
-}
-
-/// Expanding one row must not invalidate the root task query, groups or calendar.
-private struct RegularTaskSubtasks: View {
-    let task: TaskItem
-    let disabled: Bool
-    let toggle: (UUID) -> Void
-    @State var expanded = true
-    @Environment(\.accessibilityReduceMotion) var reduceMotion
-
-    var body: some View {
-        DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { value in
-            withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) { expanded = value }
-        })) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(task.subtasks) { subtask in
-                    Button { toggle(subtask.id) } label: {
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: subtask.isDone ? "checkmark.square.fill" : "square")
-                                .foregroundStyle(subtask.isDone ? Color.accentColor : .secondary)
-                            Text(subtask.title).strikethrough(subtask.isDone).multilineTextAlignment(.leading)
-                                .foregroundStyle(subtask.isDone ? .secondary : .primary)
-                        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain).disabled(disabled)
-                        .accessibilityLabel("\(subtask.isDone ? L("取消完成子任务", "Mark subtask incomplete") : L("完成子任务", "Complete subtask"))：\(subtask.title)")
-                }
-            }.padding(.top, 4)
-        } label: {
-            Text(L("子任务 \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)", "Subtasks \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)")).font(.caption).foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct ExpandableNotes: View {
-    let notes: String
-    @State var expanded = false
-    @State private var fullHeight: CGFloat = 0
-    @State private var shortHeight: CGFloat = 0
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(notes).font(.callout).foregroundStyle(.secondary)
-                .lineLimit(expanded ? nil : 3).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background {
-                    ZStack(alignment: .topLeading) {
-                        measure(lines: nil, height: $fullHeight)
-                        measure(lines: 3, height: $shortHeight)
-                    }.hidden().accessibilityHidden(true)
-                }
-            if fullHeight > shortHeight + 1 {
-                Button(expanded ? L("收起备注", "Collapse notes") : L("展开备注", "Expand notes")) { expanded.toggle() }
-                    .font(.caption).buttonStyle(.borderless)
-            }
-        }.onChange(of: notes) { _, _ in expanded = false }
-    }
-    private func measure(lines: Int?, height: Binding<CGFloat>) -> some View {
-        Text(notes).font(.callout).lineLimit(lines).fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(GeometryReader { proxy in
-                Color.clear.onAppear { height.wrappedValue = proxy.size.height }
-                    .onChange(of: proxy.size.height) { _, value in height.wrappedValue = value }
-            })
-    }
 }
 
 private struct CompactTagLabelStyle: LabelStyle {
