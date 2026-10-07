@@ -14,6 +14,7 @@ extension ContentView {
                     if isPhone {
                         planningPicker.dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                         HStack(spacing: 12) {
+                            if planningView != "month" { taskClipboardMenu }
                             Spacer(minLength: 0)
                             filterMenu
                             calendarDisplayMenu
@@ -33,7 +34,7 @@ extension ContentView {
                         }
                     }
                 }
-                if !(selection == .calendar && planningView == "month"), selection != .trash { taskClipboardBar }
+                if !(isPhone && selection == .calendar), !(selection == .calendar && planningView == "month"), selection != .trash { taskClipboardBar }
                 if searchingCalendar && planningView != "list" {
                     calendarSearchResults
                 } else if selection == .calendar && !searchingCalendar && planningView != "list" {
@@ -77,8 +78,9 @@ extension ContentView {
             locatedTask = nil
         }
         #if os(iOS)
-        .modifier(PhoneWorkspaceSearch(text: $search,
-            prompt: selection == .calendar ? L("搜索全部任务", "Search all tasks") : L("搜索当前范围的任务", "Search tasks in this view"), scope: selection))
+        .modifier(PhoneWorkspaceToolbar(text: $search,
+            prompt: selection == .calendar ? L("搜索全部任务", "Search all tasks") : L("搜索当前范围的任务", "Search tasks in this view"), scope: selection,
+            settings: { showingSettings = true }, add: addTask, addLabel: L("新建任务", "New task")))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle("")
         #else
@@ -107,13 +109,14 @@ extension ContentView {
                     }.frame(minHeight: 44)
                 }.accessibilityLabel(L("查看：", "View: ") + title)
             }
-            #endif
+            #else
             ToolbarItem(placement: .primaryAction) {
                 Button { showingSettings = true } label: { Label(L("设置", "Settings"), systemImage: "gearshape") }
             }
             ToolbarItem(placement: .primaryAction) {
                 Button(action: addTask) { Label(L("新建任务", "New task"), systemImage: "plus") }.keyboardShortcut("n", modifiers: .command)
             }
+            #endif
         }
         .onChange(of: selection) { _, scope in
             search = ""; filter = TaskFilter()

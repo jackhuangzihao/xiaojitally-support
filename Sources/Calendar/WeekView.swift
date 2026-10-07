@@ -126,7 +126,7 @@ struct WeekCalendarView: View {
             }
             weekGrid(days, perDay: perDay, layout: layout, todayIndex: todayIndex, items: indexed)
         }.weekDragPanel(weekDrag)
-            .mobileCalendarDrop(drag: weekDrag, task: { id in data.tasks.first { $0.id == id && $0.deletedAt == nil } }, drop: weekDrop)
+            .mobileCalendarDrag(drag: weekDrag, enabled: !covered && presentation.taskKey == nil && presentation.day == nil)
             .onAppear { weekDrag.gutter = Double(planGutter); weekDrag.touchEdges = isPhone }
     }
 
@@ -307,8 +307,7 @@ struct WeekCalendarView: View {
         return Button { presentation.showTask(key) } label: { chip }.buttonStyle(.plain)
             .modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
             .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
-            .modifier(TaskDragSource(task: task))
-            .contextMenu { details.copyMenu(task) }
+            .modifier(WeekDragSource(task: task, color: color, grabOffset: { _ in 12 }, drop: weekDrop))
         #endif
     }
 
@@ -513,11 +512,7 @@ struct WeekCalendarView: View {
             .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
             .modifier(WeekDragSource(task: task, color: CalendarGridStyle.color(task), grabOffset: { start in
-                // How far below the task's own start the pointer went down, so the task keeps that spot while moving.
-                guard let clock = task.clockDate else { return 12 }
-                let offset = Dates.calendar.dateComponents([.day], from: Dates.calendar.startOfDay(for: day), to: Dates.calendar.startOfDay(for: clock)).day ?? 0
-                let minute = Double(offset * 1440) + Dates.clockMinute(clock)
-                return Double(start.y) - (Double(weekDrag.canvas.minY) + layout.y(minute))
+                weekDrag.pickupOffset(for: task, on: day, at: start)
             }, drop: weekDrop))
             .overlay(alignment: .top) { if edgeHeight > 0, let range = TaskResize(task: task, day: day, top: true, column: block.column, columns: block.columns) { resizeHandle(task, range: range, height: edgeHeight) } }
             .overlay(alignment: .bottom) { if edgeHeight > 0, let range = TaskResize(task: task, day: day, top: false, column: block.column, columns: block.columns) { resizeHandle(task, range: range, height: edgeHeight) } }
@@ -527,9 +522,9 @@ struct WeekCalendarView: View {
             .modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
             .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .help(help)
-            .contextMenu { details.copyMenu(task) }
             .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
-            .modifier(TaskDragSource(task: task))
+            .modifier(WeekDragSource(task: task, color: CalendarGridStyle.color(task),
+                grabOffset: { weekDrag.pickupOffset(for: task, on: day, at: $0) }, drop: weekDrop))
         #endif
     }
 

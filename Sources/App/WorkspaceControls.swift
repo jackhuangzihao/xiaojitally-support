@@ -20,11 +20,15 @@ struct AppSectionPicker: View {
 #if os(iOS)
 /// Keep search presentation local to the visible page. The automatically minimized
 /// iOS toolbar search controller can retain focus after a tab/page has disappeared.
-struct PhoneWorkspaceSearch<Scope: Hashable>: ViewModifier {
+struct PhoneWorkspaceToolbar<Scope: Hashable>: ViewModifier {
     @Binding var text: String
     let prompt: String
     let scope: Scope
     var enabled = true
+    let settings: () -> Void
+    let add: () -> Void
+    let addLabel: String
+    var canAdd = true
     @State private var presented = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -32,8 +36,11 @@ struct PhoneWorkspaceSearch<Scope: Hashable>: ViewModifier {
     func body(content: Content) -> some View {
         content
             .toolbar {
-                if enabled {
-                    ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button(action: settings) { Label(L("设置", "Settings"), systemImage: "gearshape") }
+                    Button(action: add) { Label(addLabel, systemImage: "plus") }
+                        .keyboardShortcut("n", modifiers: .command).disabled(!canAdd)
+                    if enabled {
                         Button {
                             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { presented.toggle() }
                             if !presented { close() }

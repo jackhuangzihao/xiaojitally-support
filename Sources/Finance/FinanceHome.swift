@@ -32,14 +32,9 @@ private struct FinanceSearch: ViewModifier {
     let scope: String
     @Binding var text: String
     @ViewBuilder func body(content: Content) -> some View {
-        #if os(iOS)
-        content.modifier(PhoneWorkspaceSearch(text: $text,
-            prompt: L("搜索账单、备注、标签", "Search entries, notes and tags"), scope: scope, enabled: enabled))
-        #else
         if enabled {
             content.searchable(text: $text, prompt: L("搜索账单、备注、标签", "Search entries, notes and tags"))
         } else { content }
-        #endif
     }
 }
 
@@ -251,9 +246,11 @@ struct FinanceHome: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
+            #if os(macOS)
             ToolbarItem(placement: .primaryAction) {
                 Button(action: settings) { Label(L("设置", "Settings"), systemImage: "gearshape") }
             }
+            #endif
             #if os(iOS)
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
@@ -277,18 +274,19 @@ struct FinanceHome: View {
                 Button { hidden.toggle() } label: { Label(hidden ? L("显示金额", "Show amounts") : L("隐藏金额", "Hide amounts"), systemImage: hidden ? "eye.slash" : "eye") }
             }
             #endif
+            #if os(macOS)
             ToolbarItem(placement: .primaryAction) {
                 Button(action: newEntry) { Label(L("记一笔", "New entry"), systemImage: "plus") }
-                    #if os(iOS)
-                    .labelStyle(.iconOnly)
-                    #else
                     .labelStyle(.titleAndIcon)
-                    #endif
                     .keyboardShortcut("n", modifiers: .command).disabled(loadingError != nil)
             }
+            #endif
         }
         #if os(iOS)
-        .modifier(FinanceSearch(enabled: selection == "all" || selection == "trash", scope: pageIdentity, text: $search))
+        .modifier(PhoneWorkspaceToolbar(text: $search,
+            prompt: L("搜索账单、备注、标签", "Search entries, notes and tags"), scope: pageIdentity,
+            enabled: selection == "all" || selection == "trash", settings: settings, add: newEntry,
+            addLabel: L("记一笔", "New entry"), canAdd: loadingError == nil))
         #endif
         .task(id: records.first?.payload) { reload() }
         .onAppear {

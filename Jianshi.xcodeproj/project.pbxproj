@@ -27,6 +27,7 @@
 		81FE9BC561834654A7EA049E /* MonthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 653376381047FD6CB3C88190 /* MonthView.swift */; };
 		9C7E7D0CD7500A7131C2AB24 /* TaskDrag.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2504432B6291D3D8D9D6C28 /* TaskDrag.swift */; };
 		35C2DEAF887181E540FBD3E0 /* WeekDrag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 291751B761A73CC190BA2302 /* WeekDrag.swift */; };
+		A073CA1E0000000000000002 /* MobileCalendarDrag.swift in Sources */ = {isa = PBXBuildFile; fileRef = A073CA1E0000000000000001 /* MobileCalendarDrag.swift */; };
 		4486D1ED07DA1672CE0F345C /* WeekView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB191DCE5B285E5CFC687FD2 /* WeekView.swift */; };
 		CFF8BC04CF98E1D6245E6492 /* ExchangeRates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FE6801AF37140A922D72981 /* ExchangeRates.swift */; };
 		0CC16B838C6F457BE0A9FEFD /* FinanceAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74D2693BE99572063BF30623 /* FinanceAssets.swift */; };
@@ -98,6 +99,7 @@
 		653376381047FD6CB3C88190 /* MonthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonthView.swift; sourceTree = "<group>"; };
 		C2504432B6291D3D8D9D6C28 /* TaskDrag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskDrag.swift; sourceTree = "<group>"; };
 		291751B761A73CC190BA2302 /* WeekDrag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeekDrag.swift; sourceTree = "<group>"; };
+		A073CA1E0000000000000001 /* MobileCalendarDrag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCalendarDrag.swift; sourceTree = "<group>"; };
 		AB191DCE5B285E5CFC687FD2 /* WeekView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeekView.swift; sourceTree = "<group>"; };
 		1FE6801AF37140A922D72981 /* ExchangeRates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExchangeRates.swift; sourceTree = "<group>"; };
 		74D2693BE99572063BF30623 /* FinanceAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinanceAssets.swift; sourceTree = "<group>"; };
@@ -206,6 +208,7 @@
 				653376381047FD6CB3C88190 /* MonthView.swift */,
 				C2504432B6291D3D8D9D6C28 /* TaskDrag.swift */,
 				291751B761A73CC190BA2302 /* WeekDrag.swift */,
+				A073CA1E0000000000000001 /* MobileCalendarDrag.swift */,
 				AB191DCE5B285E5CFC687FD2 /* WeekView.swift */,
 			);
 			path = Calendar;
@@ -395,6 +398,7 @@
 				81FE9BC561834654A7EA049E /* MonthView.swift in Sources */,
 				9C7E7D0CD7500A7131C2AB24 /* TaskDrag.swift in Sources */,
 				35C2DEAF887181E540FBD3E0 /* WeekDrag.swift in Sources */,
+				A073CA1E0000000000000002 /* MobileCalendarDrag.swift in Sources */,
 				4486D1ED07DA1672CE0F345C /* WeekView.swift in Sources */,
 				CFF8BC04CF98E1D6245E6492 /* ExchangeRates.swift in Sources */,
 				0CC16B838C6F457BE0A9FEFD /* FinanceAssets.swift in Sources */,
@@ -493,7 +497,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 72;
+				CURRENT_PROJECT_VERSION = 73;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -527,7 +531,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 72;
+				CURRENT_PROJECT_VERSION = 73;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -639,7 +643,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiStore.entitlements;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 72;
+				CURRENT_PROJECT_VERSION = 73;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;

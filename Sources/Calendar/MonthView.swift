@@ -109,8 +109,7 @@ struct MonthCalendarView: View {
             .padding(.trailing, planTrailing)
         }
         .weekDragPanel(weekDrag)
-        .mobileCalendarDrop(drag: weekDrag, month: selectedDate,
-                            task: { id in data.tasks.first { $0.id == id && $0.deletedAt == nil } }, drop: monthDrop)
+        .mobileCalendarDrag(drag: weekDrag, enabled: !covered && presentation.taskKey == nil && presentation.day == nil)
         .onAppear { weekDrag.touchEdges = isPhone }
     }
 
@@ -196,7 +195,7 @@ struct MonthCalendarView: View {
         chip.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
             .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 3).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .contentShape(Rectangle())
-            .modifier(TaskDragSource(task: task))
+            .modifier(WeekDragSource(task: task, color: color, grabOffset: { _ in 0 }, month: selectedDate, drop: monthDrop))
         #endif
     }
 }

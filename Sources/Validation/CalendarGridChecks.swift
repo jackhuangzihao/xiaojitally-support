@@ -89,7 +89,38 @@ import UIKit
         try require(drag.weekOffset == 1, "Month drags use the same stationary edge lifecycle")
         drag.cancel(); drag.tick(now: 2); drag.complete()
         try require(drops == 1 && drag.weekOffset == 0 && !drag.isDragging, "Cancelling a paged drag restores the page without a save")
+        let allDayTask = TaskItem(title: "All-day pickup", scheduledAt: first, list: list)
+        var converted = false
+        drag.begin(allDayTask, color: .accentColor, grabOffset: 12) { zone, _ in
+            if case .timed(let day, let minute) = zone {
+                converted = TaskMove(allDayTask, to: Dates.clockTime(on: Dates.weekCells(first)[day], minute: minute), kind: .timed)
+                    .apply(to: allDayTask, shiftDeadline: false)
+            }
+        }
+        drag.move(to: CGPoint(x: 100, y: 70))
+        try require(drag.zone == .allDay(1), "An all-day pickup initially stays in its all-day cell")
+        drag.move(to: CGPoint(x: 100, y: 412)); drag.complete()
+        try require(converted && allDayTask.hasTime && Dates.clockMinute(allDayTask.clockDate!) == 600,
+                    "Dragging all-day into the grid commits a timed schedule")
+        let overnight = TaskItem(title: "Continuation", scheduledAt: Dates.clockTime(on: first, minute: 1380), list: list)
+        overnight.hasTime = true; overnight.endAt = overnight.scheduledAt!.addingTimeInterval(7200)
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: first)!
+        let grab = drag.pickupOffset(for: overnight, on: tomorrow, at: CGPoint(x: 100, y: mobileGeometry.canvas.minY + 30))
+        try require(grab == 90, "Both platforms preserve the pickup offset on a cross-midnight continuation")
         #if os(iOS)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let panel = UIView(frame: window.bounds); window.addSubview(panel); window.isHidden = false
+        defer { window.isHidden = true }
+        let clipped = UIView(frame: CGRect(x: 0, y: 100, width: 390, height: 200)); clipped.clipsToBounds = true
+        panel.addSubview(clipped)
+        let card = UIView(frame: CGRect(x: 40, y: -20, width: 60, height: 60)); clipped.addSubview(card)
+        try require(MobileCalendarDragSource.contains(CGPoint(x: 60, y: 120), in: panel, source: card),
+                    "Touch pickup accepts the visible part of a calendar card")
+        try require(!MobileCalendarDragSource.contains(CGPoint(x: 60, y: 90), in: panel, source: card),
+                    "A clipped offscreen card cannot steal a toolbar touch")
+        clipped.isHidden = true
+        try require(!MobileCalendarDragSource.contains(CGPoint(x: 60, y: 120), in: panel, source: card),
+                    "A retained hidden calendar cannot begin a touch drag")
         let scroll = UIScrollView(frame: CGRect(x: 0, y: 100, width: 374, height: 500))
         scroll.contentSize = CGSize(width: 374, height: 1440)
         scroll.contentOffset.y = 300

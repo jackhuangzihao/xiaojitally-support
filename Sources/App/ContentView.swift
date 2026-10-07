@@ -472,7 +472,9 @@ struct ContentView: View {
                          canShiftDeadline: deadlineMove != nil && undoSchedule != nil, shiftDeadline: shiftMovedDeadline,
                          undo: { if undoCopy { history.undo() } else if undoListMove != nil { restoreListMove() } else { restoreSchedule() } },
                          dismiss: { self.movedMessage = nil; undoSchedule = nil; undoListMove = nil; deadlineMove = nil; undoCopy = false })
-                .id(moveFeedbackID).padding(10).frame(maxWidth: .infinity, alignment: .trailing)
+                .id(moveFeedbackID).frame(maxWidth: isPhone ? .infinity : 480)
+                .padding(.horizontal, 12).padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: isPhone ? .center : .trailing)
         }
     }
 

@@ -6,7 +6,7 @@ import Observation
 import UIKit
 #endif
 
-// MARK: - Week view drag (Mac)
+// MARK: - Shared calendar drag
 
 /// Mac week view: a task follows the pointer directly instead of going through system drag and drop.
 /// Only the few small views that draw the drag read this object, so moving the pointer never redraws the page.
@@ -54,6 +54,9 @@ import UIKit
     #endif
     @ObservationIgnored weak var scrollView: AnyObject?
     @ObservationIgnored weak var panelView: AnyObject?
+    #if os(iOS)
+    @ObservationIgnored let mobileSources = NSHashTable<UIView>.weakObjects()
+    #endif
     @ObservationIgnored private var grabOffset = 0.0
     @ObservationIgnored private var releasedSince: Double?
     @ObservationIgnored private var ticker: Timer?
@@ -161,6 +164,13 @@ import UIKit
         }
         guard taskID == task.id, resizeRange != nil else { return }
         move(to: point)
+    }
+
+    /// Keep the exact pickup point on both platforms, including a continuation from yesterday.
+    func pickupOffset(for task: TaskItem, on day: Date, at point: CGPoint) -> Double {
+        guard let clock = task.clockDate, let layout else { return 12 }
+        let days = Dates.calendar.dateComponents([.day], from: Dates.calendar.startOfDay(for: day), to: Dates.calendar.startOfDay(for: clock)).day ?? 0
+        return Double(point.y - canvas.minY) - layout.y(Double(days * 1440) + Dates.clockMinute(clock))
     }
 
     func move(to point: CGPoint) {
@@ -436,6 +446,7 @@ struct WeekDragSource: ViewModifier {
     let drop: (TaskItem, WeekDropGeometry.Zone, Int) -> Void
     @Environment(WeekDrag.self) private var drag
     func body(content: Content) -> some View {
+        #if os(macOS)
         let gesture = DragGesture(minimumDistance: 4, coordinateSpace: .named(WeekDrag.space))
             .onChanged { value in
                 guard task.previewSourceID == nil else { return }
@@ -456,6 +467,17 @@ struct WeekDragSource: ViewModifier {
         }
         .opacity(lifted ? 0.35 : 1)
         .animation(.easeOut(duration: 0.12), value: lifted)
+        #else
+        content.background {
+            if task.previewSourceID == nil && task.deletedAt == nil {
+                MobileCalendarDragSource(drag: drag) { point in
+                    drag.begin(task, color: color, grabOffset: grabOffset(point), month: month) { zone, offset in
+                        if zone != .none { drop(task, zone, offset) }
+                    }
+                }
+            }
+        }.opacity(drag.taskID == task.id && !drag.cancelled ? 0.35 : 1)
+        #endif
     }
 }
 
@@ -648,7 +670,8 @@ extension View {
             .overlay(alignment: .topLeading) { WeekDragChip() }
             .coordinateSpace(.named(WeekDrag.space))
         #else
-        coordinateSpace(.named(WeekDrag.space))
+        overlay(alignment: .topLeading) { WeekDragChip() }
+            .coordinateSpace(.named(WeekDrag.space))
         #endif
     }
 
@@ -667,110 +690,6 @@ extension View {
 }
 
 #if os(iOS)
-/// UIKit keeps the drag session alive after its source card is replaced by another week/month.
-/// Track it on the window, so holding at (or beyond) the calendar edge keeps scrolling without
-/// requiring another finger movement. The probe supplies coordinates, never intercepts taps.
-private struct MobileCalendarDrop: UIViewRepresentable {
-    let drag: WeekDrag
-    let feedback: DragFeedback
-    let month: Date?
-    let task: (UUID) -> TaskItem?
-    let drop: (TaskItem, WeekDropGeometry.Zone, Int) -> Void
-
-    final class Probe: UIView {
-        var moved: (() -> Void)?
-        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
-        override func didMoveToWindow() { super.didMoveToWindow(); moved?() }
-    }
-    func makeUIView(context: Context) -> Probe {
-        let view = Probe()
-        context.coordinator.view = view
-        view.moved = { [weak coordinator = context.coordinator] in coordinator?.attach() }
-        return view
-    }
-    func updateUIView(_ view: Probe, context: Context) { context.coordinator.source = self; context.coordinator.attach() }
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-    static func dismantleUIView(_ view: Probe, coordinator: Coordinator) { view.moved = nil; coordinator.detach() }
-
-    @MainActor final class Coordinator: NSObject, UIDropInteractionDelegate {
-        var source: MobileCalendarDrop
-        weak var view: Probe?
-        weak var window: UIWindow?
-        private var interaction: UIDropInteraction?
-        private var session: UIDropSession?
-        private var token: UUID?
-        private var ticker: Timer?
-        init(_ source: MobileCalendarDrop) { self.source = source }
-        func attach() {
-            guard let next = view?.window else { detach(); return }
-            guard next !== window else { return }
-            detach()
-            let interaction = UIDropInteraction(delegate: self)
-            next.addInteraction(interaction)
-            self.interaction = interaction; window = next
-        }
-        func detach() {
-            stop()
-            if let interaction { window?.removeInteraction(interaction) }
-            interaction = nil; window = nil
-        }
-        private func stop() {
-            ticker?.invalidate(); ticker = nil
-            session = nil
-            if let token, source.feedback.sessionID == token {
-                _ = source.drag.finish()
-                source.feedback.end(session: token)
-            }
-            token = nil
-        }
-        func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
-            session.localDragSession != nil && source.feedback.draggedID.flatMap(source.task) != nil
-        }
-        func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnter session: UIDropSession) { track(session) }
-        func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession) -> UIDropProposal {
-            track(session)
-            sample(tick: false)
-            let proposal = UIDropProposal(operation: source.drag.zone == .none ? .cancel : .move)
-            proposal.isPrecise = true
-            return proposal
-        }
-        private func track(_ next: UIDropSession) {
-            guard session !== next, let id = source.feedback.draggedID, let item = source.task(id), let view else { return }
-            stop()
-            session = next; token = source.feedback.sessionID
-            let point = next.location(in: view)
-            let clock = item.clockDate.map { Dates.clockMinute($0) }
-            let offset = source.month == nil && clock != nil && source.drag.layout != nil
-                ? max(0, Double(point.y - source.drag.canvas.minY) - source.drag.layout!.y(clock!)) : 12
-            source.drag.begin(item, color: CalendarGridStyle.color(item), grabOffset: offset, month: source.month) { [drop = source.drop] zone, page in
-                drop(item, zone, page)
-            }
-            source.drag.move(to: point)
-            let ticker = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.sample(tick: true) }
-            }
-            self.ticker = ticker
-            RunLoop.main.add(ticker, forMode: .common)
-        }
-        private func sample(tick: Bool) {
-            guard let session, let view, view.window != nil, source.feedback.sessionID == token,
-                  source.drag.isDragging, UIApplication.shared.applicationState == .active else { stop(); return }
-            source.drag.move(to: session.location(in: view))
-            if tick { source.drag.tick(now: ProcessInfo.processInfo.systemUptime) }
-        }
-        func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
-            guard self.session === session, source.feedback.sessionID == token else { return }
-            sample(tick: false)
-            ticker?.invalidate(); ticker = nil
-            source.drag.complete()
-            stop()
-        }
-        func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) {
-            if self.session === session { stop() }
-        }
-    }
-}
-
 /// Resolve only the scroll view containing this grid, not another page's scroll view.
 private struct MobileCalendarScrollProbe: UIViewRepresentable {
     let found: (UIScrollView?) -> Void
@@ -792,26 +711,22 @@ private struct MobileCalendarScrollProbe: UIViewRepresentable {
     func updateUIView(_ view: Probe, context: Context) { view.found = found; view.resolve() }
 }
 
-private struct MobileCalendarDropModifier: ViewModifier {
+private struct MobileCalendarDragModifier: ViewModifier {
     let drag: WeekDrag
-    let month: Date?
-    let task: (UUID) -> TaskItem?
-    let drop: (TaskItem, WeekDropGeometry.Zone, Int) -> Void
+    let enabled: Bool
     @Environment(DragFeedback.self) private var feedback
     @Environment(\.scenePhase) private var phase
     func body(content: Content) -> some View {
-        content.background(MobileCalendarDrop(drag: drag, feedback: feedback, month: month, task: task, drop: drop))
+        content.background(MobileCalendarDrag(drag: drag, feedback: feedback, enabled: enabled))
             .onChange(of: phase) { _, value in if value != .active { _ = drag.finish(); feedback.end() } }
     }
 }
 #endif
 
 extension View {
-    @ViewBuilder func mobileCalendarDrop(drag: WeekDrag, month: Date? = nil,
-                                         task: @escaping (UUID) -> TaskItem?,
-                                         drop: @escaping (TaskItem, WeekDropGeometry.Zone, Int) -> Void) -> some View {
+    @ViewBuilder func mobileCalendarDrag(drag: WeekDrag, enabled: Bool) -> some View {
         #if os(iOS)
-        modifier(MobileCalendarDropModifier(drag: drag, month: month, task: task, drop: drop))
+        modifier(MobileCalendarDragModifier(drag: drag, enabled: enabled))
         #else
         self
         #endif

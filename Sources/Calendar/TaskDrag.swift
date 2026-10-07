@@ -218,7 +218,6 @@ struct MoveFeedback: View {
     let shiftDeadline: () -> Void
     let undo: () -> Void
     let dismiss: () -> Void
-    @State private var brief = true
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var touchSize: CGFloat {
         #if os(iOS)
@@ -232,24 +231,20 @@ struct MoveFeedback: View {
         ViewThatFits(in: .horizontal) {
             if !dynamicTypeSize.isAccessibilitySize {
                 HStack(spacing: 10) {
-                    if brief { Text(message).lineLimit(2) }
+                    Text(message).lineLimit(2)
                     actions
                 }
             }
             VStack(alignment: .leading, spacing: 4) {
-                if brief { Text(message).fixedSize(horizontal: false, vertical: true) }
+                Text(message).fixedSize(horizontal: false, vertical: true)
                 actions
             }
-        }.font(.caption).padding(.horizontal, 10).padding(.vertical, 3)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        }.font(.caption).padding(.horizontal, 10).padding(.vertical, 2)
+            .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.16)))
             .task(id: message) {
-                brief = true
                 do {
-                    try await Task.sleep(for: .seconds(2))
-                    if canUndo {
-                        brief = false
-                        try await Task.sleep(for: .seconds(6))
-                    }
+                    try await Task.sleep(for: .seconds(dynamicTypeSize.isAccessibilitySize ? 10 : canUndo || canShiftDeadline ? 6 : 3))
                     dismiss()
                 } catch {}
             }

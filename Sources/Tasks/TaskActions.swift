@@ -111,15 +111,8 @@ extension ContentView {
     func copyTask(_ task: TaskItem) {
         guard task.previewSourceID == nil, task.deletedAt == nil else { return }
         copiedTask = TaskBackup.TaskRecord(task); assigning = nil
-        if selection == .calendar && planningView == "week" {
-            #if os(macOS)
-            notify(L("已复制，在周历空白处右键粘贴，也可点“粘贴…”选择日期。", "Copied. Right-click an empty week slot, or choose a date with Paste…."))
-            #else
-            notify(L("已复制，长按周历空白时段粘贴，也可点“粘贴…”选择日期。", "Copied. Hold an empty week slot, or choose a date with Paste…."))
-            #endif
-        } else {
-            notify(L("已复制，点上方“粘贴…”选择日期和时间。", "Copied. Use Paste… above to choose a date and time."))
-        }
+        movedMessage = nil // The clipboard control itself confirms the copy; avoid a second notice.
+
     }
 
     /// Both platforms copy the same immutable snapshot. A phone confirms the destination
@@ -127,6 +120,20 @@ extension ContentView {
     func preparePaste(on day: Date, minute: Int? = nil, allDay: Bool = false) {
         guard let copiedTask else { return }
         copyRequest = TaskCopyRequest(record: copiedTask, on: day, minute: minute, allDay: allDay)
+    }
+
+    /// Reuse the calendar's existing controls row on a phone instead of adding another header.
+    @ViewBuilder var taskClipboardMenu: some View {
+        if let copiedTask {
+            Menu {
+                Text(copiedTask.title)
+                Button(L("粘贴到 ", "Paste on ") + Dates.label(selectedDate, pattern: "M月d日") + "…") { preparePaste(on: selectedDate) }
+                Button(L("取消复制", "Cancel copy")) { self.copiedTask = nil }
+            } label: {
+                Label(L("粘贴", "Paste"), systemImage: "doc.on.clipboard")
+                    .font(.callout).frame(minWidth: 44, minHeight: 44)
+            }.accessibilityLabel(L("粘贴已复制的任务：", "Paste copied task: ") + copiedTask.title)
+        }
     }
 
     @ViewBuilder var taskClipboardBar: some View {
@@ -164,6 +171,8 @@ extension ContentView {
             context.insert(task); duplicate = task
         }), let duplicate else { return false }
         history.recordCopy(duplicate)
+        // Only a successful paste consumes its snapshot. Cancellation/failure keeps it available.
+        if copiedTask == record { copiedTask = nil }
         // A fresh copy is unfinished and dated: Completed/Unscheduled and old filters can hide it.
         if selection != .calendar || planningView == "month" { planningView = "list" }
         selection = .calendar; search = ""; filter = TaskFilter(); wholeMonth = false

@@ -49,7 +49,10 @@ enum CloudMerge {
         guard let task else { return L("不存在 / 已彻底删除", "Absent / permanently deleted") }
         let date = task.scheduledAt ?? task.dueAt
         let status = task.deletedAt != nil ? L("最近删除", "Recently deleted") : (task.isDone ? L("已完成", "Completed") : L("未完成", "Open"))
-        return "“" + task.title + "” · " + status + (date.map { " · " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "")
+        let format = Date.FormatStyle(date: .abbreviated, time: .shortened).locale(UISettings.locale)
+        let schedule = date.map { " · " + L("安排：", "Scheduled: ") + $0.formatted(format) } ?? ""
+        let completed = task.isDone ? (task.completedAt.map { " · " + L("完成于：", "Completed at: ") + $0.formatted(format) } ?? "") : ""
+        return "“" + task.title + "” · " + status + schedule + completed
     }
     static func taskDifference(_ local: TaskBackup.TaskRecord?, _ cloud: TaskBackup.TaskRecord?) -> String {
         var fields: [String] = []
@@ -419,6 +422,7 @@ enum CloudMerge {
     var summary: String {
         if !enabled { return L("仅保存在本机", "Stored on this device") }
         if running { return L("正在同步 iCloud…", "Syncing with iCloud…") }
+        if conflict { return L("iCloud · 需要处理同步冲突", "iCloud · Review sync conflicts") }
         if !detail.isEmpty { return L("iCloud · 等待同步", "iCloud · Sync pending") }
         return L("iCloud 同步已开启", "iCloud sync enabled")
     }
@@ -690,13 +694,19 @@ struct CloudSyncSettings: View {
         Section(L("数据与同步", "Data and sync")) {
             Toggle("iCloud", isOn: Binding(get: { sync.enabled }, set: { if $0 { confirmEnable = true } else { sync.setEnabled(false) } }))
             Text(sync.summary).font(.callout)
+                .foregroundStyle(sync.conflict ? Color.orange : .primary)
+            if sync.enabled && sync.conflict {
+                Text(L("不同设备对同一内容做了不同修改。同步已暂停，请核对并选择要保留的版本；本机数据仍可使用。", "The same items were changed differently on your devices. Sync is paused until you review which version to keep. Your local data remains available."))
+                    .font(.callout)
+                Button(L("核对并处理冲突…", "Review and resolve conflicts…")) { resolve = true }
+                    .disabled(sync.running)
+            }
             Text(L("开启后，任务、清单和账目会在同一 Apple 账户的设备间自动同步。应用打开时同步；离线仍可编辑。同步不代替备份。", "Sync tasks, lists and finances across devices using the same Apple Account while the app is open. Offline editing remains available. Sync does not replace backups."))
                 .font(.caption).foregroundStyle(.secondary)
-            if let date = sync.lastSync { Text(L("上次完成：", "Last completed: ") + date.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary) }
-            if !sync.detail.isEmpty { Text(sync.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+            if let date = sync.lastSync { Text(L("上次完成：", "Last completed: ") + date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))).font(.caption).foregroundStyle(.secondary) }
+            if !sync.detail.isEmpty && !sync.conflict { Text(sync.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             if sync.enabled {
                 Button(L("立即同步", "Sync now")) { Task { await sync.sync() } }.disabled(sync.running || sync.conflict)
-                if sync.conflict { Button(L("处理同步冲突…", "Resolve sync conflicts…")) { resolve = true }.disabled(sync.running) }
             }
             Menu(L("导出同步恢复副本", "Export sync recovery copy")) {
                 Button(L("合并前的本机副本", "Local copy before merge")) { exportCopy(owner: "sync-local") }
