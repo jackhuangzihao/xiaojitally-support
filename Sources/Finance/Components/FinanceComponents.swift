@@ -328,3 +328,28 @@ extension Array where Element: Identifiable {
 }
 
 func double(_ value: Decimal) -> Double { NSDecimalNumber(decimal: value).doubleValue }
+
+/// Page navigation exposes only the active tab and a selection action.
+struct FinancePageTabs: View {
+    @AppStorage("appLanguage") private var language = "system"
+    let active: String
+    let dynamicTypeSize: DynamicTypeSize
+    let select: (String) -> Void
+
+    var body: some View {
+        (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 4)) : AnyLayout(HStackLayout(spacing: 4))) {
+            ForEach([("all", L("账单", "Entries")), ("stats", L("统计", "Statistics")), ("accounts", L("资产", "Assets"))], id: \.0) { key, title in
+                Button {
+                    select(key)
+                } label: {
+                    Text(title).font(.subheadline.weight(active == key ? .semibold : .regular))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(active == key ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 9))
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(active == key ? Color.accentColor : .secondary)
+                    .accessibilityAddTraits(active == key ? [.isSelected] : [])
+            }
+        }.padding(4).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 16).padding(.vertical, 6)
+    }
+}

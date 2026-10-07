@@ -275,52 +275,15 @@ struct FinanceEntryEditor: View {
         let selectedRoot = ledger.rootCategoryID(draft.categoryID)
         let roots = ledger.categories.filter { $0.parentID == nil && (($0.isIncome == income && !$0.archived) || $0.id == selectedRoot) }
         let children = ledger.categories.filter { selectedRoot != nil && $0.parentID == selectedRoot && (($0.isIncome == income && !$0.archived) || $0.id == draft.categoryID) }
-        return VStack(alignment: .leading, spacing: 12) {
-            Text(L("分类", "Category")).font(.subheadline.weight(.medium))
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: compact ? (dynamicTypeSize.isAccessibilitySize ? 2 : 4) : 6), spacing: 8) {
-                ForEach(roots) { category in categoryButton(category, selected: category.id == selectedRoot) }
-                addCategoryButton(income: income, parentID: nil)
-            }
-            if let parent = ledger.category(selectedRoot), !children.isEmpty {
-                Divider()
-                HStack {
-                    Text(parent.label + L(" · 子分类", " · subcategories")).font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Button(L("不细分", "No subcategory")) { draft.categoryID = parent.id }.font(.caption).frame(minHeight: 44)
-                }
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: compact ? (dynamicTypeSize.isAccessibilitySize ? 2 : 4) : 6), spacing: 8) {
-                    ForEach(children) { category in categoryButton(category, selected: category.id == draft.categoryID) }
-                    if !parent.archived { addCategoryButton(income: income, parentID: parent.id) }
-                }
-            } else if let parent = ledger.category(selectedRoot), !parent.archived {
-                Button { entity = EntityRequest(kind: .category, income: income, parentID: parent.id) } label: {
-                    Label(L("为“\(parent.label)”添加子分类", "Add a subcategory to \(parent.label)"), systemImage: "plus")
-                }.font(.callout).frame(minHeight: 44)
-            }
-        }
-    }
-    private func categoryButton(_ category: MoneyCategory, selected: Bool) -> some View {
-        let tint = MoneyColor.color(category.resolvedColor)
-        return Button {
-            withAnimation(reduceMotion ? nil : .snappy(duration: 0.15)) { draft.categoryID = category.id }
+        return FinanceEntryCategories(compact: compact, dynamicTypeSize: dynamicTypeSize,
+                                      roots: roots, children: children, parent: ledger.category(selectedRoot),
+                                      selectedRoot: selectedRoot, categoryID: $draft.categoryID,
+                                      categoryPath: ledger.categoryPath) { id in
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.15)) { draft.categoryID = id }
             focus = desiredAmountFocus
-        } label: {
-            VStack(spacing: 5) {
-                MoneyIcon(symbol: category.symbol, emoji: category.emoji, tint: selected ? .white : tint, size: 40)
-                    .background(Circle().fill(selected ? tint : .clear))
-                Text(category.label).font(.caption).lineLimit(2).foregroundStyle(selected ? .primary : .secondary)
-            }.frame(maxWidth: .infinity, minHeight: 60).padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 10).fill(selected ? tint.opacity(0.1) : .clear)).contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel(ledger.categoryPath(category.id)).accessibilityAddTraits(selected ? [.isSelected] : [])
-    }
-    private func addCategoryButton(income: Bool, parentID: UUID?) -> some View {
-        Button { entity = EntityRequest(kind: .category, income: income, parentID: parentID) } label: {
-            VStack(spacing: 5) {
-                Image(systemName: "plus").font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)
-                    .frame(width: 40, height: 40).overlay(Circle().strokeBorder(Color.secondary.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [3])))
-                Text(L("新增", "Add")).font(.caption).foregroundStyle(.secondary)
-            }.frame(maxWidth: .infinity, minHeight: 60).padding(.vertical, 6).contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel(parentID == nil ? L("新增大类", "New main category") : L("新增子分类", "New subcategory"))
+        } addCategory: { parentID in
+            entity = EntityRequest(kind: .category, income: income, parentID: parentID)
+        }
     }
     private var transferFields: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -436,39 +399,11 @@ struct FinanceEntryEditor: View {
         }
     }
     private var moreFields: some View {
-        let recent = recentTags
-        return VStack(alignment: .leading, spacing: 10) {
-            fieldTitle(L("详细说明", "Details"), L("写不下的细节，比如买了什么、和谁一起、发票号。", "Anything longer: what you bought, who with, an invoice number."))
-            TextField(L("可不填", "Optional"), text: $draft.notes, axis: .vertical).focused($focus, equals: .notes).lineLimit(2...5).textFieldStyle(.roundedBorder)
-            fieldTitle(L("标签", "Tags"), L("给账单打记号，方便以后搜索，比如“报销”“出差”。多个用逗号分开。", "Marks for finding entries later, such as “reimburse” or “work trip”. Separate with commas."))
-            TextField(L("可不填", "Optional"), text: $draft.tags).focused($focus, equals: .tags).textFieldStyle(.roundedBorder)
-            if !recent.isEmpty {
-                ScrollView(.horizontal) {
-                HStack(spacing: 6) {
-                    Text(L("常用：", "Recent: ")).font(.caption).foregroundStyle(.secondary)
-                    ForEach(recent, id: \.self) { tag in
-                        Button(tag) { addTag(tag) }.buttonStyle(.plain).font(.caption)
-                            .padding(.horizontal, 8).padding(.vertical, 3).background(Capsule().fill(Color.primary.opacity(0.07)))
-                            .frame(minHeight: compact ? 44 : nil)
-                    }
-                }
-                }.scrollIndicators(.hidden)
-            }
-            fieldTitle(L("关联任务", "Linked task"), L("这笔钱对应待办里的哪件事，可在任务里看到相关花费。", "Which task this money belongs to; the task shows its entries."))
-            Picker(L("关联任务", "Linked task"), selection: $draft.taskID) {
-                Text(L("不关联", "None")).tag(nil as UUID?)
-                ForEach(tasks.filter { $0.deletedAt == nil || $0.id == draft.taskID }.sorted { $0.createdAt > $1.createdAt }) { Text($0.title).tag(Optional($0.id)) }
-                if let id = draft.taskID, !tasks.contains(where: { $0.id == id }) { Text(L("原任务已删除", "Original task removed")).tag(Optional(id)) }
-            }.labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
-        }.padding(12).background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
+        FinanceEntryDetails(compact: compact, recent: recentTags, tasks: tasks,
+                            notes: $draft.notes, tags: $draft.tags, taskID: $draft.taskID,
+                            focus: $focus, notesFocus: Field.notes, tagsFocus: Field.tags, addTag: addTag)
     }
 
-    private func fieldTitle(_ title: String, _ hint: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.callout.weight(.medium))
-            Text(hint).font(.caption).foregroundStyle(.secondary)
-        }
-    }
     private static func splitTags(_ text: String) -> [String] {
         text.split(whereSeparator: { ",，、".contains($0) }).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
@@ -517,33 +452,9 @@ struct FinanceEntryEditor: View {
     }
     private var amountRow: some View {
         let value = Money.evaluate(expression, currency: draft.currency, signed: signedAmount)
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(L("金额", "Amount")).foregroundStyle(.secondary)
-                Menu {
-                    CurrencyChoices { draft.currency = $0 }
-                } label: { Text(Money.symbol(draft.currency)) }
-                    .menuStyle(.borderlessButton).fixedSize()
-                    .disabled(draft.kind == .refund || draft.kind == .adjustment || draft.kind == .transfer)
-                    .help(L("币种", "Currency"))
-                TextField("0.00", text: $expression)
-                    .font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
-                    .textFieldStyle(.plain).focused($focus, equals: .amount)
-                    .accessibilityLabel(L("金额，可输入加减算式", "Amount, addition and subtraction supported"))
-                    #if os(iOS)
-                    .keyboardType(signedAmount ? .numbersAndPunctuation : .decimalPad)
-                    #endif
-                if expression.contains(where: { $0 == "+" || $0 == "−" || $0 == "-" }) && expression.count > 1, let value {
-                    Text("= " + Money.format(value, draft.currency)).font(.callout).foregroundStyle(.secondary).monospacedDigit()
-                }
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(L("备注", "Note")).font(.caption).foregroundStyle(.secondary)
-                TextField(L("可不填", "Optional"), text: $draft.title)
-                    .textFieldStyle(.plain).focused($focus, equals: .title).frame(minHeight: compact ? 44 : nil)
-                    .accessibilityLabel(L("备注", "Note"))
-            }
-        }
+        return FinanceEntryAmount(compact: compact, kind: draft.kind, signedAmount: signedAmount, value: value,
+                                  currency: $draft.currency, expression: $expression, title: $draft.title,
+                                  focus: $focus, amountFocus: Field.amount, titleFocus: Field.title)
     }
     private var chips: some View {
         // Every required choice stays visible on a phone. Large text uses one column.

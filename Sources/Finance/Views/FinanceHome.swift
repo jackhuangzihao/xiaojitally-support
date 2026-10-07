@@ -207,22 +207,10 @@ struct FinanceHome: View {
     }
 
     private var phonePages: some View {
-        let active = accountDetailID == nil ? selection : "accounts"
-        return (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 4)) : AnyLayout(HStackLayout(spacing: 4))) {
-            ForEach([("all", L("账单", "Entries")), ("stats", L("统计", "Statistics")), ("accounts", L("资产", "Assets"))], id: \.0) { key, title in
-                Button {
-                    accountDetailID = nil
-                    selection = key
-                } label: {
-                    Text(title).font(.subheadline.weight(active == key ? .semibold : .regular))
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(active == key ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 9))
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain).foregroundStyle(active == key ? Color.accentColor : .secondary)
-                    .accessibilityAddTraits(active == key ? [.isSelected] : [])
-            }
-        }.padding(4).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal, 16).padding(.vertical, 6)
+        FinancePageTabs(active: accountDetailID == nil ? selection : "accounts", dynamicTypeSize: dynamicTypeSize) { key in
+            accountDetailID = nil
+            selection = key
+        }
     }
 
     private var pageIdentity: String {

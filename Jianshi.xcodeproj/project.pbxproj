@@ -92,6 +92,23 @@
 		1E7F02EA1078F7BC20150267 /* FinanceFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2805AA7E6CA787A28442C9D1 /* FinanceFixture.swift */; };
 		C8A4421D42D5A95A5B412796 /* PerformanceChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97CB8082C083478226324B4 /* PerformanceChecks.swift */; };
 		13FBE72DA2E94973698043FD /* SandboxChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37BA96BCB4184ABA11F2F9F0 /* SandboxChecks.swift */; };
+		0C15C6D709C4807A7FA4AD12 /* MacWorkspaceSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C2FD486E66777EC419AD65 /* MacWorkspaceSidebar.swift */; };
+		1D9F67C7275F384911D9610B /* AgendaDatePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD458C46885A8B46F59FC00 /* AgendaDatePicker.swift */; };
+		DE9BB4DEC16795014647B6C9 /* AgendaTimelineRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA4E13C55D027E1ED248249 /* AgendaTimelineRows.swift */; };
+		523ECEDF34E7EFE1C7D4B363 /* WeekTaskAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3C2A7A0FAEC0FA1A519BBD5 /* WeekTaskAppearance.swift */; };
+		13FC6F37EB7ABE62247DBE30 /* FinanceEntrySections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76EC0FD76D1F728327919FEB /* FinanceEntrySections.swift */; };
+		32CCA85C74E9A02182448A14 /* FinanceStatisticsCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 278C9DF6A8E7D6BEA4D42C85 /* FinanceStatisticsCharts.swift */; };
+		A269E543FF2E6342B9EC07C2 /* FinanceStatisticsRanking.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3C335AA3657DAF6A938A395 /* FinanceStatisticsRanking.swift */; };
+		66380285BEC77DB4D1EFB516 /* CloudMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D764A9DF4389638A6F25F73C /* CloudMerge.swift */; };
+		89D3B66B241D919F263D772B /* CloudSyncSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */; };
+		4AD3CCE31A4450FEFAC413C0 /* CalendarChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F152FB33F53E0AE69B6B588 /* CalendarChecks.swift */; };
+		14B146919FD9C6EE8B079F01 /* CalendarDragChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8725C0A890E6720183086FE3 /* CalendarDragChecks.swift */; };
+		F33A2EE57F6B425DFDB090C3 /* FinanceConversionChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B7C2B371FD3AAA9AD38395 /* FinanceConversionChecks.swift */; };
+		7DDC792CCD0B156C42C00E52 /* FinanceDataChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4D2D4F287F99283011DBE8A /* FinanceDataChecks.swift */; };
+		CCF6156930A8DD3D24D2818F /* FinancePostingChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 543C32B7D889132FA50EC172 /* FinancePostingChecks.swift */; };
+		7DD06E8FEC3F9167136904AA /* StorageChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C9D751F6DBA738D278EA05 /* StorageChecks.swift */; };
+		49CE29AF22F09F9FF3DB4627 /* SyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */; };
+		5EF967BA40959D15C918405F /* TaskLifecycleChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -181,6 +198,23 @@
 		2805AA7E6CA787A28442C9D1 /* FinanceFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceFixture.swift"; sourceTree = "<group>"; };
 		C97CB8082C083478226324B4 /* PerformanceChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PerformanceChecks.swift"; sourceTree = "<group>"; };
 		37BA96BCB4184ABA11F2F9F0 /* SandboxChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SandboxChecks.swift"; sourceTree = "<group>"; };
+		A8C2FD486E66777EC419AD65 /* MacWorkspaceSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacWorkspaceSidebar.swift"; sourceTree = "<group>"; };
+		FFD458C46885A8B46F59FC00 /* AgendaDatePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AgendaDatePicker.swift"; sourceTree = "<group>"; };
+		DBA4E13C55D027E1ED248249 /* AgendaTimelineRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AgendaTimelineRows.swift"; sourceTree = "<group>"; };
+		E3C2A7A0FAEC0FA1A519BBD5 /* WeekTaskAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WeekTaskAppearance.swift"; sourceTree = "<group>"; };
+		76EC0FD76D1F728327919FEB /* FinanceEntrySections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceEntrySections.swift"; sourceTree = "<group>"; };
+		278C9DF6A8E7D6BEA4D42C85 /* FinanceStatisticsCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceStatisticsCharts.swift"; sourceTree = "<group>"; };
+		E3C335AA3657DAF6A938A395 /* FinanceStatisticsRanking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceStatisticsRanking.swift"; sourceTree = "<group>"; };
+		D764A9DF4389638A6F25F73C /* CloudMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudMerge.swift"; sourceTree = "<group>"; };
+		F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudSyncSettings.swift"; sourceTree = "<group>"; };
+		7F152FB33F53E0AE69B6B588 /* CalendarChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarChecks.swift"; sourceTree = "<group>"; };
+		8725C0A890E6720183086FE3 /* CalendarDragChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarDragChecks.swift"; sourceTree = "<group>"; };
+		F6B7C2B371FD3AAA9AD38395 /* FinanceConversionChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceConversionChecks.swift"; sourceTree = "<group>"; };
+		F4D2D4F287F99283011DBE8A /* FinanceDataChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceDataChecks.swift"; sourceTree = "<group>"; };
+		543C32B7D889132FA50EC172 /* FinancePostingChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinancePostingChecks.swift"; sourceTree = "<group>"; };
+		84C9D751F6DBA738D278EA05 /* StorageChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StorageChecks.swift"; sourceTree = "<group>"; };
+		FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SyncChecks.swift"; sourceTree = "<group>"; };
+		80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TaskLifecycleChecks.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -224,6 +258,7 @@
 				3942375FA742DF3118EB9358 /* ContentView.swift */,
 				409429BC56A1F8EC216589F3 /* EditorState.swift */,
 				F28810CE4BC64398FE1CAEBC /* JianshiApp.swift */,
+				A8C2FD486E66777EC419AD65 /* MacWorkspaceSidebar.swift */,
 				FAEC9F8C38AFD674A3766645 /* MoveFeedback.swift */,
 				E4104323C289B2C61A6EC052 /* PreferencesView.swift */,
 				3530F46FAC4328FCDA3AE4D5 /* SidebarDrag.swift */,
@@ -237,6 +272,8 @@
 			isa = PBXGroup;
 			children = (
 				5079A40B23B64D347989B860 /* Drag */,
+				FFD458C46885A8B46F59FC00 /* AgendaDatePicker.swift */,
+				DBA4E13C55D027E1ED248249 /* AgendaTimelineRows.swift */,
 				56020032BB1E00843F669B0E /* AgendaView.swift */,
 				9DC546B15A3472FE375D1741 /* CalendarDetails.swift */,
 				22B6F847AC085BD71F9C00C6 /* CalendarGrid.swift */,
@@ -245,6 +282,7 @@
 				ED59A26F307AF399FFB46CEA /* CalendarPresentation.swift */,
 				C7DC88B36057905F380D69A4 /* DayTimeline.swift */,
 				653376381047FD6CB3C88190 /* MonthView.swift */,
+				E3C2A7A0FAEC0FA1A519BBD5 /* WeekTaskAppearance.swift */,
 				AB191DCE5B285E5CFC687FD2 /* WeekView.swift */,
 			);
 			path = Calendar;
@@ -306,12 +344,20 @@
 			isa = PBXGroup;
 			children = (
 				02F03F47EAB39486A45BAE9D /* Fixtures */,
+				7F152FB33F53E0AE69B6B588 /* CalendarChecks.swift */,
+				8725C0A890E6720183086FE3 /* CalendarDragChecks.swift */,
 				E5BE043B38F7E9CFAF90FE98 /* CalendarGridChecks.swift */,
 				5062033C7173C815D6945F49 /* EditingChecks.swift */,
 				1BC53E8867C679F14AD33165 /* FinanceChecks.swift */,
+				F6B7C2B371FD3AAA9AD38395 /* FinanceConversionChecks.swift */,
+				F4D2D4F287F99283011DBE8A /* FinanceDataChecks.swift */,
+				543C32B7D889132FA50EC172 /* FinancePostingChecks.swift */,
 				C97CB8082C083478226324B4 /* PerformanceChecks.swift */,
 				37BA96BCB4184ABA11F2F9F0 /* SandboxChecks.swift */,
 				947DDE6F11D0E1FF1D48198C /* SelfCheck.swift */,
+				84C9D751F6DBA738D278EA05 /* StorageChecks.swift */,
+				FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */,
+				80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */,
 			);
 			path = Validation;
 			sourceTree = "<group>";
@@ -359,6 +405,7 @@
 			children = (
 				7C335A8F310D44605E0548AA /* FinanceEntityEditor.swift */,
 				96BF8223B6409869BF2F506B /* FinanceEntryEditor.swift */,
+				76EC0FD76D1F728327919FEB /* FinanceEntrySections.swift */,
 				4E3C55EE0283E3FAA023FCA5 /* FinanceRateEditor.swift */,
 			);
 			path = Editors;
@@ -373,6 +420,8 @@
 				C7317B9D598A90FF20610C37 /* FinanceManagement.swift */,
 				1270A3A3F34F37E32DA66A61 /* FinanceNavigation.swift */,
 				48289D9B105C1348F2470077 /* FinancePendingEntries.swift */,
+				278C9DF6A8E7D6BEA4D42C85 /* FinanceStatisticsCharts.swift */,
+				E3C335AA3657DAF6A938A395 /* FinanceStatisticsRanking.swift */,
 				7A12D6250201FCEF055E9769 /* FinanceStatisticsView.swift */,
 			);
 			path = Views;
@@ -391,7 +440,9 @@
 		969B7838EE9CE3D3C9573CE9 /* Sync */ = {
 			isa = PBXGroup;
 			children = (
+				D764A9DF4389638A6F25F73C /* CloudMerge.swift */,
 				EBFC656CEDD94E3B720F20C3 /* CloudSync.swift */,
+				F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */,
 				C5F1D85FC27BE5FEC9B39282 /* SyncChanges.swift */,
 			);
 			path = Sync;
@@ -589,6 +640,23 @@
 				1E7F02EA1078F7BC20150267 /* FinanceFixture.swift in Sources */,
 				C8A4421D42D5A95A5B412796 /* PerformanceChecks.swift in Sources */,
 				13FBE72DA2E94973698043FD /* SandboxChecks.swift in Sources */,
+				0C15C6D709C4807A7FA4AD12 /* MacWorkspaceSidebar.swift in Sources */,
+				1D9F67C7275F384911D9610B /* AgendaDatePicker.swift in Sources */,
+				DE9BB4DEC16795014647B6C9 /* AgendaTimelineRows.swift in Sources */,
+				523ECEDF34E7EFE1C7D4B363 /* WeekTaskAppearance.swift in Sources */,
+				13FC6F37EB7ABE62247DBE30 /* FinanceEntrySections.swift in Sources */,
+				32CCA85C74E9A02182448A14 /* FinanceStatisticsCharts.swift in Sources */,
+				A269E543FF2E6342B9EC07C2 /* FinanceStatisticsRanking.swift in Sources */,
+				66380285BEC77DB4D1EFB516 /* CloudMerge.swift in Sources */,
+				89D3B66B241D919F263D772B /* CloudSyncSettings.swift in Sources */,
+				4AD3CCE31A4450FEFAC413C0 /* CalendarChecks.swift in Sources */,
+				14B146919FD9C6EE8B079F01 /* CalendarDragChecks.swift in Sources */,
+				F33A2EE57F6B425DFDB090C3 /* FinanceConversionChecks.swift in Sources */,
+				7DDC792CCD0B156C42C00E52 /* FinanceDataChecks.swift in Sources */,
+				CCF6156930A8DD3D24D2818F /* FinancePostingChecks.swift in Sources */,
+				7DD06E8FEC3F9167136904AA /* StorageChecks.swift in Sources */,
+				49CE29AF22F09F9FF3DB4627 /* SyncChecks.swift in Sources */,
+				5EF967BA40959D15C918405F /* TaskLifecycleChecks.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

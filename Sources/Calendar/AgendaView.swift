@@ -125,77 +125,19 @@ extension ContentView {
         }
     }
 
-    private var calendarPanel: some View {
-        let active = tasks.filter { $0.deletedAt == nil }
-        // The dot counts what is still to do; a day whose tasks are all finished keeps a hollow dot.
-        let days = weekOnly ? Dates.weekCells(selectedDate) : Dates.monthCells(selectedDate)
-        let byDay = CalendarIndex.byDay(active, days: days)
-        let counts = byDay.mapValues { $0.filter { !$0.isDone }.count }
-        let planned = Set(byDay.filter { !$0.value.isEmpty }.keys)
-        return VStack(alignment: .leading, spacing: 12) {
-            dateNavigator
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7), spacing: 2) {
-                ForEach(Array(Dates.weekdays.enumerated()), id: \.offset) { _, day in
-                    Text(day).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.bottom, 8)
-                }
-                ForEach(days, id: \.self) { date in
-                    dayCell(date, count: counts[date] ?? 0, planned: planned.contains(date))
-                }
-            }
-            if !isPhone || !weekOnly {
-                let range = Dates.calendar.dateInterval(of: .month, for: selectedDate)!
-                let monthTasks = active.filter { $0.overlaps(range) }
-                Text(L("本月 \(monthTasks.count) 项 · 已完成 \(monthTasks.filter(\.isDone).count) 项", "This month: \(monthTasks.count) · Completed: \(monthTasks.filter(\.isDone).count)"))
-                    .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
-            }
-            if !isPhone && !overdueTasks.isEmpty { overdueSection(overdueTasks) }
-        }.onChange(of: selectedDate) { _, _ in search = "" }
-    }
+    private var calendarPanel: some View { agendaDatePicker(compact: false) }
 
-    private func dayCell(_ date: Date, count: Int, planned: Bool) -> some View {
-        let selected = Dates.sameDay(date, selectedDate)
-        let today = Dates.sameDay(date, currentDay)
-
-        let inMonth = Dates.calendar.isDate(date, equalTo: selectedDate, toGranularity: .month)
-        if !isPhone && !weekOnly && !inMonth { return AnyView(Color.clear.frame(maxWidth: .infinity, minHeight: 44).accessibilityHidden(true)) }
-        return AnyView(Button {
-            if let id = assigning { assign(id, to: date) } else { selectedDate = date; wholeMonth = false }
-        } label: {
-            // Style each piece directly: inside an iOS List row the container's style is not inherited.
-            let ink = selected ? Color.selectedInk : inMonth ? Color.primary : Color.secondary
-            VStack(spacing: 4) {
-                Text("\(Dates.calendar.component(.day, from: date))").font(.body.monospacedDigit()).foregroundStyle(ink)
-                    .lineLimit(1).minimumScaleFactor(0.8)
-                HStack(spacing: 3) {
-                    if count > 0 {
-                        Circle().fill(ink).frame(width: 4, height: 4)
-                        Text("\(count)").font(.caption2).foregroundStyle(ink)
-                    } else {
-                        Circle().strokeBorder(ink, lineWidth: 1).frame(width: 4, height: 4).opacity(0.7)
-                    }
-                }.opacity(count > 0 || planned ? 1 : 0)
-            }
-            .frame(maxWidth: .infinity, minHeight: isPhone ? min(60, max(48, calendarDayHeight)) : 44)
-            .background(selected ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 12))
-            .overlay { if today { RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 1) } }
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain)
-            .contextMenu {
-                if copiedTask != nil {
-                    Button(L("粘贴到这一天…", "Paste on this day…")) { preparePaste(on: date) }
-                    Button(L("粘贴为全天任务…", "Paste as all-day task…")) { preparePaste(on: date, allDay: true) }
-                }
-            }
-            .accessibilityLabel(L("\(Dates.label(date))，\(count)项未完成\(count == 0 && planned ? "，全部已完成" : "")\(today ? "，今天" : "")", "\(Dates.label(date)), \(count) unfinished\(count == 0 && planned ? ", all done" : "")\(today ? ", today" : "")"))
-            .accessibilityAddTraits(selected ? .isSelected : [])
-            .help(L("实心圆点是未完成的任务，空心代表当天已全部完成；描边代表今天。可拖动任务到这里改期。", "A solid dot counts unfinished tasks, a hollow one means all done; the outline marks Today. Drop a task here to reschedule."))
-            .dayDrop(warn: { id in tasks.first { $0.id == id }?.deadlineConflict(movingTo: date) == true }) { values in
-                guard values.count == 1, values[0].hasPrefix("jianshi-task:"), let id = UUID(uuidString: String(values[0].dropFirst(13))),
-                      let task = tasks.first(where: { $0.id == id && $0.deletedAt == nil }) else { return false }
-                requestMove(task, to: date, kind: .day, revealDate: date)
-                return true
-            }
-        )
+    private func agendaDatePicker(compact: Bool) -> some View {
+        AgendaDatePicker(tasks: tasks, selectedDate: selectedDate, currentDay: currentDay,
+                         weekOnly: weekOnly, isPhone: isPhone, compact: compact, calendarDayHeight: calendarDayHeight,
+                         canPaste: copiedTask != nil, showOverdue: !overdueTasks.isEmpty,
+                         selectDate: { date in
+                             if let id = assigning { assign(id, to: date) } else { selectedDate = date; wholeMonth = false }
+                         }, paste: { date, allDay in preparePaste(on: date, allDay: allDay) },
+                         move: { task, date in requestMove(task, to: date, kind: .day, revealDate: date) },
+                         selectedDateChanged: { search = "" }, navigator: {
+                             if compact { dateNavigator.taskDragPage(onStep: stepPeriod) } else { dateNavigator }
+                         }, overdue: { overdueSection(overdueTasks) })
     }
 
     private var taskHeader: some View {
@@ -258,39 +200,7 @@ extension ContentView {
     }
 
     #if os(iOS)
-    private var phoneCalendarRows: some View {
-        let active = tasks.filter { $0.deletedAt == nil }
-        let days = Dates.monthCells(selectedDate)
-        let byDay = CalendarIndex.byDay(active, days: days)
-        let selectedWeek = Dates.weekCells(selectedDate)[0]
-        let weeks = stride(from: 0, to: days.count, by: 7).map { days[$0] }
-        return Group {
-            dateNavigator.taskDragPage(onStep: stepPeriod)
-            HStack(spacing: 0) {
-                ForEach(Array(Dates.weekdays.enumerated()), id: \.offset) { _, day in
-                    Text(day).font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
-                }
-            }.padding(.top, 6)
-            // Keep date destinations above the task list while dragging. The selected
-            // week retains its identity when the month is expanded or collapsed.
-            ForEach(weekOnly ? weeks.filter { $0 == selectedWeek } : weeks, id: \.self) { start in
-                HStack(spacing: 0) {
-                    ForEach(Dates.weekCells(start), id: \.self) { date in
-                        let items = byDay[date] ?? []
-                        dayCell(date, count: items.filter { !$0.isDone }.count, planned: !items.isEmpty)
-                    }
-                }.padding(.vertical, 1)
-            }
-            if !weekOnly {
-                let range = Dates.calendar.dateInterval(of: .month, for: selectedDate)!
-                let items = active.filter { $0.overlaps(range) }
-                Text(L("本月 \(items.count) 项 · 已完成 \(items.filter(\.isDone).count) 项", "This month: \(items.count) · Completed: \(items.filter(\.isDone).count)"))
-                    .font(.caption).foregroundStyle(.secondary).padding(.top, 8)
-            }
-        }
-        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .onChange(of: selectedDate) { _, _ in search = "" }
-    }
+    private var phoneCalendarRows: some View { agendaDatePicker(compact: true) }
 
     private var iosTaskList: some View {
         ScrollViewReader { proxy in
@@ -409,133 +319,38 @@ extension ContentView {
         selection == .calendar && wholeMonth && !searchingCalendar
     }
 
-    @ViewBuilder private var monthAgendaRows: some View {
-        if visibleTasks.isEmpty {
-            ContentUnavailableView(L("本月暂无安排", "No plans this month"), systemImage: "calendar")
-        }
-        ForEach(groups, id: \.date) { group in
-            Section {
-                ForEach(group.tasks) { task in dayTimelineTask(task, timed: false, showTime: true) }
-            } header: {
-                HStack {
-                    Text(Dates.groupLabel(group.date, today: currentDay))
-                    Spacer()
-                    Text(L("\(group.tasks.count) 项", "\(group.tasks.count) tasks"))
-                }.font(.caption).foregroundStyle(.secondary).padding(.top, 8)
-            }
+    private var monthAgendaRows: some View {
+        MonthAgendaRows(groups: groups, isEmpty: visibleTasks.isEmpty, currentDay: currentDay) { task in
+            dayTimelineTask(task, timed: false, showTime: true)
         }
     }
 
-    /// Individual rows are retained by iOS List and Mac LazyVStack. Detail expansion belongs
-    /// to DayTimelineCard, so opening notes does not recompute the calendar or schedule.
     private var dayTimelineRows: some View {
-        let items = visibleTasks
-        let active = items.filter { !$0.isDone }
-        let pending = active.filter { $0.clockDate == nil }
-        let completed = items.filter(\.isDone)
-        let schedule = DaySchedule(active, day: selectedDate, occupying: tasks)
-        let timed = schedule.clusters.flatMap { $0 }
-        let gaps = Dictionary(uniqueKeysWithValues: schedule.clusters.enumerated().compactMap { index, cluster -> (UUID, Int)? in
-            guard let first = cluster.first, let gap = schedule.gaps[index] else { return nil }
-            return (first.id, gap)
-        })
-        let overlaps = Dictionary(uniqueKeysWithValues: schedule.clusters.compactMap { cluster -> (UUID, String)? in
-            guard cluster.count > 1, let first = cluster.first else { return nil }
-            return (first.id, overlapLabel(cluster, day: selectedDate))
-        })
-        return Group {
-            ForEach(timed) { task in
-                dayTimelineTask(task, timed: true,
-                                gap: showDayFreeTime ? gaps[task.id] : nil, overlap: overlaps[task.id])
-            }
-            if !pending.isEmpty {
-                Text(L("时间待定 · \(pending.count)", "Time to be set · \(pending.count)"))
-                    .font(.caption).foregroundStyle(.secondary).padding(.top, timed.isEmpty ? 0 : 10)
-                ForEach(pending) { task in dayTimelineTask(task, timed: false) }
-            }
-            if active.isEmpty {
-                ContentUnavailableView {
-                    Label(items.isEmpty ? L("留给你安排", "Room for your plans") : L("当天任务已完成", "All done for this day"),
-                          systemImage: items.isEmpty ? "sun.max" : "checkmark.circle")
-                } description: {
-                    Text(items.isEmpty ? L("添加一件想做的事，慢慢完成。", "Add something you want to do.") : L("已完成的任务收在下方，随时可以查看。", "You can review completed tasks below."))
-                } actions: {
-                    if isPhone && items.isEmpty && tasks.isEmpty {
-                        Button(action: addTask) {
-                            Label(L("添加第一个任务", "Add your first task"), systemImage: "plus").frame(minHeight: 44)
-                        }.buttonStyle(.borderedProminent)
-                    }
-                }
-            }
-            if !completed.isEmpty {
-                DisclosureGroup(isExpanded: $dayCompletedExpanded) {
-                    ForEach(completed) { task in dayTimelineTask(task, timed: task.clockDate != nil) }
-                } label: {
-                    Label(L("已完成 · \(completed.count)", "Completed · \(completed.count)"), systemImage: "checkmark.circle")
-                        .font(.subheadline).foregroundStyle(.secondary).frame(minHeight: 44)
-                }.padding(.top, 6)
-            }
-            if !isPhone {
-                Button(action: addTask) {
-                    Label(L("添加任务", "Add task"), systemImage: "plus").frame(minHeight: 44)
-                }.buttonStyle(.borderless)
-            }
+        DayAgendaRows(items: visibleTasks, occupying: tasks, selectedDate: selectedDate,
+                      isPhone: isPhone, showDayFreeTime: showDayFreeTime,
+                      dayCompletedExpanded: $dayCompletedExpanded, addTask: addTask) { task, layout in
+            dayTimelineTask(task, timed: layout.timed, gap: layout.gap, overlap: layout.overlap)
         }
     }
 
     private func dayTimelineTask(_ task: TaskItem, timed: Bool, showTime: Bool = false,
                                  gap: Int? = nil, overlap: String? = nil) -> some View {
-        let accessiblePhone = isPhone && dynamicTypeSize.isAccessibilitySize
-        let layout = accessiblePhone
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
-        // Exactly one List row per task, even when free-time/overlap labels are shown.
-        // Variable row counts make List eagerly construct offscreen task content.
-        return VStack(alignment: .leading, spacing: 10) {
-            if let gap { freeRow(gap) }
-            if let overlap {
-                Label(overlap, systemImage: "arrow.triangle.merge")
-                    .font(.caption).foregroundStyle(.orange)
-                    .padding(.leading, min(dayTimeWidth, 78) + 16)
-            }
-            layout {
-                if timed, let clock = task.clockDate {
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Text(Dates.sameDay(clock, selectedDate) ? Dates.label(clock, pattern: "HH:mm") : "00:00")
-                            .font(.callout.weight(.medium))
-                        if let end = task.endAt {
-                            Text(Dates.sameDay(end, selectedDate) ? Dates.label(end, pattern: "HH:mm") : "24:00")
-                                .font(.caption).foregroundStyle(.secondary)
-                        } else {
-                            Text(task.scheduledAt == nil ? L("截止", "Due") : L("开始", "Start"))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        if !Dates.sameDay(clock, selectedDate) {
-                            Text(L("续前日", "Continued")).font(.caption2).foregroundStyle(.secondary)
-                        } else if let end = task.endAt, !Dates.sameDay(end, selectedDate), Dates.calendar.startOfDay(for: end) < end {
-                            Text(L("跨日", "Overnight")).font(.caption2).foregroundStyle(.secondary)
-                        }
-                    }.monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
-                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                        .frame(width: accessiblePhone ? nil : min(dayTimeWidth, 78), alignment: .trailing)
-                        .padding(.top, accessiblePhone ? 0 : 14)
-                        .accessibilityElement(children: .ignore).accessibilityLabel(task.timeLabel)
-                }
-                DayTimelineCard(task: task, compact: isPhone, showTime: showTime,
-                                onComplete: { toggleCompletion(task) },
-                                onEdit: { editor = EditorRequest(task: task) },
-                                onCopy: { copyTask(task) },
-                                onDelete: { confirmingDelete = task.id },
-                                onRemindNow: { remindNow(task) },
-                                onToggleSubtask: { id in
-                                    _ = commit {
-                                        var updated = task.subtasks
-                                        if let index = updated.firstIndex(where: { $0.id == id }) {
-                                            updated[index].isDone.toggle(); task.subtasks = updated
-                                        }
+        AgendaTaskLayout(task: task, selectedDate: selectedDate, timed: timed, dayTimeWidth: dayTimeWidth,
+                         accessiblePhone: isPhone && dynamicTypeSize.isAccessibilitySize, gap: gap, overlap: overlap) {
+            DayTimelineCard(task: task, compact: isPhone, showTime: showTime,
+                            onComplete: { toggleCompletion(task) },
+                            onEdit: { editor = EditorRequest(task: task) },
+                            onCopy: { copyTask(task) },
+                            onDelete: { confirmingDelete = task.id },
+                            onRemindNow: { remindNow(task) },
+                            onToggleSubtask: { id in
+                                _ = commit {
+                                    var updated = task.subtasks
+                                    if let index = updated.firstIndex(where: { $0.id == id }) {
+                                        updated[index].isDone.toggle(); task.subtasks = updated
                                     }
-                                })
-            }
+                                }
+                            })
         }
         .id(task.id)
         .contextMenu { taskMenu(task) }
@@ -550,21 +365,6 @@ extension ContentView {
             Button(role: .destructive) { confirmingDelete = task.id } label: { Label(L("删除", "Delete"), systemImage: "trash") }
         }
         #endif
-    }
-
-    private func overlapLabel(_ items: [TaskItem], day: Date) -> String {
-        let title = L("\(items.count) 项时间重叠", "\(items.count) overlap")
-        guard let span = DaySchedule.span(items, day: day) else { return title }
-        let end = span.end == 1440 ? "24:00" : CalendarGridStyle.clockLabel(span.end)
-        let range = CalendarGridStyle.clockLabel(span.start) + "–" + end
-        let duration = Dates.durationLabel(minutes: span.end - span.start)
-        return title + " · " + range + L(" · 共占用 \(duration)", " · \(duration) total")
-    }
-
-    /// Align free-time summaries with the cards rather than the time rail.
-    private func freeRow(_ minutes: Int) -> some View {
-        Text(L("空闲 ", "Free ") + Dates.durationLabel(minutes: minutes)).font(.caption).foregroundStyle(.tertiary)
-            .padding(.leading, min(dayTimeWidth, 78) + 16).padding(.vertical, 4)
     }
 
 }

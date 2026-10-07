@@ -229,18 +229,28 @@ python3 Checks/check_release_bundle.py /path/to/小记.app \
 | [Sources/Validation](Sources/Validation) | 功能、财务、编辑冲突检查；`Fixtures/` 放界面样例，`PerformanceChecks` 和 `SandboxChecks` 放现有专项检查；使用合成数据 |
 | [Checks](Checks) | 统一检查入口、工程引用检查、发布包检查及冻结旧库 |
 
+第二阶段将可独立显示的区域改为明确的输入、Binding 和操作回调，并将大型自检入口按原场景顺序提取。当前主应用共 98 个 Swift 文件；没有增加编译模块、依赖或持久化模型。动手前的独立回退点为 `before-source-phase2-20261008`（`5002b8f`），对应 Git bundle 保存在工作区 `开发备份/源码第二阶段前-20261008`。
+
+第二阶段完整 14 阶段检查通过：Mac 1,584 项、iOS 模拟器 1,497 项，财务 494 项和同步／存储 204 项的数量与拆分前一致。Mac 双架构、iPhone 设备与模拟器编译、包检查、52／68 冻结旧库迁移、账户币种及 5,000 项数据性能检查通过，无源代码编译警告。证据与界面抽查范围见工作区 `检查证据/源码第二阶段-20261008`；这不代表已测量真机帧率或真实双设备同步。
+
 ### 如何找修改位置
 
 - 修改任务编辑页面：`Tasks/Editor/TaskEditor.swift` 是入口；同目录的 `TaskEditorSchedule` 管日期和重复选项，`TaskEditorFinance` 管附带账单，`TaskEditorSuggestions` 管历史建议，`TaskEditorPersistence` 管草稿与保存。
 - 修改日历某种显示：先找 `Calendar/AgendaView`、`WeekView`、`MonthView`，公共导航和详情分别在 `CalendarNavigation`、`CalendarDetails`。任务变更入口在 `Tasks/TaskActions`。
+- 修改侧栏、日期区或时间线外观：分别找 `App/MacWorkspaceSidebar`、`Calendar/AgendaDatePicker`、`Calendar/AgendaTimelineRows`；周任务外观在 `Calendar/WeekTaskAppearance`。显示组件不保存业务数据，仍通过原窗口或周视图的操作入口变更任务。
 - 修改财务某一页：先找 `Finance/Views` 的 `FinanceEntries`、`FinanceStatisticsView`、`FinanceAssets`、`FinanceManagement`；基础账本操作在 `Finance/Data/FinanceData`，校验、汇率和示例操作在同目录的 `FinanceData+Validation`、`FinanceData+Rates`、`FinanceData+Samples`，统计规则在 `FinanceStatistics`，不要在页面另写一份规则。
+- 修改账单编辑区域：`Finance/Editors/FinanceEntryEditor` 继续拥有草稿、焦点、联动和保存；`FinanceEntrySections` 显示金额、备注、标签、关联任务与分类。统计图表和分类排行分别在 `FinanceStatisticsCharts`、`FinanceStatisticsRanking`，查询和下钻导航仍由页面协调。
 - 修改存储：任务仍通过 `Storage/Store` 保存，财务通过 `Finance/Data/FinanceStore` 读写同一存储；文件整理没有改变模型名称、云端格式或数据位置。
+- 修改同步：`Storage/Sync/CloudSync` 拥有运行状态、缓存与网络操作，`CloudMerge` 保存原合并规则，`CloudSyncSettings` 显示状态和核对入口，原有同步检查放在 `Validation/SyncChecks`。
+- 修改检查：`SelfCheck.run` 和 `FinanceChecks.run` 保留调用顺序及最终计数。日历、拖动、任务生命周期、存储、财务数据/折算/入账场景各在对应的 `*Checks` 文件里；场景显式接收 context、数据与断言闭包，不引入共享测试状态。连续操作的账本及临时目录清理仍由原入口负责。
 - 修改拖动：`Calendar/Drag/WeekDrag` 保留完整周拖动会话；显示和原生探针分别在 `WeekDragViews`、`WeekDragProbes`，其他日期翻页探针在 `TaskDragPaging`，落点计算在 `CalendarDropGeometry`。
 
 ### 拆分约定
 
 - `WeekCalendarView`、`MonthCalendarView` 是独立视图，各自私有持有拖动、弹层和重复预览缓存；周历还私有持有缩放状态。两者通过明确的只读输入、日期绑定和操作回调与窗口协调，不接收整个 `ContentView`。
 - `ContentView` 保留跨页面的所选日期、复制快照、定位请求、编辑入口、保存与撤销。跨页拖动成功保存后才更新页面计数，`CalendarPageIdentity` 保持已显示页面和滚动位置；普通翻页则更换页面身份。
+- 保存到拖动会话等长寿命对象的回调继续从状态所有者读取动态查询；不要把显示组件收到的数组快照保存为长期数据源。Mac 侧栏的 `configureDrag` 仅在原 `onAppear` 位置调用窗口的私有配置方法。
+- 日/月安排子视图保留 ForEach 身份和每任务一行的布局，详情展开仍由 `DayTimelineCard` 自己管理；显示组件观察既有语言偏好，不复制业务状态。编辑器组件直接使用原 FocusState 的 Binding，不能新建一份焦点或草稿。
 - 周/月日历退出、窗口打开其他编辑页或进入数据恢复保护时，`CalendarGridLifecycle` 关闭弹层并结束原生拖动监视；定位请求释放拖动保留的滚动位置。不要把清理放在会随翻页重建的内部网格上。
 - 日视图、`FinanceHome`、`TaskEditor` 的剩余跨文件扩展仍共享各自所有者。后续按真实修改需要逐项分离；组件化本身不保证改善帧率。
 - 跨文件确实需要使用的成员才采用模块内部访问；组件自己的状态与实现保持 `private`。视图输入优先使用只读值，只对确实需要双向联动的日期/改期选择使用 Binding。没有新增对外的 `public` 接口。
