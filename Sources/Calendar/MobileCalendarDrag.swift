@@ -1,6 +1,7 @@
 #if os(iOS)
 import SwiftUI
 import UIKit
+import OSLog
 
 /// A source only registers its visible bounds. The stable panel owns the touch from pickup
 /// through release, even when edge paging removes the original card from the hierarchy.
@@ -17,7 +18,10 @@ struct MobileCalendarDragSource: UIViewRepresentable {
         drag.mobileSources.add(view)
         return view
     }
-    func updateUIView(_ view: Probe, context: Context) { view.begin = begin }
+    func updateUIView(_ view: Probe, context: Context) {
+        view.begin = begin
+        drag.mobileSources.add(view)
+    }
     static func dismantleUIView(_ view: Probe, coordinator: ()) { view.begin = nil }
 
     static func contains(_ point: CGPoint, in panel: UIView, source: UIView) -> Bool {
@@ -63,13 +67,18 @@ struct MobileCalendarDrag: UIViewRepresentable {
         private var token: UUID?
         private var origin = CGPoint.zero
         private weak var picked: MobileCalendarDragSource.Probe?
+        private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Jianshi", category: "CalendarDrag")
         init(_ source: MobileCalendarDrag) { self.source = source }
 
         func attach() {
             guard let next = view?.window else { detach(); return }
-            guard next !== window else { press?.isEnabled = source.enabled; return }
+            guard next !== window else {
+                if press?.isEnabled != source.enabled { press?.isEnabled = source.enabled }
+                return
+            }
             detach()
             let press = UILongPressGestureRecognizer(target: self, action: #selector(changed(_:)))
+            press.name = "Calendar task drag"
             press.minimumPressDuration = 0.25
             press.allowableMovement = 10
             press.numberOfTouchesRequired = 1
@@ -85,12 +94,19 @@ struct MobileCalendarDrag: UIViewRepresentable {
             finish(commit: false)
         }
         func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let view, let touched = touch.view else { return false }
+            return prepare(at: touch.location(in: view), touching: touched)
+        }
+
+        /// Keep hit testing independent of UITouch so real hosted hierarchies can be checked.
+        func prepare(at point: CGPoint, touching touched: UIView) -> Bool {
+            picked = nil
             guard source.enabled, let view, view.window != nil else { return false }
-            origin = touch.location(in: view)
+            origin = point
             picked = source.drag.mobileSources.allObjects.compactMap { $0 as? MobileCalendarDragSource.Probe }
                 .first { $0.begin != nil && MobileCalendarDragSource.contains(origin, in: view, source: $0) }
             // Presented sheets/popovers must never start a drag in the calendar behind them.
-            guard let picked, let touched = touch.view else { return false }
+            guard let picked else { return false }
             var parent: UIView? = picked.superview
             while let candidate = parent, candidate !== window {
                 if touched === candidate || touched.isDescendant(of: candidate) { return true }
@@ -99,8 +115,18 @@ struct MobileCalendarDrag: UIViewRepresentable {
             self.picked = nil
             return false
         }
+        // A card's SwiftUI button and the calendar pan must wait for this source-scoped
+        // long press. A tap or ordinary scroll makes it fail immediately; holding picks up.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard source.enabled, picked != nil, gestureRecognizer === press,
+                  let otherView = otherGestureRecognizer.view, otherView !== window,
+                  !(otherGestureRecognizer is UIScreenEdgePanGestureRecognizer),
+                  !(otherGestureRecognizer is UIPinchGestureRecognizer) else { return false }
+            return true
+        }
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let view, let picked else { return false }
+            guard source.enabled, let view, let picked else { return false }
             return picked.begin != nil && MobileCalendarDragSource.contains(origin, in: view, source: picked)
         }
         @objc private func changed(_ press: UILongPressGestureRecognizer) {
@@ -111,6 +137,7 @@ struct MobileCalendarDrag: UIViewRepresentable {
                 begin(origin)
                 guard let id = source.drag.taskID else { return }
                 source.feedback.newPress(); source.feedback.begin(id); token = source.feedback.sessionID
+                Self.log.debug("Calendar touch drag began")
                 source.drag.move(to: press.location(in: view))
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 let ticker = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
@@ -139,6 +166,7 @@ struct MobileCalendarDrag: UIViewRepresentable {
             ticker?.invalidate(); ticker = nil; picked = nil
             guard let token else { return }
             self.token = nil
+            Self.log.debug("Calendar touch drag ended; commit: \(commit)")
             if source.feedback.sessionID == token {
                 if commit { source.drag.complete() } else { _ = source.drag.finish() }
                 source.feedback.end(session: token)

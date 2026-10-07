@@ -954,6 +954,45 @@ import SwiftData
             try rejects("shared update cannot bypass currency safety") { try FinanceStore.update(context) { $0.baseCurrency = "USD" } }
             try require(try FinanceStore.read(context) == before, "rejected currency switch never changes stored bytes")
         }
+        // Changing the asset display currency values the same balances, never re-denominates history.
+        do {
+            var ledger = FinanceData.initial
+            let cny = MoneyAccount(name: "Yuan", opening: 70)
+            let usd = MoneyAccount(name: "Dollar", currency: "USD", opening: 10)
+            let aud = MoneyAccount(name: "Australian dollar", currency: "AUD", opening: 20)
+            ledger.accounts = [cny, usd, aud]
+            ledger.rates = [MoneyRate(base: "USD", quote: "CNY", rate: 7, date: "2026-10-05"),
+                            MoneyRate(base: "AUD", quote: "CNY", rate: Decimal(string: "4.9")!, date: "2026-10-06")]
+            let original = ledger
+            try require(ledger.assetSummary(in: "USD").total == 34, "USD net worth includes CNY, USD and crossed AUD balances")
+            try require(ledger.assetSummary(in: "AUD").total == Decimal(string: "48.57"), "AUD net worth rounds only after aggregating all currencies")
+            try require(ledger.assetRate(from: "USD", to: "AUD")?.referenceDates == ["2026-10-05", "2026-10-06"], "crossed asset quotes retain both reference dates")
+            try require(ledger.assetSummary(in: "EUR").total == nil && ledger.assetSummary(in: "EUR").missingCurrencies == ["AUD", "CNY", "USD"], "unsupported display conversion stays incomplete rather than showing zero")
+            try require(ledger == original, "display conversions never mutate account balances, rates or posted entries")
+            ledger.rates.append(MoneyRate(base: "USD", quote: "AUD", rate: Decimal(string: "1.4")!, date: "2026-10-06"))
+            try require(ledger.assetRate(from: "USD", to: "AUD")?.rate == Decimal(string: "1.4") && ledger.assetRate(from: "USD", to: "AUD")?.referenceDates == ["2026-10-06"], "direct reference wins over an older crossed reference")
+            try ledger.setManualRate(from: "USD", to: "CNY", text: "7.7")
+            let crossed = ledger.assetRate(from: "USD", to: "AUD")
+            try require(crossed?.isManual == true && ledger.converted(10, from: "USD", to: "AUD") == Decimal(string: "15.71"), "manual valuation remains effective after changing asset display currency")
+            try require(crossed?.referenceDates == ["2026-10-06"], "mixed manual and reference quotes retain reference provenance")
+            try ledger.setManualRate(from: "USD", to: "AUD", text: "2")
+            try require(ledger.converted(10, from: "USD", to: "AUD") == 20, "explicit manual pair takes precedence over a crossed quote")
+            try require(ledger.storedRate(from: "AUD", to: "CNY")?.rate == Decimal(string: "4.9"), "manual display override does not rewrite other stored pairs")
+            ledger.removeManualRate(from: "USD", to: "AUD")
+            try require(ledger.storedRate(from: "USD", to: "AUD") == nil
+                        && ledger.storedRate(from: "USD", to: "CNY")?.isManual == true
+                        && ledger.assetRate(from: "USD", to: "AUD")?.isManual == true
+                        && ledger.converted(10, from: "USD", to: "AUD") == Decimal(string: "15.71"),
+                        "clearing one manual pair preserves other manual quotes and labels their crossed estimate")
+            let unused = MoneyAccount(name: "Unused")
+            ledger.accounts.append(unused)
+            try require(!ledger.accountHasHistory(unused.id), "new account currency remains editable")
+            var transfer = MoneyEntry(); transfer.kind = .transfer; transfer.accountID = cny.id; transfer.destinationID = unused.id; transfer.deletedAt = Date()
+            ledger.entries = [transfer]
+            try require(ledger.accountHasHistory(unused.id), "incoming transfer in trash protects the account denomination")
+            var changed = unused; changed.currency = "USD"
+            try rejects("currency editing cannot bypass archived incoming history") { try ledger.updateAccount(changed, expected: unused) }
+        }
         // Net worth aggregates each original currency before conversion, and never hides missing quotes.
         do {
             var ledger = FinanceData.initial

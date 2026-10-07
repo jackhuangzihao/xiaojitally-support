@@ -1,4 +1,5 @@
 import SwiftUI
+import OSLog
 import SwiftData
 import UniformTypeIdentifiers
 import Charts
@@ -151,6 +152,8 @@ struct FinanceHome: View {
     private var entryDefaultsKey: String {
         [scope, accountFilter?.uuidString ?? "", entryDefaults.book?.id.uuidString ?? "", entryDefaults.account?.id.uuidString ?? "", defaultEntriesCurrency].joined(separator: "/")
     }
+    /// Statistics and asset estimates share a display preference; posted amounts keep their original currency.
+    var reportingCurrency: String { Money.currencies.contains(statsCurrencyRaw) ? statsCurrencyRaw : data.baseCurrency }
     var entriesCurrency: String {
         selectedAccount?.currency ?? (Money.currencies.contains(entriesCurrencyRaw) ? entriesCurrencyRaw : defaultEntriesCurrency)
     }
@@ -311,10 +314,8 @@ struct FinanceHome: View {
         .sheet(item: $editor, onDismiss: reload) { request in FinanceEntryEditor(entry: request.entry, expected: request.expected) }
         .sheet(item: $entity, onDismiss: reload) { item in FinanceEntityEditor(kind: item.kind, id: item.existingID, income: item.income, parentID: item.parentID, data: data) }
         .sheet(item: $conversionRequest, onDismiss: reload) { request in FinanceConversionPreview(ledger: request.ledger) }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active && selection == "accounts" { Task { await refreshStaleAssetRates() } }
-        }
-        .sheet(isPresented: $showAssetRates, onDismiss: { reload(); if automaticRates { refreshRates() } }) { FinanceRateEditor(data: data) }
+        .onChange(of: scenePhase) { _, phase in resumeAssetRates(phase) }
+        .sheet(isPresented: $showAssetRates, onDismiss: { reload(); if automaticRates { refreshRates() } }) { FinanceRateEditor(data: data, currency: reportingCurrency) }
         .fileExporter(isPresented: $exporting, document: document, contentType: .commaSeparatedText, defaultFilename: "Tally-Ledger") { result in if case .failure(let failure) = result { error = failure.localizedDescription } }
         .alert(L("未完成操作", "Operation not completed"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(L("知道了", "OK"), role: .cancel) {} } message: { Text(error ?? "") }
         .confirmationDialog(deleteTitle, isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }), titleVisibility: .visible) {
@@ -446,13 +447,18 @@ extension FinanceHome {
                      "Removed \(result.entries) entries, \(result.accounts) accounts and \(result.books) books. Backup saved at \(file.path)")
         } catch { self.error = error.localizedDescription }
     }
+    private func resumeAssetRates(_ phase: ScenePhase) {
+        guard phase == .active, selection == "accounts" else { return }
+        Task { await refreshStaleAssetRates() }
+    }
+    private static let rateLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tally", category: "FinanceRates")
     func refreshRates() { Task { await updateAssetRates() } }
     @MainActor func updateAssetRates() async {
         guard !refreshing else { return }
         refreshing = true; rateRefreshError = nil
         defer { refreshing = false }
         do {
-            let quotes = Array(Set(data.accounts.map(\.currency) + [data.baseCurrency]))
+            let quotes = Array(Set(data.accounts.map(\.currency) + [data.baseCurrency, reportingCurrency]))
             let result = try await ExchangeRates.fetchAvailable(base: "CNY", quotes: quotes)
             guard !Task.isCancelled else { return }
             automaticRateRetryAfter = nil
@@ -467,11 +473,13 @@ extension FinanceHome {
                 try FinanceStore.update(context) { try $0.mergeReferenceRates(rates) }
                 reload()
             }
+            Self.rateLogger.info("Asset reference refresh completed: \(rates.count) quotes, \(result.missingCurrencies.count) unavailable currencies")
             if !result.missingCurrencies.isEmpty {
                 let names = result.missingCurrencies.joined(separator: ", ")
                 rateRefreshError = L("\(names) 暂无参考报价；其他币种已更新。可为这些币种手动填写，已有值保留。", "No reference quote for \(names). Available currencies updated; existing values are kept. You can enter the missing rates manually.")
             }
         } catch {
+            Self.rateLogger.error("Asset reference refresh failed; retaining cached rates: \(error.localizedDescription, privacy: .private)")
             automaticRateRetryAfter = Date().addingTimeInterval(5 * 60)
             rateRefreshError = L("汇率更新失败。已有汇率仍保留；稍后自动重试，也可手动更新或填写。", "Rates could not update. Existing rates are kept; automatic updates retry shortly. You can also retry or enter a rate manually.")
         }

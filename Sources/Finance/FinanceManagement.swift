@@ -27,7 +27,7 @@ extension FinanceHome {
                     Text(L("跟随记账本位币 · ", "Use recorded currency · ") + data.baseCurrency).tag("")
                     CurrencyPickerItems()
                 }
-                Text(L("可随时切换统计图表与合计的显示币种，不改变账单原金额、历史折算或账户余额。此设置与统计页共用。", "Change the currency used for Statistics totals and charts at any time. Original amounts, recorded conversions and account balances stay the same."))
+                Text(L("统计与资产共用此显示币种，不改变原始金额或历史账单。", "Statistics and Assets share this display currency. Original amounts and historical entries stay unchanged."))
                     .font(.caption).foregroundStyle(.secondary)
                 if data.canChangeBaseCurrency {
                     Picker(L("记账本位币", "Recorded currency"), selection: Binding(get: { data.baseCurrency }, set: { currency in mutate { try $0.changeBaseCurrency(to: currency, expected: data.baseCurrency) } })) {
@@ -36,7 +36,7 @@ extension FinanceHome {
                 } else {
                     LabeledContent(L("记账本位币", "Recorded currency"), value: data.baseCurrency)
                 }
-                Text(L("历史折算与预算按记账本位币保存；有账单或预算后不再更改。账单页合计默认跟随常用账户，资产总额折合人民币。", "Recorded conversions and budgets keep their original currency, which is fixed once entries or budgets exist. Entries default to the account currency; net worth is shown in CNY."))
+                Text(L("历史折算与预算按记账本位币保存；有账单或预算后固定。", "Recorded conversions and budgets keep this currency, which is fixed once entries or budgets exist."))
                     .font(.caption).foregroundStyle(.secondary)
             } header: { Text(L("统计显示币种", "Reporting currency")) }
             Section {

@@ -246,6 +246,13 @@ struct MoneyRate: Codable, Equatable {
         !rate.isNaN && rate >= Decimal(string: "0.000000001")! && rate < 1_000_000_000
     }
 }
+/// Current valuation may cross two stored quotes; retain both dates and manual provenance.
+struct MoneyAssetRate: Equatable {
+    var rate: Decimal
+    var quotes: [MoneyRate]
+    var isManual: Bool { quotes.contains(where: \.isManual) }
+    var referenceDates: [String] { Set(quotes.filter { !$0.isManual }.map(\.date)).sorted() }
+}
 struct MoneyAssetSummary {
     var balances: [String: Decimal] = [:]
     var convertedSubtotal: Decimal = 0

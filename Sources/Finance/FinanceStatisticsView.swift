@@ -19,7 +19,6 @@ private struct MoneyRanking<Row: View, Detail: View>: View {
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(L("点一个分类，看它每个月的变化", "Click a category to see it month by month")).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 8)
             ForEach(rows) { item in
                 let open = expansion.key == item.id
                 MoneyHover { hovering in
@@ -56,7 +55,7 @@ struct MoneyBar: View {
 
 
 extension FinanceHome {
-    private var statsCurrency: String { Money.currencies.contains(statsCurrencyRaw) ? statsCurrencyRaw : data.baseCurrency }
+    private var statsCurrency: String { reportingCurrency }
     func statsEntries(_ span: DateInterval) -> [MoneyEntry] {
         data.entries.filter { $0.deletedAt == nil && $0.date >= span.start && $0.date < span.end && (bookFilterID == nil || $0.bookID == bookFilterID) }
     }
@@ -87,7 +86,7 @@ extension FinanceHome {
         let rows = categoryRows(selectedStatsRange.map { statsEntries($0) } ?? entries)
         let earliest = data.entries.filter { $0.deletedAt == nil }.map(\.date).min() ?? Date()
         return ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            LazyVStack(alignment: .leading, spacing: 16) {
                 periodHeader
                 VStack(alignment: .leading, spacing: 12) {
                     (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16)) : AnyLayout(HStackLayout(spacing: 32))) {
@@ -99,10 +98,14 @@ extension FinanceHome {
                         metricPair((totalLabel(L("收入", "Income"), earned), totalDisplay(earned, currency: statsCurrency)),
                                    (L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: statsCurrency)))
                     }
-                    Text(L("本期结余为所选范围的收入减支出，不含账户初始余额。", "Period net is income minus spending in this view; it excludes opening balances."))
-                        .font(.caption).foregroundStyle(.secondary)
-                    originalSplit(entries)
                     rateNote(entries, estimates: spent.estimateDates.union(earned.estimateDates))
+                    DisclosureGroup(L("明细与计算说明", "Breakdown and calculation")) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            originalSplit(entries)
+                            Text(L("本期结余是收入减支出，不含期初余额。支出含手续费、扣除退款；负数表示退款更多。外币使用账单已记录的折算或对应日期的参考汇率。", "Period net is income minus spending, excluding opening balances. Spending includes fees minus refunds; negative spending means refunds were larger. Foreign totals use recorded conversions or reference rates for the entry date."))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }.padding(.top, 8)
+                    }.font(.callout)
                 }.padding(18).background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.045)))
                 missingAmounts(spent.missing + earned.missing)
                 (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
@@ -135,10 +138,6 @@ extension FinanceHome {
                         Text(statsIncome ? L("所选日期没有收入。", "No income for the selected date.") : L("所选日期没有支出或退款。", "No spending or refunds for the selected date."))
                             .foregroundStyle(.secondary)
                     } else { ranking(rows) }
-                }
-                if !statsIncome {
-                    Text(L("支出包含手续费，并扣除退款；负数表示本期退款多于消费。", "Spending includes fees minus refunds. Negative amounts mean refunds exceeded spending in this period."))
-                        .font(.caption).foregroundStyle(.secondary)
                 }
             }.padding(compact ? 16 : 24)
         }
@@ -199,12 +198,8 @@ extension FinanceHome {
             let range = dates.count == 1 ? dates[0] : dates.first! + " – " + dates.last!
             Text(L("部分金额为估算，参考汇率日期：\(range)。", "Some amounts are estimates. Reference rate date: \(range)."))
                 .font(.caption).foregroundStyle(.orange)
-        } else if statsCurrency != data.baseCurrency && foreign {
-            Text(loadingRates && rateHistory == nil ? L("正在下载每日参考汇率…", "Downloading daily reference rates…")
-                 : L("可折算的金额按账单日期的参考汇率计算，原始金额不变。", "Convertible amounts use reference rates for each entry's date; original amounts don't change."))
-                .font(.caption).foregroundStyle(.secondary)
-        } else if foreign {
-            Text(L("外币按记账时的折算金额计入。可在右上角切换统计币种。", "Foreign amounts count at the value recorded with each entry. Switch the currency at the top right."))
+        } else if loadingRates && rateHistory == nil && statsCurrency != data.baseCurrency && foreign {
+            Text(L("正在下载每日参考汇率…", "Downloading daily reference rates…"))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -216,9 +211,6 @@ extension FinanceHome {
             let text = abs(ratio) < 0.005 ? L("持平", "flat") : (ratio > 0 ? "↑" : "↓") + "\(Int((abs(ratio) * 100).rounded()))%"
             Text(name + " " + text).font(.caption).foregroundStyle(abs(ratio) < 0.005 ? Color.secondary : ratio > 0 ? Color.orange : Color.green)
                 .help(L("上一段支出 ", "Previous period ") + display(before.total, statsCurrency))
-        } else if !hidden && (!now.complete || !before.complete) {
-            Text(L("数据未完整折算，暂不比较涨跌", "Comparison unavailable: some amounts are missing or estimated"))
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
     private var statsUnit: Calendar.Component { period == .year ? .month : .day }
@@ -334,7 +326,7 @@ extension FinanceHome {
                     Text(Dates.label(selected.date, pattern: unit == .month ? "yyyy年M月" : "M月d日 EEEE") + " · " + pointDisplay(selected)
                          + " · " + (selected.count + selected.missing == 0 ? L("没有账单", "No entries") : L("\(selected.count + selected.missing) 笔", "\(selected.count + selected.missing) entries")))
                 } else {
-                    Text(L("颜色越深金额越大，选择日期查看下方汇总。", "Darker means more. Select a date to see its summary below."))
+                    Text(L("按日期查看汇总", "Select a date for its summary"))
                 }
             }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: compact ? 4 : 6), count: unit == .day ? 7 : 4), spacing: compact ? 4 : 6) {
@@ -377,20 +369,46 @@ extension FinanceHome {
     private func statsBucketSummary(_ span: DateInterval) -> some View {
         let entries = statsEntries(span), days = rateHistory?.sortedDays
         let spent = statsSum(entries, income: false, days: days), earned = statsSum(entries, income: true, days: days)
-        return VStack(alignment: .leading, spacing: 12) {
-            Text(Dates.label(span.start, pattern: statsUnit == .month ? "yyyy年M月" : "M月d日 EEEE")).font(.headline)
-            metricPair((totalLabel(L("支出", "Spending"), spent), totalDisplay(spent, currency: statsCurrency)),
-                       (totalLabel(L("收入", "Income"), earned), totalDisplay(earned, currency: statsCurrency)))
-            Text(L("结余：", "Net: ") + balanceDisplay(spent: spent, earned: earned, currency: statsCurrency)).font(.subheadline).monospacedDigit()
-            missingAmounts(spent.missing + earned.missing)
-            rateNote(entries, estimates: spent.estimateDates.union(earned.estimateDates))
-            (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 16))) {
-                Button(statsUnit == .month ? L("查看这个月的账单", "View this month’s entries") : L("查看当天账单", "View this day’s entries")) { openBucket(span.start, unit: statsUnit) }
-                    .frame(minHeight: 44)
-                Button(L("返回整期汇总", "Show the full period")) { statsSelectedDate = nil; rankingExpansion.key = nil }.frame(minHeight: 44)
+        let selected = statsIncome ? earned : spent
+        let entryIDs = Set(entries.map(\.id))
+        let needsRecordedConversion = data.missingConversionEntries.contains { entryIDs.contains($0.id) }
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 10) {
+                        metricPair((totalLabel(L("支出", "Spending"), spent), totalDisplay(spent, currency: statsCurrency)),
+                                   (totalLabel(L("收入", "Income"), earned), totalDisplay(earned, currency: statsCurrency)))
+                        Text(L("结余：", "Net: ") + balanceDisplay(spent: spent, earned: earned, currency: statsCurrency)).font(.subheadline).monospacedDigit()
+                        rateNote(entries, estimates: spent.estimateDates.union(earned.estimateDates))
+                        Button(statsUnit == .month ? L("查看本月账单", "View month’s entries") : L("查看当天账单", "View day’s entries")) { openBucket(span.start, unit: statsUnit) }
+                            .frame(minHeight: compact ? 44 : 24)
+                    }.padding(.top, 8)
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(Dates.label(span.start, pattern: statsUnit == .month ? "yyyy年M月" : "M月d日 EEEE")).font(.subheadline.weight(.semibold))
+                        Text((statsIncome ? L("收入 ", "Income ") : L("支出 ", "Spending ")) + totalDisplay(selected, currency: statsCurrency, subtotal: true))
+                            .font(.subheadline).monospacedDigit().foregroundStyle(.primary)
+                    }.frame(minHeight: 44, alignment: .leading)
+                }
+                Button { statsSelectedDate = nil; rankingExpansion.key = nil } label: {
+                    Image(systemName: "xmark.circle").frame(width: 44, height: 44)
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityLabel(L("返回整期汇总", "Show the full period"))
             }
-        }.padding(16).background(RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.08)))
+            if spent.missing + earned.missing > 0 {
+                Label(L("\(spent.missing + earned.missing) 笔待折算，合计不完整", "\(spent.missing + earned.missing) unconverted; totals are incomplete"), systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.orange)
+                if needsRecordedConversion {
+                    Button(L("补全折算…", "Complete conversions…")) { prepareConversion(entries) }
+                        .font(.callout).frame(minHeight: compact ? 44 : 24)
+                } else {
+                    Text(L("所选币种缺少报价，可切换显示币种。", "Quotes are unavailable for this currency. Try another display currency."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }.padding(12).background(RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.08)))
     }
+
     private func rememberStats() {
         statsReturn = StatsPlace(anchor: anchor, period: period, income: statsIncome, expanded: rankingExpansion.key, selectedDate: statsSelectedDate, billRange: dateRange)
     }

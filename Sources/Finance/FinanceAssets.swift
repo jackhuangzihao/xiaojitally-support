@@ -11,11 +11,11 @@ extension FinanceHome {
 }
 
 extension FinanceHome {
-    private var assetCurrencies: [String] { Set(data.accounts.map(\.currency)).filter { $0 != "CNY" }.sorted() }
+    private var assetCurrencies: [String] { Set(data.accounts.map(\.currency)).filter { $0 != reportingCurrency }.sorted() }
     private var selectedForeignCurrency: String? { assetCurrencies.contains(foreignCurrency) ? foreignCurrency : assetCurrencies.first }
     var assetsPage: some View {
         let balances = data.accountBalances()
-        let summary = data.assetSummary(in: "CNY", accountBalances: balances)
+        let summary = data.assetSummary(in: reportingCurrency, accountBalances: balances)
         let groups = MoneyAccountType.allCases.map { type in AccountGroup(type: type, accounts: data.accounts.filter { $0.resolvedType == type && !$0.archived }) }.filter { !$0.accounts.isEmpty }
         return assetContainer {
             Section {
@@ -32,8 +32,8 @@ extension FinanceHome {
                         Text(group.type.label).font(.subheadline.weight(.semibold))
                         Text("\(group.accounts.count)").font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        if let subtotal = data.assetSummary(in: "CNY", accountBalances: balances, accounts: group.accounts).total {
-                            Text(display(subtotal, "CNY")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        if let subtotal = data.assetSummary(in: reportingCurrency, accountBalances: balances, accounts: group.accounts).total {
+                            Text(display(subtotal, reportingCurrency)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
                         }
                     }.textCase(nil)
                 }
@@ -61,7 +61,7 @@ extension FinanceHome {
         } message: {
             Text(L("“\(removingAccount?.name ?? "")”及其初始余额将被永久删除。使用它的账本将取消默认账户设置。", "“\(removingAccount?.name ?? "")” and its opening balance will be permanently deleted. Books using it will no longer have a default account."))
         }
-        .task(id: assetCurrencies.joined(separator: "-") + "-\(automaticRates)") { await refreshStaleAssetRates() }
+        .task(id: assetCurrencies.joined(separator: "-") + "-\(reportingCurrency)-\(automaticRates)") { await refreshStaleAssetRates() }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
             if scenePhase == .active { Task { await refreshStaleAssetRates() } }
         }
@@ -86,8 +86,12 @@ extension FinanceHome {
                     .frame(minHeight: compact ? 44 : 24)
             }
             VStack(alignment: .leading, spacing: 16) {
-                Text(L("净资产 · 折合人民币", "Net worth · CNY equivalent")).font(.subheadline).foregroundStyle(.secondary)
-                Text(hidden ? "••••" : summary.total.map { display($0, "CNY") } ?? L("待补充汇率", "Rates needed"))
+                HStack {
+                    Text(L("净资产", "Net worth")).foregroundStyle(.secondary)
+                    Spacer()
+                    statsCurrencyMenu.labelStyle(.titleAndIcon).frame(minHeight: compact ? 44 : 24)
+                }.font(.subheadline)
+                Text(hidden ? "••••" : summary.total.map { display($0, reportingCurrency) } ?? L("待补充汇率", "Rates needed"))
                     .font(.system(size: compact ? 30 : 36, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
                 if summary.total == nil {
                     Label(L("缺少 \(summary.missingCurrencies.joined(separator: "、")) 汇率，总额尚不完整。", "Missing \(summary.missingCurrencies.joined(separator: ", ")) rates. The total is incomplete."), systemImage: "exclamationmark.circle")
@@ -96,9 +100,9 @@ extension FinanceHome {
                 Divider()
                 (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16)) : AnyLayout(HStackLayout(alignment: .top, spacing: 16))) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(L("人民币账户 · CNY", "CNY accounts")).font(.caption).foregroundStyle(.secondary)
+                        Text(Money.name(reportingCurrency) + " · " + reportingCurrency).font(.caption).foregroundStyle(.secondary)
                             .frame(minHeight: compact && assetCurrencies.count > 1 ? 44 : nil, alignment: .leading)
-                        Text(display(summary.balances["CNY", default: 0], "CNY"))
+                        Text(display(summary.balances[reportingCurrency, default: 0], reportingCurrency))
                             .font(.system(size: compact ? 19 : 22, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .leading, spacing: 6) {
@@ -106,28 +110,29 @@ extension FinanceHome {
                             if assetCurrencies.count > 1 {
                                 Menu {
                                     ForEach(assetCurrencies, id: \.self) { code in Button(Money.name(code) + " · " + code) { foreignCurrency = code } }
-                                } label: { Label(L("外币账户 · ", "Foreign accounts · ") + currency, systemImage: "chevron.down").frame(minHeight: compact ? 44 : nil) }
+                                } label: { Label(L("其他币种 · ", "Other accounts · ") + currency, systemImage: "chevron.down").frame(minHeight: compact ? 44 : nil) }
                                     .font(.caption).menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
                             } else {
-                                Text(L("外币账户 · ", "Foreign accounts · ") + currency).font(.caption).foregroundStyle(.secondary)
+                                Text(L("其他币种 · ", "Other accounts · ") + currency).font(.caption).foregroundStyle(.secondary)
                             }
                             Text(display(summary.balances[currency, default: 0], currency))
                                 .font(.system(size: compact ? 19 : 22, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
                         } else {
-                            Text(L("外币账户", "Foreign accounts")).font(.caption).foregroundStyle(.secondary)
+                            Text(L("其他币种", "Other currencies")).font(.caption).foregroundStyle(.secondary)
                             Text(L("暂无", "None")).font(.title3.weight(.semibold))
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if let currency = selectedForeignCurrency {
                     HStack(spacing: 8) {
-                        if let rate = data.storedRate(from: currency, to: "CNY") {
+                        if let rate = data.assetRate(from: currency, to: reportingCurrency) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("1 " + currency + " = " + assetRateText(rate.rate) + " CNY")
+                                Text("1 " + currency + " = " + assetRateText(rate.rate) + " " + reportingCurrency)
                                     .monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
-                                Text((rate.isManual ? L("手动汇率 · ", "Manual rate · ") : L("参考价日期 · ", "Reference date · ")) + rate.date)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                if !rate.isManual { Text("ECB").foregroundStyle(.tertiary) }
+                                if rate.isManual { Text(L("手动估值", "Manual estimate")) }
+                                if !rate.referenceDates.isEmpty {
+                                    Text("ECB · " + rate.referenceDates.joined(separator: " / "))
+                                }
                             }
                         } else {
                             Text(currency + L(" 尚未填写汇率", " needs an exchange rate"))
@@ -137,8 +142,6 @@ extension FinanceHome {
                             .frame(minHeight: compact ? 44 : nil)
                     }.font(.caption).foregroundStyle(.secondary)
                 }
-                Text(L("含期初余额、负债和归档账户；外币折算仅用于当前估值。", "Includes opening balances, debts and archived accounts. Conversion estimates current value only."))
-                    .font(.caption).foregroundStyle(.secondary)
             }.padding(18).background(RoundedRectangle(cornerRadius: 14).fill(Color.accentColor.opacity(0.08)))
             if !assetCurrencies.isEmpty { rateLine(summary) }
             if data.accounts.isEmpty {
@@ -152,15 +155,15 @@ extension FinanceHome {
     }
     func refreshStaleAssetRates() async {
         guard automaticRates, !assetCurrencies.isEmpty else { return }
-        let key = assetCurrencies.joined(separator: "-")
+        let key = reportingCurrency + "-" + assetCurrencies.joined(separator: "-")
         let now = Date()
         if let automaticRateRetryAfter, now < automaticRateRetryAfter { return }
         if automaticRateRetryAfter == nil, lastAutomaticRateKey == key, let lastAutomaticRateAttempt,
            now.timeIntervalSince(lastAutomaticRateAttempt) < 6 * 3600,
            Dates.calendar.isDate(lastAutomaticRateAttempt, inSameDayAs: now) { return }
         let stale = assetCurrencies.contains { currency in
-            guard let rate = data.storedRate(from: currency, to: "CNY") else { return true }
-            return !rate.isManual && (now.timeIntervalSince(rate.fetchedAt) > 6 * 3600 || !Dates.calendar.isDate(rate.fetchedAt, inSameDayAs: now))
+            guard let rate = data.assetRate(from: currency, to: reportingCurrency) else { return true }
+            return rate.quotes.contains { !$0.isManual && (now.timeIntervalSince($0.fetchedAt) > 6 * 3600 || !Dates.calendar.isDate($0.fetchedAt, inSameDayAs: now)) }
         }
         if stale {
             lastAutomaticRateKey = key; lastAutomaticRateAttempt = now
@@ -168,36 +171,31 @@ extension FinanceHome {
         }
     }
     private func rateLine(_ summary: MoneyAssetSummary) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if !summary.rateDates.isEmpty {
-                Text(L("欧洲央行参考汇率日期：", "ECB reference rate dates: ") + summary.rateDates.joined(separator: ", "))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if !summary.manualCurrencies.isEmpty {
-                Text(L("使用手动汇率：", "Manual rates: ") + summary.manualCurrencies.joined(separator: ", "))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Text(L("参考汇率按工作日更新，并非实时成交价。可填银行实际汇率；不会改写历史账单。", "Reference rates update on working days, not in real time. You can enter bank rates without changing historical entries."))
-                .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
             if let rateRefreshError {
                 Label(rateRefreshError, systemImage: "wifi.exclamationmark").font(.caption).foregroundStyle(.orange)
             }
-            Toggle(L("自动更新参考汇率", "Update reference rates automatically"), isOn: $automaticRates)
-                .font(.caption)
-            ViewThatFits(in: .horizontal) {
-            HStack(spacing: 16) {
-                Button(action: refreshRates) { Text(refreshing ? L("更新中…", "Updating…") : L("更新汇率", "Update rates")).frame(minHeight: compact ? 44 : nil) }.disabled(refreshing)
-                Button { showAssetRates = true } label: { Text(L("填写 / 管理汇率", "Edit exchange rates")).frame(minHeight: compact ? 44 : nil) }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Button(refreshing ? L("更新中…", "Updating…") : L("更新汇率", "Update rates"), action: refreshRates).disabled(refreshing).frame(minHeight: 44)
-                Button(L("填写 / 管理汇率", "Edit exchange rates")) { showAssetRates = true }.frame(minHeight: 44)
-            }
-            }.font(.callout).frame(minHeight: compact ? 44 : 24)
+            DisclosureGroup(L("汇率与估值说明", "Rates and valuation")) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if !summary.rateDates.isEmpty {
+                        Text("ECB · " + summary.rateDates.joined(separator: " / ")).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !summary.manualCurrencies.isEmpty {
+                        Text(L("手动估值：", "Manual estimates: ") + summary.manualCurrencies.joined(separator: ", "))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(L("含期初余额、负债和归档账户。参考汇率按工作日更新，仅用于当前估值，不改写历史账单。", "Includes opening balances, debts and archived accounts. Reference rates update on working days, estimate current value and never rewrite historical entries."))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle(L("自动更新参考汇率", "Update reference rates automatically"), isOn: $automaticRates)
+                    Button(action: refreshRates) {
+                        Text(refreshing ? L("更新中…", "Updating…") : L("更新汇率", "Update rates")).frame(minHeight: compact ? 44 : 24)
+                    }.disabled(refreshing)
+                }.padding(.top, 8)
+            }.font(.callout)
         }
     }
     private func accountRow(_ account: MoneyAccount, balance: Decimal) -> some View {
-        let foreign = account.currency != "CNY"
+        let foreign = account.currency != reportingCurrency
         return HStack(spacing: 0) {
         Button { showAccount(account.id) } label: {
             HStack(spacing: 12) {
@@ -212,8 +210,8 @@ extension FinanceHome {
                     Text(display(balance, account.currency)).font(.body.weight(.medium)).monospacedDigit().foregroundStyle(balance < 0 ? Color.red : .primary)
                         .lineLimit(1).minimumScaleFactor(0.7)
                     if foreign {
-                        if let base = data.converted(balance, from: account.currency, to: "CNY") {
-                            Text("≈ " + display(base, "CNY")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        if let base = data.converted(balance, from: account.currency, to: reportingCurrency) {
+                            Text("≈ " + display(base, reportingCurrency)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
                         } else {
                             Text(L("缺少汇率", "Rate needed")).font(.caption).foregroundStyle(.orange)
                         }

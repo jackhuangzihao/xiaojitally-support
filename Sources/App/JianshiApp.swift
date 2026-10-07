@@ -44,6 +44,13 @@ final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
         #if (os(macOS) && JIANSHI_APP_STORE) || targetEnvironment(simulator)
+        if CommandLine.arguments.contains("--sync-conflict-ui-fixture") {
+            do { try SyncConflictUIFixture.requireSandbox() }
+            catch { print("SYNC UI FIXTURE FAILED: \(error)"); exit(1) }
+            // This review fixture must return before attaching storage or CloudSync.
+            storage = .failure(TaskBackup.invalid("Synthetic sync review"))
+            return
+        }
         if CommandLine.arguments.contains("--day-ui-fixture") {
             do { try SelfCheck.seedDayTimelineUI(); exit(0) }
             catch { print("DAY FIXTURE FAILED: \(error)"); exit(1) }
@@ -107,6 +114,25 @@ final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
 
     var body: some Scene {
         WindowGroup {
+            #if (os(macOS) && JIANSHI_APP_STORE) || targetEnvironment(simulator)
+            if CommandLine.arguments.contains("--sync-conflict-ui-fixture") {
+                SyncConflictUIFixture()
+                    .tint(.accentColor)
+                    .preferredColorScheme(UISettings.colorScheme(appearance))
+                    .environment(\.locale, UISettings.locale(for: language, preferredLanguages: systemLanguages))
+            } else { normalWindow }
+            #else
+            normalWindow
+            #endif
+        }
+        #if os(macOS)
+        .handlesExternalEvents(matching: ["*"])
+        .defaultSize(width: 1120, height: 790)
+        .commands { TaskHistoryCommands() }
+        #endif
+    }
+
+    @ViewBuilder private var normalWindow: some View {
             switch storage {
             case .success(let container):
                 StoreWindow(container: container)
@@ -129,12 +155,6 @@ final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
                         .textSelection(.enabled)
                 }
             }
-        }
-        #if os(macOS)
-        .handlesExternalEvents(matching: ["*"])
-        .defaultSize(width: 1120, height: 790)
-        .commands { TaskHistoryCommands() }
-        #endif
     }
 }
 

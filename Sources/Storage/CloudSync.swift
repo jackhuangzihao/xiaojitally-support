@@ -2,6 +2,11 @@ import SwiftUI
 import SwiftData
 import CloudKit
 import CryptoKit
+import OSLog
+
+private enum SyncDiagnostics {
+    static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.jianshi.personal", category: "CloudSync")
+}
 
 /// Local only. Saving the merge base in the same transaction as imported rows makes retries crash-safe.
 @Model final class CloudSyncState {
@@ -484,8 +489,12 @@ enum CloudMerge {
         guard enabled, !running, editors == 0, let context, Store.recovery.failure == nil, !context.hasChanges else { return }
         if let retryAfter, Date() < retryAfter { return }
         if conflict && choice == nil { return }
+        let resolvingConflict = choice != nil
+        var resolutionResult = "interrupted"
+        if resolvingConflict { SyncDiagnostics.log.notice("Conflict resolution started") }
         running = true
         defer {
+            if resolvingConflict { SyncDiagnostics.log.notice("Conflict resolution \(resolutionResult, privacy: .public)") }
             running = false
             if pendingSave { pendingSave = false; localSaved() }
         }
@@ -566,6 +575,7 @@ enum CloudMerge {
             guard canContinue(ticket, in: context) else { return }
             if localBytes == baseline && localBytes == remoteBytes && capturedRevision == Store.revision {
                 lastSync = Date(); detail = ""; conflict = false
+                resolutionResult = "succeeded"
                 return
             }
             if choice != nil && (conflictLocal != localBytes || conflictCloud != remoteBytes) {
@@ -635,10 +645,12 @@ enum CloudMerge {
             // A save may normalize list colors. Refill from the actual committed context on the next poll.
             snapshotCache = nil
             lastSync = state.lastSync; detail = ""; conflict = false; conflictLocal = nil; conflictCloud = nil
+            resolutionResult = "succeeded"
             if finalBytes != mergedBytes { pendingSave = true; detail = L("新修改等待上传。", "New edits are waiting to upload.") }
         } catch {
             // Cloud errors never put the local store into read-only recovery.
             if ticket == generation {
+                resolutionResult = "failed"
                 retryAfter = Self.retryDate(error)
                 detail = Self.message(error)
                 if let retryAfter { detail += "\n" + L("Apple 要求暂缓请求，将在 ", "Apple requested a pause. Retrying after ") + retryAfter.formatted(date: .omitted, time: .standard) }
@@ -683,13 +695,25 @@ struct CloudSyncEditingGuard: ViewModifier {
 }
 
 struct CloudSyncSettings: View {
+    static func checkViewFootprint() throws -> Int {
+        let sizes = ["preferences": MemoryLayout<PreferencesView.Body>.size,
+                     "settings": MemoryLayout<CloudSyncSettings.Body>.size,
+                     "review": MemoryLayout<SyncConflictReview.Body>.size,
+                     "actions": MemoryLayout<SyncConflictActions.Body>.size]
+        print("Sync view sizes (bytes): \(sizes)")
+        guard sizes.values.allSatisfy({ $0 < 16_384 }) else {
+            throw TaskBackup.invalid("Sync view exceeds the 16 KB per-component stack budget: \(sizes)")
+        }
+        return sizes.count
+    }
     @Environment(\.locale) private var locale
     @State private var confirmEnable = false
     @State private var resolve = false
     @State private var export = false
     @State private var document: BackupDocument?
     @State private var exportError: String?
-    private var sync: CloudSync { .shared }
+    private let sync: CloudSync
+    init(sync: CloudSync = .shared) { self.sync = sync }
     var body: some View {
         Section(L("数据与同步", "Data and sync")) {
             Toggle("iCloud", isOn: Binding(get: { sync.enabled }, set: { if $0 { confirmEnable = true } else { sync.setEnabled(false) } }))
@@ -700,6 +724,15 @@ struct CloudSyncSettings: View {
                     .font(.callout)
                 Button(L("核对并处理冲突…", "Review and resolve conflicts…")) { resolve = true }
                     .disabled(sync.running)
+                    // A Section distributes presentation modifiers to its rows in Form.
+                    // One concrete trigger must own the sheet to avoid competing presenters.
+                    .sheet(isPresented: $resolve) {
+                        SyncConflictReview(detail: sync.detail, canResolve: sync.enabled && sync.conflict && !sync.running,
+                                           choose: { choice in
+                            resolve = false
+                            Task { await sync.sync(choice: choice) }
+                        }, cancel: { resolve = false })
+                    }
             }
             Text(L("开启后，任务、清单和账目会在同一 Apple 账户的设备间自动同步。应用打开时同步；离线仍可编辑。同步不代替备份。", "Sync tasks, lists and finances across devices using the same Apple Account while the app is open. Offline editing remains available. Sync does not replace backups."))
                 .font(.caption).foregroundStyle(.secondary)
@@ -722,26 +755,8 @@ struct CloudSyncSettings: View {
         } message: {
             Text(L("本机任务、清单与账目将上传到你自己的 iCloud 私有数据库，并与其他设备合并，占用你的 iCloud 空间。关闭同步不会删除已上传的副本。", "Your tasks, lists and finances will be uploaded to your private iCloud database and merged with other devices, using your iCloud storage. Turning sync off does not delete uploaded copies."))
         }
-        .sheet(isPresented: $resolve) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(L("核对同步冲突", "Review sync conflicts")).font(.headline)
-                ScrollView {
-                    Text(sync.detail).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                }
-                Text(L("下面的选择适用于本次列出的所有冲突。重复任务按整条序列选择；账户币种与关联流水一起选择；本位币冲突按整本账目选择。其他项目继续合并。合并前已保存双方恢复副本。", "Your choice applies to all listed conflicts. Repeating tasks are kept as a whole chain; account currencies stay with their related postings; base-currency conflicts affect the entire ledger. Other items are merged. Recovery copies of both sides are saved first."))
-                    .font(.callout).foregroundStyle(.secondary)
-                Button(L("所有冲突保留本机修改", "Keep local changes for all conflicts")) { resolve = false; Task { await sync.sync(choice: .local) } }
-                    .buttonStyle(.bordered).controlSize(.large)
-                Button(L("所有冲突保留云端修改", "Keep cloud changes for all conflicts")) { resolve = false; Task { await sync.sync(choice: .cloud) } }
-                    .buttonStyle(.bordered).controlSize(.large)
-                Button(L("暂不处理", "Decide later"), role: .cancel) { resolve = false }.keyboardShortcut(.cancelAction)
-            }
-            .padding()
-            #if os(macOS)
-            .frame(width: 560, height: 560)
-            #endif
-        }
     }
+
     private func exportCopy(owner: String) {
         Task {
             do {
@@ -756,9 +771,135 @@ struct CloudSyncSettings: View {
     }
 }
 
+/// Keep the presented view independent of the settings Form's value tree. Conflict
+/// reports can be long, so paragraphs are laid out lazily instead of in one huge Text.
+private struct SyncConflictReview: View {
+    let sections: [String]
+    let canResolve: Bool
+    let choose: (CloudMerge.Choice) -> Void
+    let cancel: () -> Void
+    @State private var resolving = false
+
+    init(detail: String, canResolve: Bool, choose: @escaping (CloudMerge.Choice) -> Void,
+         cancel: @escaping () -> Void) {
+        sections = Self.reportSections(detail)
+        self.canResolve = canResolve; self.choose = choose; self.cancel = cancel
+    }
+
+    static func reportSections(_ detail: String) -> [String] {
+        detail.components(separatedBy: "\n\n").filter { !$0.isEmpty }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    Text(L("下面的选择适用于本次列出的所有冲突。重复任务按整条序列选择；账户币种与关联流水一起选择；本位币冲突按整本账目选择。其他项目继续合并。合并前已保存双方恢复副本。", "Your choice applies to all listed conflicts. Repeating tasks are kept as a whole chain; account currencies stay with their related postings; base-currency conflicts affect the entire ledger. Other items are merged. Recovery copies of both sides are saved first."))
+                        .font(.callout).foregroundStyle(.secondary)
+                    Divider()
+                    ForEach(Array(sections.enumerated()), id: \.offset) { _, paragraph in
+                        Text(paragraph).font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    if !canResolve {
+                        Text(L("同步状态已变化，请返回后重新检查。", "Sync status changed. Go back and review it again."))
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }.padding()
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                SyncConflictActions(enabled: canResolve) { choice in
+                    resolving = true
+                    choose(choice)
+                }
+            }
+            .navigationTitle(L("核对同步冲突", "Review sync conflicts"))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L("暂不处理", "Decide later"), role: .cancel, action: cancel)
+                        .keyboardShortcut(.cancelAction)
+                }
+            }
+        }
+        .onAppear { SyncDiagnostics.log.notice("Conflict review opened") }
+        .onDisappear {
+            if !resolving { SyncDiagnostics.log.notice("Conflict review cancelled") }
+        }
+        #if os(macOS)
+        .frame(width: 560, height: 560)
+        #endif
+    }
+}
+
+private struct SyncConflictActions: View {
+    let enabled: Bool
+    let choose: (CloudMerge.Choice) -> Void
+    var body: some View {
+        VStack(spacing: 8) {
+            Divider()
+            Button { choose(.local) } label: {
+                Text(L("所有冲突保留本机修改", "Keep local changes for all conflicts"))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            Button { choose(.cloud) } label: {
+                Text(L("所有冲突保留云端修改", "Keep cloud changes for all conflicts"))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+        }
+        .buttonStyle(.bordered).controlSize(.regular).multilineTextAlignment(.center)
+        .disabled(!enabled).padding(.horizontal).padding(.bottom, 8)
+        .background(Color.appBackground)
+    }
+}
+
+#if (os(macOS) && JIANSHI_APP_STORE) || targetEnvironment(simulator)
+/// Synthetic review only: no model container, account, cloud request, or recovery file.
+struct SyncConflictUIFixture: View {
+    @State private var sync = CloudSync.conflictUIFixture()
+    var body: some View {
+        NavigationStack {
+            Form { CloudSyncSettings(sync: sync) }.formStyle(.grouped)
+                .navigationTitle(L("同步界面验证", "Sync review test"))
+        }
+    }
+    static func requireSandbox() throws {
+        guard let id = Bundle.main.bundleIdentifier,
+              id.hasPrefix("local.jianshi.sandboxcheck.sync") else {
+            throw TaskBackup.invalid("Sync fixture requires a disposable sandbox identity")
+        }
+        #if os(macOS)
+        guard NSHomeDirectory().contains("/Containers/" + id + "/Data") else {
+            throw TaskBackup.invalid("Sync fixture requires a disposable Mac sandbox")
+        }
+        #else
+        guard NSHomeDirectory().contains("/CoreSimulator/Devices/"),
+              NSHomeDirectory().contains("/Containers/Data/Application/") else {
+            throw TaskBackup.invalid("Sync fixture requires a disposable simulator sandbox")
+        }
+        #endif
+    }
+}
+
+extension CloudSync {
+    fileprivate static func conflictUIFixture() -> CloudSync {
+        let sync = CloudSync()
+        sync.enabled = true; sync.conflict = true
+        let rows = (1...320).map { index in
+            L("任务 \(index)\n本机：核对出行安排 \(index) · 未完成\n云端：核对出行安排 \(index) · 已完成\n差异：完成状态或完成时间、备注", "Task \(index)\nLocal: Review travel plans \(index) · Open\nCloud: Review travel plans \(index) · Completed\nDifferences: completion status/time, notes")
+        }
+        sync.detail = CloudMerge.Conflict(label: rows.joined(separator: "\n\n——\n\n")).localizedDescription
+        return sync
+    }
+}
+#endif
+
 extension CloudMerge {
     @MainActor static func check() throws -> Int {
-        var count = 0
+        var count = try CloudSyncSettings.checkViewFootprint()
         func check(_ condition: Bool, _ label: String) throws {
             guard condition else { throw TaskBackup.invalid("SYNC CHECK: " + label) }; count += 1
         }
@@ -766,6 +907,12 @@ extension CloudMerge {
             var failed = false; do { try action() } catch { failed = true }
             try check(failed, label)
         }
+        let report = (1...500).map { "Task \($0)\nLocal: open\nCloud: complete" }.joined(separator: "\n\n——\n\n")
+        let reportSections = SyncConflictReview.reportSections(report)
+        try check(reportSections.count == 999 && reportSections.joined(separator: "\n\n") == report,
+                  "long conflict review retains every item and separator in lazy paragraphs")
+        try check(SyncConflictReview.reportSections("").isEmpty,
+                  "empty conflict details do not create an empty selectable row")
         do {
             var base = TaskBackup(weekTitles: [.init(week: "2026-09-28", title: "Week 11")], lists: [], tasks: [])
             var local = base, remote = base

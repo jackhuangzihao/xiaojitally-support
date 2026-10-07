@@ -23,6 +23,7 @@ struct FinanceEntityDraft {
     var emoji = ""
     var bankName = ""
     var assetRate = ""
+    var assetCurrency = "CNY"
     var parentID: UUID? = nil
 }
 struct FinanceEntityEditor: View {
@@ -54,6 +55,7 @@ struct FinanceEntityEditor: View {
     @State private var budget: String
     @State private var bankName: String
     @State private var assetRate = ""
+    @State private var assetCurrency: String
     @State private var parentID: UUID?
     @State private var confirmRemoval = false
     @State private var correctingOpening = false
@@ -64,6 +66,8 @@ struct FinanceEntityEditor: View {
         self.kind = kind; self.id = id; _original = State(initialValue: data)
         let account = data.accounts.first { $0.id == id }, book = data.books.first { $0.id == id }, category = data.categories.first { $0.id == id }
         _name = State(initialValue: kind == .account ? account?.name ?? "" : kind == .book ? book?.name ?? "" : category?.label ?? "")
+        let reporting = UserDefaults.standard.string(forKey: "moneyStatsCurrency") ?? ""
+        _assetCurrency = State(initialValue: Money.currencies.contains(reporting) ? reporting : data.baseCurrency)
         _currency = State(initialValue: account?.currency ?? data.baseCurrency); _opening = State(initialValue: Money.text(account?.opening ?? 0))
         _archived = State(initialValue: account?.archived ?? book?.archived ?? category?.archived ?? false)
         _accountID = State(initialValue: book?.defaultAccountID)
@@ -91,8 +95,6 @@ struct FinanceEntityEditor: View {
                 Button(L("清除银行", "Clear bank")) { bankName = "" }
             } label: { Label(L("选择所属银行", "Choose bank"), systemImage: "building.columns") }
                 .frame(minHeight: 44)
-            Text(L("也可直接输入其他银行名称；仅作账户标记。", "You can type any other bank name. This is an account label."))
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
     private var accountRateField: some View {
@@ -102,18 +104,18 @@ struct FinanceEntityEditor: View {
                 Text("1 " + currency + " =")
                 TextField(L("汇率（可不填）", "Rate (optional)"), text: $assetRate).focused($textFocused)
                     .multilineTextAlignment(.trailing).monospacedDigit()
-                    .accessibilityLabel("1 " + currency + L("兑换人民币汇率", " in CNY"))
+                    .accessibilityLabel("1 " + currency + L("兑换汇率，单位 ", " in ") + assetCurrency)
                     #if os(iOS)
                     .keyboardType(.decimalPad)
                     #endif
-                Text("CNY").foregroundStyle(.secondary)
+                Text(assetCurrency).foregroundStyle(.secondary)
             }
-            if let rate = original.storedRate(from: currency, to: "CNY") {
-                let source = rate.isManual ? L("手动", "Manual") : rate.date
-                let quote = "1 \(currency) = \(assetRateText(rate.rate)) CNY · \(source)"
+            if let rate = original.assetRate(from: currency, to: assetCurrency) {
+                let source = rate.isManual ? L("含手动汇率", "Includes manual rates") : rate.referenceDates.joined(separator: " / ")
+                let quote = "1 \(currency) = \(assetRateText(rate.rate)) \(assetCurrency) · \(source)"
                 Text(L("当前：", "Current: ") + quote).font(.caption).foregroundStyle(.secondary)
             }
-            Text(L("留空保留现有汇率；没有时，资产页会按自动汇率设置获取参考值。手动汇率仅用于所有 \(currency) 账户的人民币估值；账单请填写实际金额或使用参考汇率。", "Leave blank to keep the current rate; Assets can fetch a reference rate when automatic rates are enabled. Manual rates only value \(currency) assets in CNY; entries use actual amounts or reference rates."))
+            Text(L("留空使用已有汇率或自动参考价。手动汇率仅改变资产估值，不改变历史账单。", "Leave blank to use stored or automatic reference rates. Manual rates change asset estimates, never historical entries."))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -125,7 +127,7 @@ struct FinanceEntityEditor: View {
         }
     }
     private var chosenSymbol: String { symbol.isEmpty ? fallbackSymbol : symbol }
-    private var used: Bool { id.map { id in original.entries.contains { $0.accountID == id || $0.destinationID == id } } ?? false }
+    private var used: Bool { id.map { original.accountHasHistory($0) } ?? false }
     private var categoryUsed: Bool { kind == .category && id.map { id in original.entries.contains { $0.categoryID == id } || original.categories.contains { $0.parentID == id } } == true }
     var body: some View {
         NavigationStack {
@@ -176,8 +178,14 @@ struct FinanceEntityEditor: View {
                 if kind == .account {
                     Picker(L("类型", "Type"), selection: $type) { ForEach(MoneyAccountType.allCases) { Label($0.label, systemImage: $0.symbol).tag($0.rawValue) } }
                     bankField
-                    Picker(L("币种", "Currency"), selection: Binding(get: { currency }, set: { currency = $0; assetRate = "" })) { CurrencyPickerItems() }.disabled(used)
-                    if currency != "CNY" { accountRateField }
+                    if used {
+                        LabeledContent(L("币种", "Currency"), value: Money.name(currency) + " · " + currency)
+                        Text(L("此账户已有账单（含最近删除），为保留历史金额，币种不可更改。需要其他币种时请新建账户。", "This account has entries, including any in Recently Deleted. Its currency stays fixed to preserve historical amounts. Create a separate account for another currency."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Picker(L("币种", "Currency"), selection: Binding(get: { currency }, set: { currency = $0; assetRate = "" })) { CurrencyPickerItems() }
+                    }
+                    if currency != assetCurrency { accountRateField }
                     VStack(alignment: .leading, spacing: 6) {
                         Text(L("期初余额", "Opening balance") + " · " + currency).font(.subheadline.weight(.medium))
                         TextField("0", text: $opening).focused($textFocused).disabled(used && !correctingOpening).monospacedDigit()
@@ -187,7 +195,6 @@ struct FinanceEntityEditor: View {
                             #endif
                     }
                     if used {
-                        Text(L("已有流水，币种已锁定。期初余额是开始记账时的余额。", "Currency is locked because this account has entries. The opening balance is what you had when you started recording.")).font(.caption).foregroundStyle(.secondary)
                         HStack {
                             Button(L("核对当前余额…", "Check current balance…"), action: reconcile)
                             if !correctingOpening { Button(L("更正期初余额…", "Correct opening balance…")) { correctingOpening = true } }
@@ -262,7 +269,7 @@ struct FinanceEntityEditor: View {
             if let kept = drafts.financeEntity, kept.kind == kind, kept.id == id {
                 original = kept.original
                 name = kept.name; currency = kept.currency; opening = kept.opening; symbol = kept.symbol; archived = kept.archived; accountID = kept.accountID
-                emoji = kept.emoji; bankName = kept.bankName; assetRate = kept.assetRate; parentID = kept.parentID; income = kept.income; if !kept.color.isEmpty { color = kept.color }; if !kept.type.isEmpty { type = kept.type }; budget = kept.budget
+                emoji = kept.emoji; bankName = kept.bankName; assetRate = kept.assetRate; assetCurrency = kept.assetCurrency; parentID = kept.parentID; income = kept.income; if !kept.color.isEmpty { color = kept.color }; if !kept.type.isEmpty { type = kept.type }; budget = kept.budget
             }
             correctingOpening = used && opening != Money.text(original.accounts.first { $0.id == id }?.opening ?? 0)
             ready = true; keepEntityDraft()
@@ -277,7 +284,7 @@ struct FinanceEntityEditor: View {
     }
     private func keepEntityDraft() {
         drafts.financeEntity = FinanceEntityDraft(original: original, kind: kind, id: id, name: name, currency: currency, opening: opening, symbol: symbol, archived: archived, accountID: accountID,
-                                                  income: income, color: color, type: type, budget: budget, emoji: emoji, bankName: bankName, assetRate: assetRate, parentID: parentID)
+                                                  income: income, color: color, type: type, budget: budget, emoji: emoji, bankName: bankName, assetRate: assetRate, assetCurrency: assetCurrency, parentID: parentID)
     }
     private func remove() {
         guard let id else { return }
@@ -311,11 +318,11 @@ struct FinanceEntityEditor: View {
                     let value = MoneyAccount(id: id ?? UUID(), name: title, currency: currency, opening: try Money.parse(opening, currency: currency, signed: true), archived: archived, emoji: emoji.isEmpty ? nil : emoji, symbol: symbol.isEmpty ? nil : symbol, type: type, bankName: bankName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : bankName.trimmingCharacters(in: .whitespacesAndNewlines))
                     try data.updateAccount(value, expected: original.accounts.first { $0.id == id }, allowOpeningCorrection: confirmedOpening)
                     let rateText = assetRate.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if currency != "CNY", !rateText.isEmpty {
-                        guard data.storedRate(from: currency, to: "CNY") == original.storedRate(from: currency, to: "CNY") else {
+                    if currency != assetCurrency, !rateText.isEmpty {
+                        guard data.assetRate(from: currency, to: assetCurrency) == original.assetRate(from: currency, to: assetCurrency) else {
                             throw TaskBackup.invalid(L("汇率已更新，请重新打开后修改。", "Rates have changed. Reopen this editor before changing them."))
                         }
-                        try data.setManualRate(from: currency, to: "CNY", text: rateText)
+                        try data.setManualRate(from: currency, to: assetCurrency, text: rateText)
                     }
                 case .book:
                     let value = MoneyBook(id: id ?? UUID(), name: title, defaultAccountID: accountID, archived: archived, budget: budgetValue, emoji: emoji.isEmpty ? nil : emoji, symbol: symbol.isEmpty ? nil : symbol)

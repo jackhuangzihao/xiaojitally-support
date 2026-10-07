@@ -134,7 +134,75 @@ import UIKit
         try require(scroll.contentOffset.y == position, "Moving into all-day immediately stops vertical autoscroll")
         _ = drag.finish()
         #endif
+        #if os(iOS)
+        checks += try hostedTouchChecks()
+        #endif
         print("CALENDAR GRID PASS: \(checks) checks")
         return checks
     }
+    #if os(iOS)
+    /// UIKit must see the actual SwiftUI background probes and button host, not just
+    /// hand-built rectangles. This catches source registration and gesture gating regressions.
+    private static func hostedTouchChecks() throws -> Int {
+        var checks = 0
+        func require(_ condition: Bool, _ label: String) throws {
+            guard condition else { throw TaskBackup.invalid("Hosted calendar drag: " + label) }
+            checks += 1
+        }
+        let drag = WeekDrag(), feedback = DragFeedback()
+        let task = TaskItem(title: "Hosted pickup", scheduledAt: Date())
+        let root = VStack {
+            Button("Task") {}.frame(width: 100, height: 44)
+                .modifier(WeekDragSource(task: task, color: .blue, grabOffset: { _ in 12 }, drop: { _, _, _ in }))
+            ScrollView { Color.clear.frame(height: 900) }.frame(height: 300)
+        }.frame(width: 390, height: 500)
+            .background(MobileCalendarDrag(drag: drag, feedback: feedback, enabled: true))
+            .environment(drag)
+        let host = UIHostingController(rootView: root)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = host; window.isHidden = false
+        defer { window.isHidden = true; window.rootViewController = nil }
+        host.view.frame = window.bounds; host.view.setNeedsLayout(); host.view.layoutIfNeeded()
+        guard let press = window.gestureRecognizers?.first(where: { $0.name == "Calendar task drag" }),
+              let coordinator = press.delegate as? MobileCalendarDrag.Coordinator,
+              let panel = coordinator.view,
+              let card = drag.mobileSources.allObjects.first as? MobileCalendarDragSource.Probe else {
+            throw TaskBackup.invalid("Hosted calendar drag did not install its recognizer and source")
+        }
+        try require(card.bounds.width == 100 && card.bounds.height == 44 && panel.window === window,
+                    "A SwiftUI button registers its full bounds in the active window")
+        let point = card.convert(CGPoint(x: 50, y: 22), to: panel)
+        let windowPoint = panel.convert(point, to: window)
+        guard let touched = window.hitTest(windowPoint, with: nil) else {
+            throw TaskBackup.invalid("Hosted calendar task cannot receive touches")
+        }
+        try require(coordinator.prepare(at: point, touching: touched) && coordinator.gestureRecognizerShouldBegin(press),
+                    "The real SwiftUI hosting hit target can begin an all-day pickup")
+        let pan = UIPanGestureRecognizer(), tap = UITapGestureRecognizer()
+        touched.addGestureRecognizer(pan); touched.addGestureRecognizer(tap)
+        try require(coordinator.gestureRecognizer(press, shouldBeRequiredToFailBy: pan)
+                    && coordinator.gestureRecognizer(press, shouldBeRequiredToFailBy: tap),
+                    "Pending task pickup has priority over card taps and calendar pans")
+        let systemGate = UIGestureRecognizer(); window.addGestureRecognizer(systemGate)
+        try require(!coordinator.gestureRecognizer(press, shouldBeRequiredToFailBy: systemGate),
+                    "Window-level system gestures never wait for calendar pickup")
+        let cover = UIView(frame: window.bounds); window.addSubview(cover)
+        try require(!coordinator.prepare(at: point, touching: cover), "An overlay cannot pick up a task behind it")
+        cover.removeFromSuperview()
+        try require(!coordinator.prepare(at: CGPoint(x: -10, y: -10), touching: touched)
+                    && !coordinator.gestureRecognizer(press, shouldBeRequiredToFailBy: pan),
+                    "Outside a task, calendar dragging never delays navigation or scrolling")
+        coordinator.source = MobileCalendarDrag(drag: drag, feedback: feedback, enabled: false)
+        coordinator.attach()
+        try require(!press.isEnabled && !coordinator.prepare(at: point, touching: touched),
+                    "Presenting an editor disables pickup")
+        coordinator.source = MobileCalendarDrag(drag: drag, feedback: feedback, enabled: true)
+        coordinator.attach(); coordinator.attach()
+        try require(press.isEnabled && window.gestureRecognizers?.filter { $0.name == "Calendar task drag" }.count == 1,
+                    "Dismissal and repeated layout updates re-enable exactly one recognizer")
+        coordinator.detach()
+        try require(!(window.gestureRecognizers ?? []).contains(press), "Leaving the calendar removes its window recognizer")
+        return checks
+    }
+    #endif
 }

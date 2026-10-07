@@ -1,11 +1,25 @@
 import Foundation
 import SwiftData
 import UserNotifications
+import SwiftUI
 #if os(macOS)
 import AppKit
 #endif
 
 @MainActor enum SelfCheck {
+    /// Large concrete SwiftUI trees can exhaust the smaller device stack during presentation.
+    private static func checkInterfaceFootprints() throws -> Int {
+        func size<V: View, Content: View>(_: V.Type, _ body: (V) -> Content) -> Int { MemoryLayout<Content>.size }
+        let sizes = ["workspace": size(ContentView.self) { $0.body },
+                     "day card": size(DayTimelineCard.self) { $0.body },
+                     "task editor": size(TaskEditor.self) { $0.body },
+                     "list editor": size(ListEditor.self) { $0.body }]
+        print("Interface view sizes (bytes): \(sizes)")
+        guard sizes.values.allSatisfy({ $0 < 16_384 }) else {
+            throw TaskBackup.invalid("Interface exceeds the 16 KB per-component stack budget: \(sizes)")
+        }
+        return sizes.count
+    }
     #if (os(macOS) && JIANSHI_APP_STORE) || targetEnvironment(simulator)
     /// UI examples are allowed only inside a disposable, empty test container.
     static func seedDayTimelineUI() throws {
@@ -2404,6 +2418,7 @@ import AppKit
             try require(Set(before.tasks.map(\.id)) == Set(after.tasks.map(\.id)) && Set(before.lists.map(\.id)) == Set(after.lists.map(\.id)), "Migration preserves all task and list identities")
             try require(Set(after.lists.compactMap { $0.colorHex?.uppercased() }).count == after.lists.count, "Migrated store has distinct list colors")
         }
+        checkCount += try checkInterfaceFootprints()
         checkCount += try CalendarGridChecks.run()
         checkCount += try EditingChecks.run()
         checkCount += try FinanceChecks.run()

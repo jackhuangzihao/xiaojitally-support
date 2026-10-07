@@ -121,7 +121,13 @@ func assetRateText(_ value: Decimal) -> String {
 }
 
 struct FinanceRateEditor: View {
-    let data: FinanceData
+    // Freeze the quote target and comparison snapshot for this editing session.
+    @State private var data: FinanceData
+    @State private var currency: String
+    init(data: FinanceData, currency: String) {
+        _data = State(initialValue: data)
+        _currency = State(initialValue: currency)
+    }
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appLanguage") private var language = "system"
@@ -129,16 +135,16 @@ struct FinanceRateEditor: View {
     @State private var values: [String: String] = [:]
     @State private var restoreReference: Set<String> = []
     @State private var error: String?
-    private var currencies: [String] { Set(data.accounts.map(\.currency)).filter { $0 != "CNY" }.sorted() }
+    private var currencies: [String] { Set(data.accounts.map(\.currency)).filter { $0 != currency }.sorted() }
     private func originalText(_ currency: String) -> String {
-        guard let stored = data.storedRate(from: currency, to: "CNY") else { return "" }
+        guard let stored = data.assetRate(from: currency, to: self.currency) else { return "" }
         return assetRateText(stored.rate)
     }
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Text(L("填写 1 单位外币兑换多少人民币，例如 1 USD = 7.10 CNY。只改变当前资产估值，不改变账单。", "Enter CNY per 1 unit of foreign currency, for example 1 USD = 7.10 CNY. This changes asset estimates, not recorded entries."))
+                    Text(L("填写 1 单位其他币种兑换多少 \(currency)。仅改变当前资产估值，不改变历史账单。", "Enter \(currency) per 1 unit of each other currency. This changes current asset estimates, never historical entries."))
                         .font(.callout)
                 }
                 if currencies.isEmpty { Text(L("添加外币账户后可在这里填写汇率。", "Add a foreign-currency account to enter its rate here.")) }
@@ -148,22 +154,22 @@ struct FinanceRateEditor: View {
                             Text("1 " + currency + " =")
                             TextField(L("汇率", "Rate"), text: Binding(get: { values[currency, default: originalText(currency)] }, set: { values[currency] = $0; restoreReference.remove(currency) }))
                                 .multilineTextAlignment(.trailing).monospacedDigit().focused($rateFocused)
-                                .accessibilityLabel("1 " + currency + L("兑换人民币汇率", " in CNY"))
+                                .accessibilityLabel("1 " + currency + L("兑换汇率，单位 ", " in ") + self.currency)
                                 #if os(iOS)
                                 .keyboardType(.decimalPad)
                                 #endif
-                            Text("CNY").foregroundStyle(.secondary)
+                            Text(self.currency).foregroundStyle(.secondary)
                         }.frame(minHeight: 44)
                         if restoreReference.contains(currency) {
-                            Text(L("保存后清除手动汇率，可点“更新汇率”获取参考值。", "Saving clears the manual rate. Use Update rates to fetch a reference value.")).font(.caption).foregroundStyle(.secondary)
-                        } else if let rate = data.storedRate(from: currency, to: "CNY") {
-                            Text((rate.isManual ? L("手动汇率 · ", "Manual rate · ") : L("欧洲央行参考汇率 · ", "ECB reference rate · ")) + rate.date)
+                            Text(L("保存后清除此币对的手动汇率，其他币对仍保留。估值可能继续使用其他手动汇率换算；可更新参考价。", "Saving clears this pair’s manual rate and keeps all other pairs. Estimates may still use other manual rates through cross-conversion. You can update reference rates.")).font(.caption).foregroundStyle(.secondary)
+                        } else if let rate = data.assetRate(from: currency, to: self.currency) {
+                            Text((rate.isManual ? L("含手动汇率", "Includes manual rates") : "ECB") + (rate.referenceDates.isEmpty ? "" : " · " + rate.referenceDates.joined(separator: " / ")))
                                 .font(.caption).foregroundStyle(.secondary)
                         } else {
                             Text(L("暂无汇率，此币种尚未计入总额。", "No rate yet. This currency cannot be included in the total.")).font(.caption).foregroundStyle(.orange)
                         }
-                        if data.storedRate(from: currency, to: "CNY")?.isManual == true {
-                            Button(L("恢复参考汇率", "Restore reference rate")) { restoreReference.insert(currency); values[currency] = "" }
+                        if data.storedRate(from: currency, to: self.currency)?.isManual == true {
+                            Button(L("清除此币对手动汇率", "Clear this pair’s manual rate")) { restoreReference.insert(currency); values[currency] = "" }
                                 .frame(minHeight: 44)
                         }
                     }
@@ -196,11 +202,11 @@ struct FinanceRateEditor: View {
             if !changed.isEmpty {
                 try FinanceStore.update(context) { ledger in
                     for currency in changed {
-                        guard ledger.storedRate(from: currency, to: "CNY") == data.storedRate(from: currency, to: "CNY") else {
+                        guard ledger.assetRate(from: currency, to: self.currency) == data.assetRate(from: currency, to: self.currency) else {
                             throw TaskBackup.invalid(L("汇率已更新，请重新打开后修改。", "Rates have changed. Reopen this editor before changing them."))
                         }
-                        if restoreReference.contains(currency) { ledger.removeManualRate(from: currency, to: "CNY") }
-                        else { try ledger.setManualRate(from: currency, to: "CNY", text: values[currency, default: ""]) }
+                        if restoreReference.contains(currency) { ledger.removeManualRate(from: currency, to: self.currency) }
+                        else { try ledger.setManualRate(from: currency, to: self.currency, text: values[currency, default: ""]) }
                     }
                 }
             }

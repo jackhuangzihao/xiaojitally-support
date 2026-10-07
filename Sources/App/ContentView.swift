@@ -436,15 +436,12 @@ struct ContentView: View {
         #endif
     }
 
-    // Notices belong to a page's safe area, above the native tab bar. An overlay
-    // on TabView itself can obscure its buttons and does not reserve scrolling space.
+    // A transient message floats inside the page, above its tab bar. Reserving a
+    // safe-area strip for it would resize the calendar and move a drag's target.
     private var taskContent: some View {
-        mainContent.safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                BackupStatusNotice { showingSettings = true }
-                taskNotice
-            }
-        }
+        mainContent
+            .overlay(alignment: .bottom) { taskNotice.padding(.bottom, 8) }
+            .safeAreaInset(edge: .bottom, spacing: 0) { BackupStatusNotice { showingSettings = true } }
     }
 
     @ViewBuilder private var taskNotice: some View {
@@ -456,17 +453,15 @@ struct ContentView: View {
                 }
                 Spacer(minLength: 8)
                 Button { assigning = nil } label: { Text(L("取消", "Cancel")).frame(minHeight: 44) }.fontWeight(.semibold)
-            }.padding(.horizontal, 16).padding(.vertical, 6).background(.regularMaterial)
+            }.padding(.horizontal, 12).padding(.vertical, 4)
+                .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.16)))
+                .frame(maxWidth: 480).padding(.horizontal, 12)
         } else if !undoDeletedIDs.isEmpty {
-            HStack {
-                Text(L("已删除 \(undoDeletedIDs.count) 项", "Deleted \(undoDeletedIDs.count) tasks"))
-                Spacer(minLength: 8)
-                Button(action: undoDeletion) { Text(L("撤销", "Undo")).frame(minWidth: 44, minHeight: 44) }.fontWeight(.semibold)
-                Button { undoDeletedIDs = [] } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }.accessibilityLabel(L("关闭提示", "Dismiss message"))
-            }.padding(.horizontal, 16).padding(.vertical, 6).background(.regularMaterial)
-            .task(id: undoDeletedIDs) {
-                do { try await Task.sleep(for: .seconds(8)); undoDeletedIDs = [] } catch {}
-            }
+            MoveFeedback(message: L("已删除 \(undoDeletedIDs.count) 项", "Deleted \(undoDeletedIDs.count) tasks"),
+                         canUndo: true, canShiftDeadline: false, shiftDeadline: {},
+                         undo: undoDeletion, dismiss: { undoDeletedIDs = [] })
+                .id(undoDeletedIDs).frame(maxWidth: 480).padding(.horizontal, 12)
         } else if let movedMessage {
             MoveFeedback(message: movedMessage, canUndo: undoSchedule != nil || undoListMove != nil || (undoCopy && history.canUndo),
                          canShiftDeadline: deadlineMove != nil && undoSchedule != nil, shiftDeadline: shiftMovedDeadline,

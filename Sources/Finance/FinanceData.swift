@@ -316,6 +316,10 @@ struct FinanceData: Codable, Equatable {
         entry.bookID = books.first { $0.id == bookID }?.id ?? books.first { !$0.archived }?.id ?? books.first?.id
         return entry
     }
+    /// Include trash and incoming transfers: restoring either must preserve the account's denomination.
+    func accountHasHistory(_ id: UUID) -> Bool {
+        entries.contains { $0.accountID == id || $0.destinationID == id }
+    }
     mutating func updateAccount(_ account: MoneyAccount, expected: MoneyAccount?, allowOpeningCorrection: Bool = false) throws {
         guard accounts.first(where: { $0.id == account.id }) == expected else {
             throw TaskBackup.invalid(L("账户已改变，请重新打开。", "Account changed. Reopen it."))
@@ -323,7 +327,7 @@ struct FinanceData: Codable, Equatable {
         guard !accounts.contains(where: { $0.id != account.id && $0.name.caseInsensitiveCompare(account.name) == .orderedSame }) else {
             throw TaskBackup.invalid(L("账户名称已存在。", "Account name already exists."))
         }
-        if let expected, entries.contains(where: { $0.accountID == account.id || $0.destinationID == account.id }) {
+        if let expected, accountHasHistory(account.id) {
             guard expected.currency == account.currency else {
                 throw TaskBackup.invalid(L("账户已有流水，不能直接更换币种。请新建对应币种的账户。", "An account with entries cannot change currency. Create an account in the required currency."))
             }
@@ -396,7 +400,7 @@ struct FinanceData: Codable, Equatable {
     }
     func converted(_ amount: Decimal, from: String, to: String) -> Decimal? {
         if from == to { return amount }
-        guard let rate = storedRate(from: from, to: to) else { return nil }
+        guard let rate = assetRate(from: from, to: to) else { return nil }
         return Money.round(amount * rate.rate, currency: to)
     }
     /// Use either stored direction; an explicit manual quote takes priority over a cached reference.
@@ -411,6 +415,22 @@ struct FinanceData: Codable, Equatable {
         if selected.base != from { selected.base = from; selected.quote = to; selected.rate = 1 / selected.rate }
         return selected
     }
+    /// Only current assets use crossed quotes. Historical posting/statistics never infer a new rate here.
+    func assetRate(from: String, to: String) -> MoneyAssetRate? {
+        guard from != to else { return MoneyAssetRate(rate: 1, quotes: []) }
+        let direct = storedRate(from: from, to: to).flatMap { MoneyRate.valid($0.rate) ? $0 : nil }
+        if let direct, direct.isManual { return MoneyAssetRate(rate: direct.rate, quotes: [direct]) }
+        // Existing installations store CNY quotes; the ledger currency is the only additional bridge.
+        for bridge in ["CNY", baseCurrency] where bridge != from && bridge != to {
+            guard let first = storedRate(from: from, to: bridge), let second = storedRate(from: bridge, to: to) else { continue }
+            let rate = first.rate * second.rate
+            guard MoneyRate.valid(rate) else { continue }
+            if direct == nil || first.isManual || second.isManual {
+                return MoneyAssetRate(rate: rate, quotes: [first, second])
+            }
+        }
+        return direct.map { MoneyAssetRate(rate: $0.rate, quotes: [$0]) }
+    }
     func assetSummary(in currency: String = "CNY", accountBalances: [UUID: Decimal]? = nil, accounts selectedAccounts: [MoneyAccount]? = nil) -> MoneyAssetSummary {
         var result = MoneyAssetSummary()
         let balances = accountBalances ?? self.accountBalances()
@@ -418,11 +438,11 @@ struct FinanceData: Codable, Equatable {
         for (original, amount) in result.balances {
             if original == currency { result.convertedSubtotal += amount; continue }
             if amount == 0 { continue }
-            guard let quote = storedRate(from: original, to: currency) else { result.missingCurrencies.append(original); continue }
+            guard let quote = assetRate(from: original, to: currency) else { result.missingCurrencies.append(original); continue }
             // Round the total once, not each account; tiny foreign balances must not disappear.
             result.convertedSubtotal += amount * quote.rate
             if quote.isManual { result.manualCurrencies.append(original) }
-            else { result.rateDates.append(quote.date) }
+            result.rateDates.append(contentsOf: quote.referenceDates)
         }
         result.convertedSubtotal = Money.round(result.convertedSubtotal, currency: currency)
         result.missingCurrencies.sort(); result.rateDates = Set(result.rateDates).sorted(); result.manualCurrencies.sort()
