@@ -5,9 +5,10 @@ import SwiftData
 struct TaskBackup: Codable {
     var format = "jianshi-backup"
     // Old clients reject this version before merging, instead of silently removing new metadata.
-    var version = 7
+    var version = 8
     var finance: FinanceData? = nil
     var weekTitles: [WeekTitleRecord]? = nil
+    var syncChanges: SyncChanges.Revisions? = nil
     var createdAt = Date()
     var lists: [ListRecord]
     var tasks: [TaskRecord]
@@ -84,8 +85,9 @@ struct TaskBackup: Codable {
     }
     static func invalid(_ message: String) -> NSError { NSError(domain: "Jianshi.Backup", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     func validate() throws {
-        guard format == "jianshi-backup", (1...7).contains(version) else { throw Self.invalid(L("不是受支持的小记备份版本，请更新 App 后重试。", "Unsupported Tally backup format or version. Update the app and retry.")) }
+        guard format == "jianshi-backup", (1...8).contains(version) else { throw Self.invalid(L("不是受支持的小记备份版本，请更新 App 后重试。", "Unsupported Tally backup format or version. Update the app and retry.")) }
         try finance?.validate()
+        try SyncChanges.validate(syncChanges)
         if let weekTitles {
             guard Set(weekTitles.map(\.week)).count == weekTitles.count,
                   weekTitles.allSatisfy({ CalendarWeekTitle.validKey($0.week) && !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.title.count <= 80 }) else {
@@ -124,6 +126,7 @@ struct TaskBackup: Codable {
     @MainActor static func capture(_ context: ModelContext, includeFinance: Bool = true) throws -> Self {
         Self(finance: includeFinance ? try FinanceStore.read(context) : nil,
              weekTitles: try context.fetch(FetchDescriptor<CalendarWeekTitle>()).map { WeekTitleRecord(week: $0.week, title: $0.title) },
+             syncChanges: try SyncChanges.read(context),
              lists: try context.fetch(FetchDescriptor<TaskList>()).map { ListRecord(id: $0.id, name: $0.name, createdAt: $0.createdAt, parentID: $0.parentID, colorHex: $0.colorHex, sortOrder: $0.sortOrder, emoji: $0.emoji) },
              tasks: try context.fetch(FetchDescriptor<TaskItem>()).map(TaskRecord.init))
     }
@@ -143,7 +146,8 @@ struct TaskBackup: Codable {
             let weeks = Set((existing.weekTitles ?? []).map(\.week))
             result.weekTitles = (existing.weekTitles ?? []) + (weekTitles ?? []).filter { !weeks.contains($0.week) }
         }
-        result.version = 7
+        result.syncChanges = try SyncChanges.Resolution(local: existing, cloud: self, base: nil).revisions(for: result)
+        result.version = 8
         try result.validate() // Validate the complete merged graph and records before changing live models.
         return result
     }
@@ -151,7 +155,8 @@ struct TaskBackup: Codable {
     /// Save once: a failed write uses the same protective rollback as normal task edits.
     @MainActor func restore(_ context: ModelContext, replace: Bool) throws {
         try Store.recovery.requireWritable(context)
-        let merged = try merging(into: Self.capture(context), replace: replace)
+        let original = try Self.capture(context)
+        let merged = try merging(into: original, replace: replace)
         let oldTasks = try context.fetch(FetchDescriptor<TaskItem>())
         let oldLists = try context.fetch(FetchDescriptor<TaskList>())
         var listsByID = Dictionary(uniqueKeysWithValues: oldLists.map { ($0.id, $0) })
@@ -170,9 +175,12 @@ struct TaskBackup: Codable {
         for record in tasks where !taskIDs.contains(record.id) {
             context.insert(record.model(list: record.listID.flatMap { listsByID[$0] }))
         }
-        if let finance = merged.finance { try FinanceStore.stage(finance, in: context) }
+        if let finance = merged.finance { try FinanceStore.stage(finance, in: context, trackSyncChanges: false) }
         if let weekTitles = merged.weekTitles { try CalendarWeekTitle.stage(weekTitles, in: context) }
-        try Store.save(context)
+        // A user-requested restore is a new edit; importing cloud changes is not.
+        let restored = try Self.capture(context)
+        try SyncChanges.stage(SyncChanges.restored(restored, replacing: original), in: context)
+        try Store.save(context, trackSyncChanges: false)
     }
     @MainActor static func recoveryURL() throws -> URL {
         let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("JianshiBackups", isDirectory: true)

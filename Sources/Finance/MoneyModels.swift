@@ -229,6 +229,15 @@ struct MoneyEntry: Codable, Identifiable, Equatable {
     var refundOf: UUID?
     var deletedAt: Date?
     var deletionBatchID: UUID? // Only rows deleted by the same action are restored together.
+    var pending: Bool? // Absent in older ledgers; only true means not yet posted.
+    var isPending: Bool { pending == true }
+
+    func isDueForConfirmation(at now: Date = Date(), calendar: Calendar = Dates.calendar) -> Bool {
+        guard isPending, deletedAt == nil, date.timeIntervalSince1970.isFinite, now.timeIntervalSince1970.isFinite,
+              (-62135596800...253402300799).contains(date.timeIntervalSince1970),
+              (-62135596800...253402300799).contains(now.timeIntervalSince1970) else { return false }
+        return calendar.startOfDay(for: date) <= calendar.startOfDay(for: now)
+    }
 }
 struct MoneyRate: Codable, Equatable {
     var base: String

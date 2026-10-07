@@ -4,6 +4,7 @@ extension MoneyEntry {
     /// What this entry adds to spending (refunds negative, transfer fees included) or income, in its own money:
     /// the original currency, or the paying account's currency for a transfer fee.
     func originalStatistics(income: Bool, feeCurrency: String?) -> (amount: Decimal, currency: String)? {
+        guard !isPending else { return nil }
         switch kind {
         case .income where income, .expense where !income: return (amount, currency)
         case .refund where !income: return (-amount, currency)
@@ -55,7 +56,7 @@ extension FinanceData {
     }
     func statisticsTotal(_ entries: [MoneyEntry], income: Bool, in display: String, history: RateHistory?, days: [String]?) -> MoneyStatisticsTotal {
         var result = MoneyStatisticsTotal()
-        for entry in entries where entry.originalStatistics(income: income, feeCurrency: nil) != nil {
+        for entry in entries where entry.deletedAt == nil && entry.originalStatistics(income: income, feeCurrency: nil) != nil {
             if let value = statisticsValue(entry, income: income, in: display, history: history, days: days) {
                 result.total += value.amount
                 result.convertedCount += 1
@@ -86,6 +87,7 @@ enum MoneyCategoryKey: Hashable {
     case category(UUID?)
     case fees
     func includes(_ entry: MoneyEntry, income: Bool) -> Bool {
+        guard !entry.isPending else { return false }
         switch self {
         case .fees: return !income && entry.kind == .transfer && entry.fee > 0
         case .category(let id):
@@ -93,6 +95,7 @@ enum MoneyCategoryKey: Hashable {
         }
     }
     func includes(_ entry: MoneyEntry, income: Bool, data: FinanceData) -> Bool {
+        guard !entry.isPending else { return false }
         if case .category(let id?) = self {
             return data.categoryMatches(entry.categoryID, filterID: id) && (income ? entry.kind == .income : entry.kind == .expense || entry.kind == .refund)
         }
@@ -122,6 +125,7 @@ struct MoneyDrilldown {
 }
 extension MoneyEntry {
     func statisticsAmount(income: Bool) -> Decimal? {
+        guard !isPending else { return nil }
         switch kind {
         case .income where income, .expense where !income: return baseAmount
         case .refund where !income: return baseAmount.map { -$0 }
@@ -156,6 +160,7 @@ extension MoneyEntry {
         (bookID == nil || self.bookID == bookID) && (accountID == nil || self.accountID == accountID || destinationID == accountID)
     }
     func accountChange(for id: UUID) -> Decimal {
+        guard !isPending else { return 0 }
         var change: Decimal = 0
         if accountID == id {
             switch kind {

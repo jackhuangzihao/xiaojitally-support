@@ -133,6 +133,16 @@ import AppKit
         try rejects("Submitting the same draft again cannot create a duplicate posting") {
             _ = try moneyDraft.preparedLedger(taskID: savedTask.id, title: savedTask.title, current: savedLedger)
         }
+        let futureDay = Dates.calendar.date(byAdding: .day, value: 2, to: Date())!
+        var plannedDraft = TaskFinanceDraft(ledger: ledger, scheduledAt: futureDay)
+        plannedDraft.amount = "25"
+        plannedDraft.entry.accountID = bank.id
+        let planned = try plannedDraft.preparedLedger(taskID: savedTask.id, title: "Planned expense", current: ledger)
+        try require(planned.entries[0].isPending && planned.balance(bank.id) == bank.opening
+                    && Dates.sameDay(planned.entries[0].date, futureDay),
+                    "Future task entry defaults to pending and preserves the planned day without posting")
+        let todayDraft = TaskFinanceDraft(ledger: ledger, scheduledAt: Date())
+        try require(!todayDraft.entry.isPending, "Same-day task entry retains immediate posting default")
         let separateDraft = TaskFinanceDraft(ledger: ledger)
         var unrelated = ledger
         var unrelatedEntry = toSave.entries[0]

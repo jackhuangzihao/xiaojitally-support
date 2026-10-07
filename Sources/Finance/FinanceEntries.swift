@@ -34,7 +34,13 @@ extension FinanceHome {
                         else if !data.accounts.isEmpty || !data.entries.isEmpty || data.books.contains(where: { $0.budget != nil }) { overview(entries) }
                     }
                 }.padding(.horizontal, compact ? 4 : 24).padding(.top, 18).padding(.bottom, 6)
-                if entries.isEmpty { emptyState.padding(.top, 40).frame(maxWidth: .infinity) }
+                if !trash && drilldown == nil {
+                    PendingEntriesSection(entries: pendingEntries, data: data, hidden: hidden,
+                                          open: { editor = EntryRequest(entry: $0, expected: $0) },
+                                          confirm: { editor = EntryRequest(entry: $0, expected: $0, confirmingPending: true) },
+                                          remove: { confirmDelete = $0 })
+                }
+                if entries.isEmpty && (trash || pendingEntries.isEmpty || drilldown != nil) { emptyState.padding(.top, 40).frame(maxWidth: .infinity) }
                 ForEach(keys, id: \.self) { day in
                     Section {
                         ForEach(days[day] ?? []) { entry in
@@ -55,7 +61,10 @@ extension FinanceHome {
         if entry.deletedAt == nil {
             Button(L("编辑", "Edit")) { editor = EntryRequest(entry: entry, expected: entry) }
             if entry.kind == .expense || entry.kind == .income || entry.kind == .transfer { Button(L("再记一笔同样的", "Record another like this")) { duplicate(entry) } }
-            if entry.kind == .expense {
+            if entry.isDueForConfirmation() {
+                Button(L("确认入账…", "Confirm entry…")) { editor = EntryRequest(entry: entry, expected: entry, confirmingPending: true) }
+            }
+            if entry.kind == .expense && !entry.isPending {
                 Button(data.remainingRefund(for: entry.id) > 0 ? L("记录退款", "Record refund") : L("已全额退款", "Fully refunded")) { newRefund(entry) }
                     .disabled(data.remainingRefund(for: entry.id) <= 0)
             }
@@ -395,6 +404,7 @@ struct FinanceEntryRow<Actions: View>: View {
     }
     var detail: String {
         var parts = [Dates.label(entry.date, pattern: "HH:mm")]
+        if entry.isPending { parts.append(L("待入账", "Pending")) }
         if let category = data.category(entry.categoryID), category.label != entry.title, entry.kind != .transfer { parts.append(data.categoryPath(category.id)) }
         switch entry.kind {
         case .transfer:

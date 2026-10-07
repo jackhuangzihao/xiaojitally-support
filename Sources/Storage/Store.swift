@@ -80,10 +80,11 @@ import SQLite3
     static func failureMessage(_ error: Error) -> String {
         L("修改未保存。请使用“重新载入数据”恢复操作；编辑草稿会保留，载入后请检查并再次保存。", "Changes were not saved. Reload data to continue; editor drafts are kept. Review and save them after reloading.") + "\n" + error.localizedDescription
     }
-    static func save(_ context: ModelContext) throws {
+    static func save(_ context: ModelContext, trackSyncChanges: Bool = true) throws {
         try recovery.requireWritable(context)
         do {
             ListColor.normalize(try context.fetch(FetchDescriptor<TaskList>()))
+            if trackSyncChanges { try SyncChanges.trackModels(in: context) }
             let changed = context.hasChanges
             try context.save()
             if changed { revision += 1 }
@@ -103,7 +104,7 @@ import SQLite3
 /// This is a local rollback artifact, not a sync queue or a replacement for portable JSON backups.
 enum StoreUpgradeSnapshot {
     // Bump for a persisted-schema change, not for every app build. Keep prior generations.
-    static let generation = "schema-v1"
+    static let generation = "schema-v2"
     static func prepare(_ source: URL, generation: String = StoreUpgradeSnapshot.generation) throws -> URL? {
         guard !generation.isEmpty, generation.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 }) else {
             throw CocoaError(.fileWriteInvalidFileName)

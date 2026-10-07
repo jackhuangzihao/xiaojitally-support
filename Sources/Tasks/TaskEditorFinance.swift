@@ -18,6 +18,7 @@ extension TaskEditor {
                     Text(MoneyKind.expense.label).tag(MoneyKind.expense)
                     Text(MoneyKind.income.label).tag(MoneyKind.income)
                 }.pickerStyle(.segmented)
+                MoneyPostingChoice(entry: binding.entry)
                 financeAmountField(L("金额", "Amount") + " · " + finance.entry.currency, text: binding.amount, field: .financeAmount)
                 if financeCurrencyChanged {
                     Text(L("账户币种已更换，请按 \(finance.entry.currency) 重新输入金额。", "The account currency changed. Enter the amount in \(finance.entry.currency)."))
@@ -52,7 +53,9 @@ extension TaskEditor {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Text(L("保存任务时一起入账；取消不会产生账单。重复任务只记录这一次。", "Saved together with this task. Cancelling creates no entry. Repeating tasks record this occurrence only."))
+                Text(finance.entry.isPending
+                     ? L("保存为待入账；到计划日期后，在财务里确认入账。重复任务只记录这一次。", "Saved as pending. Confirm it in Finance on or after the planned date. Repeating tasks record this occurrence only.")
+                     : L("保存任务时一起入账；取消不会产生账单。重复任务只记录这一次。", "Saved together with this task. Cancelling creates no entry. Repeating tasks record this occurrence only."))
                     .font(.caption).foregroundStyle(.secondary)
             }
             .onChange(of: finance.entry.kind) { _, kind in
@@ -76,7 +79,7 @@ extension TaskEditor {
         } else {
             return AnyView(Button {
                 do {
-                    linkedFinance = TaskFinanceDraft(ledger: try FinanceStore.read(context) ?? .initial)
+                    linkedFinance = TaskFinanceDraft(ledger: try FinanceStore.read(context) ?? .initial, scheduledAt: hasDate ? date : hasDue ? due : nil)
                     financeCurrencyChanged = false
                     focus = .financeAmount
                 } catch { errorMessage = error.localizedDescription }

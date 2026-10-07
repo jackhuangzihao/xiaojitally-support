@@ -1,4 +1,5 @@
 import SwiftUI
+import OSLog
 import SwiftData
 import UniformTypeIdentifiers
 import Charts
@@ -11,6 +12,7 @@ import UIKit
 struct EntryRequest: Identifiable {
     var entry: MoneyEntry
     var expected: MoneyEntry?
+    var confirmingPending = false
     var id: UUID { entry.id }
 }
 
@@ -21,6 +23,7 @@ struct FinanceDraft {
     var amount: String, actual: String, received: String, fee: String, converted: String, convertedFee: String
     var balance: Decimal
     var expression: String? = nil
+    var confirmingPending = false
 }
 
 /// Native amount editing, with an optional calculator and contextual advanced fields.
@@ -37,6 +40,7 @@ struct FinanceEntryEditor: View {
     @AppStorage("appLanguage") private var language = "system"
     @AppStorage("hideMoney") private var hidden = false
     let expected: MoneyEntry?
+    let confirmingPending: Bool
     @Environment(EditorDrafts.self) private var drafts
     @State private var generation = Store.recovery.generation
     @Environment(\.modelContext) private var context
@@ -70,7 +74,8 @@ struct FinanceEntryEditor: View {
     @State private var initialFingerprint = ""
     @State private var restoringDraft = false
     @FocusState private var focus: Field?
-    init(entry: MoneyEntry, expected: MoneyEntry?) {
+    init(entry: MoneyEntry, expected: MoneyEntry?, confirmingPending: Bool = false) {
+        self.confirmingPending = confirmingPending
         self.expected = expected; _draft = State(initialValue: entry)
         let text = entry.amount == 0 ? "" : Money.text(entry.amount)
         _amount = State(initialValue: text)
@@ -87,6 +92,8 @@ struct FinanceEntryEditor: View {
     private var fingerprint: String { String(describing: draft) + [expression, amount, actual, received, fee, converted, convertedFee].joined(separator: "|") }
     private var dirty: Bool { loaded && fingerprint != initialFingerprint }
     private var rateQuery: String { "\(loaded)-\(automaticRates)-\(draft.currency)-\(draft.accountID?.uuidString ?? "")-\(draft.destinationID?.uuidString ?? "")-\(Dates.calendar.startOfDay(for: draft.date).timeIntervalSince1970)" }
+    private static let postingLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tally", category: "FinancePosting")
+    private var futurePlan: Bool { draft.isPending && Dates.calendar.startOfDay(for: draft.date) > Dates.calendar.startOfDay(for: Date()) }
     private var foreign: Bool { draft.currency != ledger.baseCurrency }
     private var desiredAmountFocus: Field? {
         #if os(iOS)
@@ -113,8 +120,18 @@ struct FinanceEntryEditor: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if compact { amountRow; chips; Divider() }
                     if draft.accountID == nil && (draft.kind == .expense || draft.kind == .income) {
-                        Text(L("未选择账户：这笔只计入收支，不改变资产余额。点“账户”可选择或添加账户。", "No account selected: this entry counts in totals but won't change an account balance. Use Account to choose or add one."))
+                        Text(draft.isPending
+                             ? L("未选择账户：确认后只计入收支，不改变资产余额。", "No account selected: after confirmation, this counts in totals without changing an account balance.")
+                             : L("未选择账户：这笔只计入收支，不改变资产余额。点“账户”可选择或添加账户。", "No account selected: this entry counts in totals but won't change an account balance. Use Account to choose or add one."))
                             .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if expected == nil && (draft.kind == .expense || draft.kind == .income) && (draft.taskID != nil || draft.isPending) {
+                        MoneyPostingChoice(entry: $draft)
+                    } else if draft.isPending {
+                        Label(confirmingPending
+                              ? L("核对金额和日期后确认入账。", "Review the amount and date, then confirm the entry.")
+                              : L("待入账 · 尚未计入余额和统计", "Pending · Excluded from balances and totals"), systemImage: "clock")
+                            .font(.callout).foregroundStyle(.secondary)
                     }
                     if showMore { moreFields }
                     if let kindChangeBlock, expected?.kind == .expense {
@@ -169,7 +186,7 @@ struct FinanceEntryEditor: View {
         .onChange(of: fingerprint) { _, _ in if loaded { keepDraft() } }
         .onDisappear { if generation == Store.recovery.generation && Store.recovery.failure == nil { drafts.finance = nil } }
         .task(id: rateQuery) {
-            if loaded && expected == nil && needsRate && automaticRates { await fetchAndFillRates() }
+            if loaded && (expected == nil || confirmingPending) && needsRate && automaticRates { await fetchAndFillRates() }
         }
         #if os(iOS)
         .onChange(of: focus) { _, focusedField in
@@ -201,6 +218,7 @@ struct FinanceEntryEditor: View {
             }
         }
         .onChange(of: draft.kind) { _, kind in
+            if kind == .transfer { draft.pending = nil }
             if kind == .transfer, let account { draft.currency = account.currency }
             if kind != .transfer { draft.destinationID = nil; received = ""; fee = ""; convertedFee = "" }
             if kind == .expense || kind == .income, ledger.category(draft.categoryID)?.isIncome != (kind == .income) {
@@ -381,23 +399,25 @@ struct FinanceEntryEditor: View {
         VStack(alignment: .leading, spacing: 10) {
             Label(L("外币换算", "Currency conversion"), systemImage: "arrow.triangle.2.circlepath").font(.subheadline.weight(.semibold))
             if let account, account.currency != draft.currency, draft.kind != .transfer {
-                amountField(account.name + ((draft.kind == .expense) ? L(" 实际扣款", " charged") : L(" 实际入账", " received")), currency: account.currency, text: $actual, field: .actual)
+                amountField(account.name + (draft.isPending && !confirmingPending ? L(" 计划金额", " planned amount") : (draft.kind == .expense) ? L(" 实际扣款", " charged") : L(" 实际入账", " received")), currency: account.currency, text: $actual, field: .actual)
             }
             if foreign && draft.kind != .transfer && draft.kind != .adjustment && account?.currency != ledger.baseCurrency {
-                amountField(L("计入统计", "Counts in totals as"), currency: ledger.baseCurrency, text: $converted, field: .converted)
+                amountField(draft.isPending && !confirmingPending ? L("计划折算金额", "Planned conversion") : L("计入统计", "Counts in totals as"), currency: ledger.baseCurrency, text: $converted, field: .converted)
             }
             if draft.kind == .transfer && foreign && !fee.isEmpty { amountField(L("手续费折合", "Fee in base currency"), currency: ledger.baseCurrency, text: $convertedFee, field: .convertedFee) }
             (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))) {
                 Text(draft.rateNote.isEmpty ? L("还没有参考汇率", "No reference rate yet") : draft.rateNote).font(.caption).foregroundStyle(.secondary)
                 if !compact { Spacer() }
                 Button(gettingRates ? L("获取中…", "Fetching…") : L("按参考汇率填入", "Fill with reference rate")) { fillRates() }
-                    .controlSize(.small).frame(minHeight: compact ? 44 : nil).disabled(gettingRates || amount.isEmpty)
+                    .controlSize(.small).frame(minHeight: compact ? 44 : nil).disabled(gettingRates || amount.isEmpty || futurePlan)
             }
             Toggle(L("自动获取参考汇率", "Fetch reference rates automatically"), isOn: $automaticRates).font(.caption)
                 #if os(macOS)
                 .toggleStyle(.checkbox)
                 #endif
-            Text(L("以银行实际扣款为准：改成实际金额后不会被覆盖；历史账单不随汇率变化。", "Use what your bank actually charged; amounts you enter are never overwritten, and history never changes with rates.")).font(.caption).foregroundStyle(.secondary)
+            Text(draft.isPending
+                 ? L("计划金额仅供核对，确认前请填写实际扣款及折算金额。未来日期暂不自动填写参考价。", "Review planned amounts against the actual charge and conversion before confirming. Future dates have no automatic reference rate.")
+                 : L("以银行实际扣款为准：改成实际金额后不会被覆盖；历史账单不随汇率变化。", "Use what your bank actually charged; amounts you enter are never overwritten, and history never changes with rates.")).font(.caption).foregroundStyle(.secondary)
         }.padding(12).background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.08)))
     }
     private func amountField(_ label: String, currency: String, text: Binding<String>, field: Field) -> some View {
@@ -488,7 +508,7 @@ struct FinanceEntryEditor: View {
                         .help(L("保存并继续下一笔（⌘↩）", "Save and start another (⌘↩)"))
                         .disabled(!loaded || gettingRates || draft.deletedAt != nil)
                 }
-                Button(compact ? L("保存", "Save") : expected == nil ? L("保存新账单", "Save new entry") : L("保存修改", "Save changes")) { save() }.buttonStyle(.borderedProminent)
+                Button(confirmingPending ? L("确认入账", "Confirm entry") : draft.isPending ? L("保存待入账", "Save pending") : compact ? L("保存", "Save") : expected == nil ? L("保存新账单", "Save new entry") : L("保存修改", "Save changes")) { save() }.buttonStyle(.borderedProminent)
                     .controlSize(compact ? .large : .regular)
                     .frame(maxWidth: compact ? .infinity : nil, minHeight: compact ? 44 : nil)
                     .keyboardShortcut(.defaultAction).disabled(!loaded || gettingRates || draft.deletedAt != nil)
@@ -689,6 +709,7 @@ struct FinanceEntryEditor: View {
         Task { await fetchAndFillRates() }
     }
     private func fetchAndFillRates() async {
+        guard !futurePlan else { return }
         gettingRates = true; error = nil
         let query = rateQuery
         let source = draft.currency, day = draft.date
@@ -755,7 +776,7 @@ struct FinanceEntryEditor: View {
         }
     }
     private func keepDraft() {
-        drafts.finance = FinanceDraft(ledger: ledger, entry: draft, expected: expected, amount: amount, actual: actual, received: received, fee: fee, converted: converted, convertedFee: convertedFee, balance: initialBalance, expression: expression)
+        drafts.finance = FinanceDraft(ledger: ledger, entry: draft, expected: expected, amount: amount, actual: actual, received: received, fee: fee, converted: converted, convertedFee: convertedFee, balance: initialBalance, expression: expression, confirmingPending: confirmingPending)
     }
     private func preparedEntry() throws -> MoneyEntry {
         guard !amount.isEmpty, (try? Money.parse(amount, currency: draft.currency, signed: signedAmount)).map({ $0 != 0 || draft.kind == .adjustment }) == true else {
@@ -794,18 +815,23 @@ struct FinanceEntryEditor: View {
             try FinanceStore.update(context) { value in
                 try value.requireEntryCurrencies(e, from: ledger)
                 try value.updateEntry(e, expected: expected, baseCurrency: ledger.baseCurrency, referenceRates: rates)
+                if confirmingPending { try value.confirmPending(e) }
             }
+            Self.postingLog.info("Entry save completed; pending=\(e.isPending && !confirmingPending), confirmation=\(confirmingPending)")
             if let id = e.bookID { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyBook") }
             if e.kind == .expense || e.kind == .income { UserDefaults.standard.set(e.accountID?.uuidString ?? "none", forKey: "lastMoneyAccount") }
             if let id = e.categoryID, e.kind == .expense || e.kind == .income { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyCategory." + (e.kind == .income ? "income" : "expense")) }
             if again { startAnother(after: e) } else { dismiss() }
-        } catch { self.error = error.localizedDescription; notice = nil }
+        } catch {
+            Self.postingLog.error("Entry save failed: \(error.localizedDescription, privacy: .private)")
+            self.error = error.localizedDescription; notice = nil
+        }
     }
     /// Keeps kind, category, account, book, currency and day, so a run of receipts is only amounts.
     private func startAnother(after saved: MoneyEntry) {
         var next = MoneyEntry()
         next.kind = saved.kind; next.categoryID = saved.categoryID; next.accountID = saved.accountID; next.destinationID = saved.destinationID
-        next.bookID = saved.bookID; next.currency = saved.currency; next.date = saved.date
+        next.bookID = saved.bookID; next.currency = saved.currency; next.date = saved.date; next.pending = saved.pending
         draft = next
         expression = ""; amount = ""; actual = ""; received = ""; fee = ""; converted = ""; convertedFee = ""; filledValues = [:]
         reload()

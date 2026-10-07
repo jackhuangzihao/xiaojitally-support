@@ -179,7 +179,7 @@ struct FinanceHome: View {
         let limit = trash ? nil : billRange
         let text = search.trimmingCharacters(in: .whitespacesAndNewlines)
         return data.entries.filter { e in
-            guard trash ? e.deletedAt != nil : e.deletedAt == nil else { return false }
+            guard trash ? e.deletedAt != nil : e.deletedAt == nil && !e.isPending else { return false }
             if let drilldown, !drilldown.matches(e, data: data) { return false }
             if let limit, e.date < limit.start || e.date >= limit.end { return false }
             // Asset details cover all books; normal entry filters retain the book/account intersection.
@@ -293,7 +293,7 @@ struct FinanceHome: View {
         #endif
         .task(id: records.first?.payload) { reload() }
         .onAppear {
-            if let kept = drafts.finance { editor = EntryRequest(entry: kept.entry, expected: kept.expected) }
+            if let kept = drafts.finance { editor = EntryRequest(entry: kept.entry, expected: kept.expected, confirmingPending: kept.confirmingPending) }
             else if let kept = drafts.financeEntity { entity = EntityRequest(kind: kept.kind, existingID: kept.id, income: kept.income) }
         }
         .onChange(of: presentationActive, initial: true) { _, active in
@@ -311,7 +311,7 @@ struct FinanceHome: View {
         // A display override belongs to this scope, never to a different book or a changed default account.
         .onChange(of: entryDefaultsKey) { _, _ in entriesCurrencyRaw = "" }
         // The request carries whether this is an existing entry, so the sheet never guesses from other state.
-        .sheet(item: $editor, onDismiss: reload) { request in FinanceEntryEditor(entry: request.entry, expected: request.expected) }
+        .sheet(item: $editor, onDismiss: reload) { request in FinanceEntryEditor(entry: request.entry, expected: request.expected, confirmingPending: request.confirmingPending) }
         .sheet(item: $entity, onDismiss: reload) { item in FinanceEntityEditor(kind: item.kind, id: item.existingID, income: item.income, parentID: item.parentID, data: data) }
         .sheet(item: $conversionRequest, onDismiss: reload) { request in FinanceConversionPreview(ledger: request.ledger) }
         .onChange(of: scenePhase) { _, phase in resumeAssetRates(phase) }

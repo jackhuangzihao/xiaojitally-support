@@ -13,6 +13,7 @@ private enum SyncDiagnostics {
     var enabled = false
     var account: String = ""
     var baseline: Data?
+    var changeHistory: Data?
     var lastSync: Date?
     init() {}
 }
@@ -27,9 +28,16 @@ enum CloudMerge {
         }
     }
     static func value<T: Equatable>(_ local: T, _ cloud: T, _ base: T, label: @autoclosure () -> String,
-                                    choice: Choice?, report: ((String) -> Void)? = nil) throws -> T {
-        if local == cloud || cloud == base { return local }
-        if local == base { return cloud }
+                                    choice: Choice?, latest: @autoclosure () -> SyncChanges.Decision? = nil,
+                                    report: ((String) -> Void)? = nil) throws -> T {
+        if local == cloud { return local }
+        // A timestamped tombstone can still be newer when this device has no shared baseline.
+        let decision = latest()
+        if let newest = decision?.choice { return (choice ?? newest) == .local ? local : cloud }
+        if decision?.needsReview != true {
+            if cloud == base { return local }
+            if local == base { return cloud }
+        }
         switch choice {
         case .local: return local
         case .cloud: return cloud
@@ -39,14 +47,16 @@ enum CloudMerge {
         }
     }
     static func rows<T: Equatable>(_ local: [T], _ cloud: [T], _ base: [T], id: (T) -> UUID, label: String,
-                                   describe: (T) -> String, choice: Choice?, report: @escaping (String) -> Void) throws -> [T] {
+                                   describe: (T) -> String, choice: Choice?, kind: String = "",
+                                   latest: (([String]) -> SyncChanges.Decision)? = nil, report: @escaping (String) -> Void) throws -> [T] {
         let l = Dictionary(uniqueKeysWithValues: local.map { (id($0), $0) })
         let r = Dictionary(uniqueKeysWithValues: cloud.map { (id($0), $0) })
         let b = Dictionary(uniqueKeysWithValues: base.map { (id($0), $0) })
         return try Set(l.keys).union(r.keys).union(b.keys).sorted { $0.uuidString < $1.uuidString }.compactMap {
             try value(l[$0], r[$0], b[$0], label: label + "\n" +
                       L("本机：", "Local: ") + (l[$0].map(describe) ?? L("已删除", "Deleted")) + "\n" +
-                      L("云端：", "Cloud: ") + (r[$0].map(describe) ?? L("已删除", "Deleted")), choice: choice, report: report)
+                      L("云端：", "Cloud: ") + (r[$0].map(describe) ?? L("已删除", "Deleted")), choice: choice,
+                      latest: latest?([SyncChanges.key(kind, $0)]), report: report)
         }
     }
 
@@ -81,7 +91,8 @@ enum CloudMerge {
     /// A repeat chain is one merge unit. Unioning its independently created successors forks the series.
     /// Include base links too, so deleting or unlinking a parent cannot orphan a competing branch.
     static func taskRows(_ local: [TaskBackup.TaskRecord], _ cloud: [TaskBackup.TaskRecord], _ base: [TaskBackup.TaskRecord],
-                         choice: Choice?, report: @escaping (String) -> Void) throws -> [TaskBackup.TaskRecord] {
+                         choice: Choice?, latest: (([String]) -> SyncChanges.Decision)? = nil,
+                         report: @escaping (String) -> Void) throws -> [TaskBackup.TaskRecord] {
         let l = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
         let r = Dictionary(uniqueKeysWithValues: cloud.map { ($0.id, $0) })
         let b = Dictionary(uniqueKeysWithValues: base.map { ($0.id, $0) })
@@ -103,7 +114,8 @@ enum CloudMerge {
             let left = component.compactMap { l[$0] }, right = component.compactMap { r[$0] }, original = component.compactMap { b[$0] }
             result += try value(left, right, original, label:
                 (component.count > 1 ? L("重复任务（选择将用于整条序列，含后续任务）", "Repeating tasks (choice applies to the entire chain, including successors)") : L("任务", "Task")) + "\n" +
-                component.filter { l[$0] != r[$0] }.map { taskDifference(l[$0], r[$0]) }.joined(separator: "\n\n"), choice: choice, report: report)
+                component.filter { l[$0] != r[$0] }.map { taskDifference(l[$0], r[$0]) }.joined(separator: "\n\n"), choice: choice,
+                latest: latest?(component.map { SyncChanges.key("task", $0) }), report: report)
         }
         return result
     }
@@ -160,8 +172,10 @@ enum CloudMerge {
     }
 
     static func categoryRows(_ local: [MoneyCategory], _ cloud: [MoneyCategory], _ base: [MoneyCategory],
-                             choice: Choice?, report: @escaping (String) -> Void) throws -> [MoneyCategory] {
-        var result = try rows(local, cloud, base, id: { $0.id }, label: L("财务分类", "Finance category"), describe: { $0.label }, choice: choice, report: report)
+                             choice: Choice?, latest: (([String]) -> SyncChanges.Decision)? = nil,
+                             report: @escaping (String) -> Void) throws -> [MoneyCategory] {
+        var result = try rows(local, cloud, base, id: { $0.id }, label: L("财务分类", "Finance category"), describe: { $0.label }, choice: choice,
+                              kind: "category", latest: latest, report: report)
         let parents = Dictionary(uniqueKeysWithValues: result.map { ($0.id, $0) })
         // A parent deleted on one device while the other adds a child is one explicit family conflict.
         let conflictingParents = Set(result.compactMap { child -> UUID? in
@@ -190,7 +204,8 @@ enum CloudMerge {
     /// Amounts and transfer fees are denominated by their accounts. Never merge a currency change
     /// separately from its postings; linked refunds and transfers must follow the same choice.
     static func accountPostingRows(_ local: FinanceData, _ cloud: FinanceData, _ base: FinanceData?,
-                                   choice: Choice?, report: @escaping (String) -> Void) throws -> (accounts: [MoneyAccount], entries: [MoneyEntry]) {
+                                   choice: Choice?, latest: (([String]) -> SyncChanges.Decision)? = nil,
+                                   report: @escaping (String) -> Void) throws -> (accounts: [MoneyAccount], entries: [MoneyEntry]) {
         let cloudAccounts = Dictionary(uniqueKeysWithValues: cloud.accounts.map { ($0.id, $0) })
         let differing = Set(local.accounts.compactMap { account -> UUID? in
             guard let other = cloudAccounts[account.id], other.currency != account.currency else { return nil }
@@ -230,9 +245,11 @@ enum CloudMerge {
             chosenAccounts += chosen.accounts; chosenEntries += chosen.entries
         }
         let accounts = try rows(local.accounts.filter { !handledAccounts.contains($0.id) }, cloud.accounts.filter { !handledAccounts.contains($0.id) },
-                                (base?.accounts ?? []).filter { !handledAccounts.contains($0.id) }, id: { $0.id }, label: L("记账账户", "Account"), describe: { $0.name }, choice: choice, report: report)
+                                (base?.accounts ?? []).filter { !handledAccounts.contains($0.id) }, id: { $0.id }, label: L("记账账户", "Account"), describe: { $0.name }, choice: choice,
+                                kind: "account", latest: latest, report: report)
         let entries = try rows(local.entries.filter { !handledEntries.contains($0.id) }, cloud.entries.filter { !handledEntries.contains($0.id) },
-                               (base?.entries ?? []).filter { !handledEntries.contains($0.id) }, id: { $0.id }, label: L("账单", "Entry"), describe: { $0.title + " · " + $0.currency + " " + NSDecimalNumber(decimal: $0.amount).stringValue }, choice: choice, report: report)
+                               (base?.entries ?? []).filter { !handledEntries.contains($0.id) }, id: { $0.id }, label: L("账单", "Entry"), describe: { $0.title + " · " + $0.currency + " " + NSDecimalNumber(decimal: $0.amount).stringValue }, choice: choice,
+                               kind: "entry", latest: latest, report: report)
         return ((accounts + chosenAccounts).sorted { $0.id.uuidString < $1.id.uuidString },
                 (entries + chosenEntries).sorted { $0.id.uuidString < $1.id.uuidString })
     }
@@ -252,10 +269,17 @@ enum CloudMerge {
         }
         var conflicts: [String] = []
         let report: (String) -> Void = { conflicts.append($0) }
+        let resolution = try SyncChanges.Resolution(local: local, cloud: cloud, base: base)
+        var automaticSelections = 0
+        let latest: ([String]) -> SyncChanges.Decision = { keys in
+            let decision = resolution.decision(keys)
+            if decision.choice != nil { automaticSelections += 1 }
+            return decision
+        }
         var result = TaskBackup(lists: [], tasks: [])
-        result.lists = try rows(local.lists, cloud.lists, base?.lists ?? [], id: { $0.id }, label: L("清单（名称、颜色、顺序或层级存在差异）", "List (name, color, order or hierarchy differs)"), describe: { $0.name }, choice: choice, report: report)
-        result.tasks = try taskRows(local.tasks, cloud.tasks, base?.tasks ?? [], choice: choice, report: report)
-        result.weekTitles = try rows(local.weekTitles ?? [], cloud.weekTitles ?? [], base?.weekTitles ?? [], id: { $0.id }, label: L("周标题", "Week title"), describe: { $0.week + " · " + $0.title }, choice: choice, report: report)
+        result.lists = try rows(local.lists, cloud.lists, base?.lists ?? [], id: { $0.id }, label: L("清单（名称、颜色、顺序或层级存在差异）", "List (name, color, order or hierarchy differs)"), describe: { $0.name }, choice: choice, kind: "list", latest: latest, report: report)
+        result.tasks = try taskRows(local.tasks, cloud.tasks, base?.tasks ?? [], choice: choice, latest: latest, report: report)
+        result.weekTitles = try rows(local.weekTitles ?? [], cloud.weekTitles ?? [], base?.weekTitles ?? [], id: { $0.id }, label: L("周标题", "Week title"), describe: { $0.week + " · " + $0.title }, choice: choice, kind: "week", latest: latest, report: report)
         if let l = local.finance, let r = cloud.finance {
             let b = base?.finance
             // Changing base currency revalues every posting. A concurrent posting cannot be mixed into it.
@@ -264,9 +288,9 @@ enum CloudMerge {
             } else {
                 var finance = l
                 finance.baseCurrency = try value(l.baseCurrency, r.baseCurrency, b?.baseCurrency ?? "CNY", label: L("记账本位币", "Base currency"), choice: choice, report: report)
-                (finance.accounts, finance.entries) = try accountPostingRows(l, r, b, choice: choice, report: report)
-                finance.books = try rows(l.books, r.books, b?.books ?? [], id: { $0.id }, label: L("账本", "Book"), describe: { $0.name }, choice: choice, report: report)
-                finance.categories = try categoryRows(l.categories, r.categories, b?.categories ?? [], choice: choice, report: report)
+                (finance.accounts, finance.entries) = try accountPostingRows(l, r, b, choice: choice, latest: latest, report: report)
+                finance.books = try rows(l.books, r.books, b?.books ?? [], id: { $0.id }, label: L("账本", "Book"), describe: { $0.name }, choice: choice, kind: "book", latest: latest, report: report)
+                finance.categories = try categoryRows(l.categories, r.categories, b?.categories ?? [], choice: choice, latest: latest, report: report)
                 finance.rates = try rateRows(l.rates, r.rates, b?.rates ?? [], choice: choice, report: report)
                 result.finance = finance
             }
@@ -274,12 +298,16 @@ enum CloudMerge {
             result.finance = try value(local.finance, cloud.finance, base?.finance, label: L("记账数据", "Ledger"), choice: choice, report: report)
         }
         if !conflicts.isEmpty { throw Conflict(label: conflicts.joined(separator: "\n\n——\n\n")) }
+        result.syncChanges = try resolution.revisions(for: result)
         // Validate combined references; never silently discard a posting or its account.
         try result.validate()
+        if automaticSelections > 0 { SyncDiagnostics.log.notice("Automatically resolved \(automaticSelections, privacy: .public) record groups by modification time") }
         return result
     }
     static func bytes(_ snapshot: TaskBackup) throws -> Data {
         var stable = snapshot
+        stable.version = 8
+        stable.finance?.version = 2
         stable.createdAt = Date(timeIntervalSince1970: 0)
         stable.lists.sort { $0.id.uuidString < $1.id.uuidString }
         stable.tasks.sort { $0.id.uuidString < $1.id.uuidString }
@@ -308,7 +336,7 @@ enum CloudMerge {
         do {
             if changed { try stage(snapshot, in: context) }
             state.baseline = baseline; state.lastSync = Date()
-            try Store.save(context)
+            try Store.save(context, trackSyncChanges: false)
             return true
         } catch { context.rollback(); throw error }
     }
@@ -346,9 +374,10 @@ enum CloudMerge {
                 finance.books = preservingOrder(finance.books, previous: previous.books, id: { $0.id })
                 finance.categories = preservingOrder(finance.categories, previous: previous.categories, id: { $0.id })
             }
-            try FinanceStore.stage(finance, in: context)
+            try FinanceStore.stage(finance, in: context, trackSyncChanges: false)
         }
         else { for ledger in try context.fetch(FetchDescriptor<FinanceLedger>()) { context.delete(ledger) } }
+        try SyncChanges.stage(snapshot.syncChanges, in: context)
     }
 }
 
@@ -473,6 +502,9 @@ enum CloudMerge {
     }
     func localSaved() {
         guard enabled, !applying else { return }
+        if conflict, let snapshotCache, snapshotCache.revision != Store.revision {
+            conflict = false; conflictLocal = nil; conflictCloud = nil
+        }
         if running { pendingSave = true; return }
         debounce?.cancel()
         debounce = Task {
@@ -604,7 +636,7 @@ enum CloudMerge {
             // ponytail: one atomic asset keeps finance relationships consistent, bounded at 50 MB.
             // Use per-entity CloudKit records if measured personal ledgers outgrow snapshot uploads.
             // Always retain both sides before changing either, including before conflict resolution.
-            if state.baseline == nil || mergedBytes != localBytes || choice != nil { try await protect(localBytes, remoteBytes) }
+            if state.baseline == nil || mergedBytes != localBytes || mergedBytes != remoteBytes || choice != nil { try await protect(localBytes, remoteBytes) }
             guard canContinue(ticket, in: context) else { return }
             if choice != nil && capturedRevision != Store.revision {
                 conflict = false; conflictLocal = nil; conflictCloud = nil; pendingSave = true
@@ -720,7 +752,7 @@ struct CloudSyncSettings: View {
             Text(sync.summary).font(.callout)
                 .foregroundStyle(sync.conflict ? Color.orange : .primary)
             if sync.enabled && sync.conflict {
-                Text(L("不同设备对同一内容做了不同修改。同步已暂停，请核对并选择要保留的版本；本机数据仍可使用。", "The same items were changed differently on your devices. Sync is paused until you review which version to keep. Your local data remains available."))
+                Text(L("这些修改缺少可靠的先后时间，或涉及关联账目，无法自动选择。请核对一次要保留的版本；本机数据仍可使用。", "These changes have no reliable modification order or affect related financial records. Review which version to keep. Your local data remains available."))
                     .font(.callout)
                 Button(L("核对并处理冲突…", "Review and resolve conflicts…")) { resolve = true }
                     .disabled(sync.running)
@@ -734,7 +766,7 @@ struct CloudSyncSettings: View {
                         }, cancel: { resolve = false })
                     }
             }
-            Text(L("开启后，任务、清单和账目会在同一 Apple 账户的设备间自动同步。应用打开时同步；离线仍可编辑。同步不代替备份。", "Sync tasks, lists and finances across devices using the same Apple Account while the app is open. Offline editing remains available. Sync does not replace backups."))
+            Text(L("同一项目自动保留较新的修改，无法安全判断时请你核对。使用同一 Apple 账户，打开 App 后同步；离线仍可编辑。", "The latest change to each item is kept automatically; only uncertain changes need review. Sync uses the same Apple Account while the app is open. Offline editing remains available."))
                 .font(.caption).foregroundStyle(.secondary)
             if let date = sync.lastSync { Text(L("上次完成：", "Last completed: ") + date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))).font(.caption).foregroundStyle(.secondary) }
             if !sync.detail.isEmpty && !sync.conflict { Text(sync.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -907,6 +939,58 @@ extension CloudMerge {
             var failed = false; do { try action() } catch { failed = true }
             try check(failed, label)
         }
+        func tracked(_ snapshot: TaskBackup, from original: TaskBackup, at date: Date) throws -> TaskBackup {
+            var snapshot = snapshot
+            let old = try SyncChanges.fingerprints(original), new = try SyncChanges.fingerprints(snapshot)
+            var changes: [String: String?] = [:]
+            for key in Set(old.keys).union(new.keys) where old[key] != new[key] { changes[key] = .some(new[key]) }
+            var revisions = snapshot.syncChanges ?? [:]
+            SyncChanges.record(changes, in: &revisions, now: date)
+            snapshot.syncChanges = revisions
+            return snapshot
+        }
+        do {
+            let first = TaskBackup.TaskRecord(TaskItem(title: "First")), second = TaskBackup.TaskRecord(TaskItem(title: "Second"))
+            let original = TaskBackup(lists: [], tasks: [first, second])
+            let early = Date(timeIntervalSince1970: 1000), late = early.addingTimeInterval(60)
+            var left = original, right = original
+            left.tasks[0].title = "Recent Mac edit"; left = try tracked(left, from: original, at: late)
+            left.tasks[1].notes = "Older Mac note"; left = try tracked(left, from: original, at: early)
+            right.tasks[0].title = "Older phone edit"; right = try tracked(right, from: original, at: early)
+            right.tasks[1].notes = "Recent phone note"; right = try tracked(right, from: original, at: late)
+            let combined = try merge(local: left, cloud: right, base: original)
+            try check(combined.tasks.contains { $0.title == "Recent Mac edit" } && combined.tasks.contains { $0.notes == "Recent phone note" }, "latest changes are selected per record, never by newest whole snapshot")
+            try check(try bytes(merge(local: right, cloud: left, base: original)) == bytes(combined), "automatic merge converges regardless of device direction")
+            try check(try bytes(merge(local: combined, cloud: combined, base: original)) == bytes(combined), "automatic merge retry preserves records and modification metadata")
+            try check(try merge(local: left, cloud: right, base: original, choice: .cloud).tasks.contains { $0.title == "Older phone edit" }, "explicit review can retain an older chosen record")
+            let key = SyncChanges.key("task", first.id)
+            var tied = right; tied.syncChanges![key]!.date = left.syncChanges![key]!.date
+            try rejects("same-millisecond divergent edits require review") { _ = try merge(local: left, cloud: tied, base: original) }
+            var legacy = right; legacy.syncChanges = nil
+            try rejects("legacy edits without modification times are not guessed from task schedule") { _ = try merge(local: left, cloud: legacy, base: original) }
+            var stale = right; stale.tasks[0].notes = "Changed without updating its stamp"
+            try rejects("mismatched record fingerprint prevents a false latest winner") { _ = try merge(local: left, cloud: stale, base: original) }
+            var skewed = right; skewed.syncChanges![key]!.date = Date().addingTimeInterval(3600)
+            try rejects("a future device clock requires review") { _ = try merge(local: left, cloud: skewed, base: original) }
+            var removed = original; removed.tasks.removeFirst()
+            removed = try tracked(removed, from: original, at: late.addingTimeInterval(60))
+            let deletion = try merge(local: left, cloud: removed, base: original)
+            try check(!deletion.tasks.contains { $0.id == first.id } && deletion.syncChanges?[key]?.fingerprint == nil, "newer permanent deletion retains its tombstone")
+            let restored = try merge(local: left, cloud: removed, base: original, choice: .local)
+            try check(restored.syncChanges?[key]?.fingerprint == left.syncChanges?[key]?.fingerprint, "manual restoration carries the selected record's matching stamp")
+            var singleLeft = left, singleRemoved = removed
+            singleLeft.tasks.removeAll { $0.id != first.id }; singleRemoved.tasks = []
+            try check(try merge(local: singleRemoved, cloud: singleLeft, base: nil).tasks.isEmpty, "a newer tombstone prevents resurrection even without a shared baseline")
+            try check(try merge(local: singleLeft, cloud: singleRemoved, base: nil).tasks.isEmpty, "first-sync deletion converges in either device direction")
+            var untrackedRow = singleLeft; untrackedRow.syncChanges = nil
+            try rejects("a first-sync tombstone versus an untracked old row requires review") { _ = try merge(local: singleRemoved, cloud: untrackedRow, base: nil) }
+            try rejects("a cloud tombstone cannot silently resurrect an untracked local row") { _ = try merge(local: untrackedRow, cloud: singleRemoved, base: nil) }
+            var equalDeletion = singleRemoved; equalDeletion.syncChanges![key]!.date = singleLeft.syncChanges![key]!.date
+            try rejects("equal-time deletion and edit cannot be inferred from an empty baseline") { _ = try merge(local: singleLeft, cloud: equalDeletion, base: nil) }
+            var revisions = left.syncChanges!
+            SyncChanges.record([key: try SyncChanges.fingerprint(right.tasks[0])], in: &revisions, now: early)
+            try check(revisions[key]!.date > left.syncChanges![key]!.date, "a backwards local clock cannot make the next saved edit older")
+        }
         let report = (1...500).map { "Task \($0)\nLocal: open\nCloud: complete" }.joined(separator: "\n\n——\n\n")
         let reportSections = SyncConflictReview.reportSections(report)
         try check(reportSections.count == 999 && reportSections.joined(separator: "\n\n") == report,
@@ -997,6 +1081,33 @@ extension CloudMerge {
         remote = base; remote.finance!.entries = [transfer]; remote.finance!.entries[0].accountAmount = 1499
         try rejects("same posting does not silently win") { _ = try merge(local: local, cloud: remote, base: base) }
         do {
+            var original = base; original.finance!.entries = [expense]
+            var left = original, right = original
+            left.finance!.entries[0].title = "Earlier note"
+            right.finance!.entries[0].amount = 35; right.finance!.entries[0].accountAmount = 35
+            left = try tracked(left, from: original, at: Date(timeIntervalSince1970: 1000))
+            right = try tracked(right, from: original, at: Date(timeIntervalSince1970: 1100))
+            let posted = try merge(local: left, cloud: right, base: original)
+            try check(posted.finance!.entries.count == 1 && posted.finance!.balance(account.id) == account.opening - 35, "latest posting updates one entry and its computed balance exactly once")
+            var currencyEdit = original; currencyEdit.finance!.baseCurrency = "AUD"
+            currencyEdit = try tracked(currencyEdit, from: original, at: Date(timeIntervalSince1970: 1200))
+            try rejects("timestamps do not bypass atomic base-currency and posting review") { _ = try merge(local: left, cloud: currencyEdit, base: original) }
+            var pending = expense; pending.pending = true
+            original.finance!.entries = [pending]
+            left = original; right = original
+            left.finance!.entries[0].notes = "Earlier pending edit"
+            try right.finance!.confirmPending(pending, now: pending.date.addingTimeInterval(1))
+            left = try tracked(left, from: original, at: Date(timeIntervalSince1970: 1300))
+            right = try tracked(right, from: original, at: Date(timeIntervalSince1970: 1400))
+            let confirmed = try merge(local: left, cloud: right, base: original)
+            try check(confirmed.finance!.entries.count == 1 && confirmed.finance!.entries[0].id == pending.id && !confirmed.finance!.entries[0].isPending,
+                      "newer pending confirmation preserves one entry with the original ID")
+            try check(confirmed.finance!.balance(account.id) == account.opening - expense.amount,
+                      "pending confirmation enters the balance exactly once after sync")
+            try check(try bytes(merge(local: confirmed, cloud: confirmed, base: original)) == bytes(confirmed),
+                      "pending confirmation sync retries never duplicate the posted entry")
+        }
+        do {
             var money = FinanceData.initial
             let wallet = MoneyAccount(name: "Travel wallet", currency: "USD", opening: 100)
             let sender = MoneyAccount(name: "CNY sender", currency: "CNY", opening: 1000)
@@ -1073,6 +1184,46 @@ extension CloudMerge {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("test.store")
+        do {
+            let store = try Store.make(url: directory.appendingPathComponent("modification-times.store")), context = store.mainContext
+            let task = TaskItem(title: "Tracked task")
+            context.insert(task)
+            try Store.save(context)
+            let key = SyncChanges.key("task", task.id)
+            let original = try TaskBackup.capture(context)
+            try check(original.syncChanges?[key]?.fingerprint == SyncChanges.fingerprint(original.tasks[0]), "task save atomically records its matching content fingerprint")
+            let initial = original.syncChanges
+            task.notes = "Rolled back edit"
+            try SyncChanges.trackModels(in: context)
+            context.rollback()
+            try check(try SyncChanges.read(context) == initial, "rollback restores timestamps with the edited data")
+            var incoming = original; incoming.tasks[0].notes = "Remote saved note"
+            incoming = try tracked(incoming, from: original, at: Date(timeIntervalSince1970: 1200))
+            try stage(incoming, in: context)
+            try Store.save(context, trackSyncChanges: false)
+            try check(try TaskBackup.capture(context).syncChanges == incoming.syncChanges, "remote import preserves modification time instead of stamping its arrival")
+            var finance = FinanceData.initial
+            finance.accounts = [MoneyAccount(name: "Tracked account")]
+            try FinanceStore.stage(finance, in: context); try Store.save(context)
+            let accountKey = SyncChanges.key("account", finance.accounts[0].id)
+            let saved = try SyncChanges.read(context)
+            try check(saved?[accountKey]?.fingerprint == SyncChanges.fingerprint(finance.accounts[0]), "finance staging tracks changed account contents")
+            finance.accounts[0].name = "Unsaved account"
+            try FinanceStore.stage(finance, in: context)
+            context.rollback()
+            try check(try SyncChanges.read(context) == saved && FinanceStore.read(context)?.accounts[0].name == "Tracked account", "finance rollback restores both payload and modification metadata despite cached staged values")
+            context.delete(task); try Store.save(context)
+            let removed = try SyncChanges.read(context)
+            try check(removed?[key] != nil && removed?[key]?.fingerprint == nil, "permanent task deletion stores a tombstone in the same save")
+            let reopened = try Store.make(url: directory.appendingPathComponent("modification-times.store"))
+            try check(try SyncChanges.read(reopened.mainContext) == removed, "modification times and deletion tombstones survive reopening the store")
+            try incoming.restore(context, replace: true)
+            let restored = try TaskBackup.capture(context)
+            try check((restored.syncChanges?[key]?.date ?? .distantPast) > (incoming.syncChanges?[key]?.date ?? .distantPast),
+                      "an explicit backup restore receives a new modification time")
+            try check(restored.syncChanges?[key]?.fingerprint == SyncChanges.fingerprint(restored.tasks[0]),
+                      "replace restore keeps the live replacement fingerprint instead of a deleted-object tombstone")
+        }
         let container = try Store.make(url: url), context = container.mainContext
         try stage(base, in: context); try context.save()
         let existing = try context.fetch(FetchDescriptor<TaskItem>()).first!
@@ -1177,6 +1328,11 @@ extension CloudMerge {
         taskB.toggleCompletion(in: deviceB.mainContext, now: day.addingTimeInterval(34 * 3600)); try deviceB.mainContext.save()
         let left = try TaskBackup.capture(deviceA.mainContext), right = try TaskBackup.capture(deviceB.mainContext)
         try check(taskA.nextOccurrenceID != taskB.nextOccurrenceID, "fixture has divergent successors from actual offline completions")
+        let trackedLeft = try tracked(left, from: repeatBase, at: Date(timeIntervalSince1970: 2000))
+        let trackedRight = try tracked(right, from: repeatBase, at: Date(timeIntervalSince1970: 2100))
+        let newestChain = try merge(local: trackedLeft, cloud: trackedRight, base: repeatBase)
+        try check(try bytes(newestChain) == bytes(trackedRight), "newer offline repeat completion keeps its entire successor chain")
+        try check(newestChain.tasks.filter { !$0.isDone }.count == 1, "automatic repeat resolution never forks the series")
         try rejects("divergent recurrence requires whole-series choice") { _ = try merge(local: left, cloud: right, base: repeatBase) }
         for choice in [Choice.local, .cloud] {
             let resolved = try merge(local: left, cloud: right, base: repeatBase, choice: choice)

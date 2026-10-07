@@ -9,9 +9,11 @@ struct TaskFinanceDraft: Equatable {
     var converted = ""
     private var lastEstimate: String?
 
-    init(ledger: FinanceData) {
+    init(ledger: FinanceData, scheduledAt: Date? = nil, now: Date = Date()) {
         self.ledger = ledger
         entry = ledger.newEntry(preferredBook: nil)
+        entry.date = MoneyEntry.timestamp(scheduledAt ?? now)
+        entry.pending = Dates.calendar.startOfDay(for: entry.date) > Dates.calendar.startOfDay(for: now) ? true : nil
     }
 
     var referenceRate: MoneyRate? {
@@ -101,18 +103,26 @@ struct TaskMoneySection: View {
         return DisclosureGroup(L("关联账单", "Linked entries") + (linked.isEmpty ? "" : " · \(linked.count)")) {
             ForEach(linked) { entry in
                 Button { editor = EntryRequest(entry: entry, expected: entry) } label: {
-                    HStack { Text(entry.title); Spacer(); Text(Money.display(entry.amount, entry.currency, hidden: hidden)).monospacedDigit() }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(entry.title)
+                            if entry.isPending { Text(L("待入账", "Pending")).font(.caption).foregroundStyle(.secondary) }
+                        }
+                        Spacer()
+                        Text(Money.display(entry.amount, entry.currency, hidden: hidden)).monospacedDigit()
+                    }
                 }.buttonStyle(.borderless).padding(.vertical, 4)
             }
             Button(L("为此任务记一笔", "Record an entry for this task")) {
                 do {
                     let data = try FinanceStore.read(context) ?? .initial
-                    var e = data.newEntry(preferredBook: nil); e.title = String(task.title.prefix(80)); e.taskID = task.id
+                    var e = TaskFinanceDraft(ledger: data, scheduledAt: task.calendarDate).entry
+                    e.title = String(task.title.prefix(80)); e.taskID = task.id
                     editor = EntryRequest(entry: e, expected: nil)
                 } catch { self.error = error.localizedDescription }
             }.buttonStyle(.borderless).padding(.vertical, 4)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
         }
-        .sheet(item: $editor) { request in FinanceEntryEditor(entry: request.entry, expected: request.expected) }
+        .sheet(item: $editor) { request in FinanceEntryEditor(entry: request.entry, expected: request.expected, confirmingPending: request.confirmingPending) }
     }
 }

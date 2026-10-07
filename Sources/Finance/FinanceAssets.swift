@@ -10,6 +10,37 @@ extension FinanceHome {
     private struct AccountGroup: Identifiable { var type: MoneyAccountType; var accounts: [MoneyAccount]; var id: String { type.rawValue } }
 }
 
+/// An explicit header button prevents List from treating the whole overview as a disclosure target.
+private struct AssetRateDisclosureStyle: DisclosureGroupStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let compact: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                    configuration.isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    configuration.label
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                }
+                .frame(minHeight: compact ? 44 : 28)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).foregroundStyle(Color.accentColor)
+            .accessibilityValue(configuration.isExpanded ? L("已展开", "Expanded") : L("已收起", "Collapsed"))
+            .accessibilityIdentifier("finance.assetRatesDisclosure")
+            if configuration.isExpanded { configuration.content.transition(.opacity) }
+        }
+    }
+}
+
 extension FinanceHome {
     private var assetCurrencies: [String] { Set(data.accounts.map(\.currency)).filter { $0 != reportingCurrency }.sorted() }
     private var selectedForeignCurrency: String? { assetCurrencies.contains(foreignCurrency) ? foreignCurrency : assetCurrencies.first }
@@ -20,6 +51,8 @@ extension FinanceHome {
         return assetContainer {
             Section {
                 assetOverview(summary).buttonStyle(.borderless)
+                // Keep disclosure sizing and hit testing out of the balance/menu row.
+                if !assetCurrencies.isEmpty { rateLine(summary).buttonStyle(.borderless) }
             }.listRowSeparator(.hidden).listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             ForEach(groups) { group in
@@ -149,7 +182,6 @@ extension FinanceHome {
                     }.font(.caption).foregroundStyle(.secondary)
                 }
             }.padding(18).background(RoundedRectangle(cornerRadius: 14).fill(Color.accentColor.opacity(0.08)))
-            if !assetCurrencies.isEmpty { rateLine(summary) }
             if data.accounts.isEmpty {
                 ContentUnavailableView {
                     Label(L("添加你的第一个账户", "Add your first account"), systemImage: "wallet.pass")
@@ -197,7 +229,9 @@ extension FinanceHome {
                         Text(refreshing ? L("更新中…", "Updating…") : L("更新汇率", "Update rates")).frame(minHeight: compact ? 44 : 24)
                     }.disabled(refreshing)
                 }.padding(.top, 8)
-            }.font(.callout)
+            }
+            .disclosureGroupStyle(AssetRateDisclosureStyle(compact: compact))
+            .font(.callout)
         }
     }
     private func accountRow(_ account: MoneyAccount, balance: Decimal) -> some View {

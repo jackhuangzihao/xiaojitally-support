@@ -57,7 +57,7 @@ struct MoneyBar: View {
 extension FinanceHome {
     private var statsCurrency: String { reportingCurrency }
     func statsEntries(_ span: DateInterval) -> [MoneyEntry] {
-        data.entries.filter { $0.deletedAt == nil && $0.date >= span.start && $0.date < span.end && (bookFilterID == nil || $0.bookID == bookFilterID) }
+        data.entries.filter { $0.deletedAt == nil && !$0.isPending && $0.date >= span.start && $0.date < span.end && (bookFilterID == nil || $0.bookID == bookFilterID) }
     }
     private func statsValue(_ entry: MoneyEntry, income: Bool, days: [String]?) -> Decimal? {
         data.statisticsAmount(entry, income: income, in: statsCurrency, history: rateHistory, days: days)
@@ -84,7 +84,7 @@ extension FinanceHome {
         let before = statsSum(statsEntries(Dates.calendar.dateInterval(of: period.component, for: previousAnchor)!), income: false, days: days)
         let value: (MoneyEntry) -> Decimal? = { statsValue($0, income: statsIncome, days: days) }
         let rows = categoryRows(selectedStatsRange.map { statsEntries($0) } ?? entries)
-        let earliest = data.entries.filter { $0.deletedAt == nil }.map(\.date).min() ?? Date()
+        let earliest = data.entries.filter { $0.deletedAt == nil && !$0.isPending }.map(\.date).min() ?? Date()
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 periodHeader
@@ -529,7 +529,7 @@ extension FinanceHome {
                 Button(L("补全这 6 个月的折算…", "Complete these six months’ conversions…")) {
                     guard let first = months.first?.start, let end = Dates.calendar.dateInterval(of: .month, for: anchor)?.end else { return }
                     prepareConversion(data.entries.filter {
-                        $0.deletedAt == nil && $0.date >= first && $0.date < end && (bookFilterID == nil || $0.bookID == bookFilterID)
+                        $0.deletedAt == nil && !$0.isPending && $0.date >= first && $0.date < end && (bookFilterID == nil || $0.bookID == bookFilterID)
                             && key.includes($0, income: statsIncome, data: data)
                     })
                 }.buttonStyle(.borderless).font(.callout).frame(minHeight: compact ? 44 : nil)

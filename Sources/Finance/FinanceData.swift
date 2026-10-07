@@ -1,7 +1,7 @@
 import Foundation
 
 struct FinanceData: Codable, Equatable {
-    var version = 1
+    var version = 2
     var baseCurrency = "CNY"
     var accounts: [MoneyAccount] = []
     var books: [MoneyBook] = []
@@ -33,7 +33,7 @@ struct FinanceData: Codable, Equatable {
         }
     }
     func remainingRefund(for id: UUID, excluding refundID: UUID? = nil) -> Decimal {
-        guard let original = entries.first(where: { $0.id == id && $0.kind == .expense && $0.deletedAt == nil }) else { return 0 }
+        guard let original = entries.first(where: { $0.id == id && $0.kind == .expense && $0.deletedAt == nil && !$0.isPending }) else { return 0 }
         return max(0, original.amount - entries.filter { $0.refundOf == id && $0.deletedAt == nil && $0.id != refundID }.reduce(0) { $0 + $1.amount })
     }
     func categoryIDs(including id: UUID) -> Set<UUID> {
@@ -122,7 +122,7 @@ struct FinanceData: Codable, Equatable {
     /// With `selected` (the entries of the viewed period), an archived book's budget counts only in periods it was used,
     /// so a finished trip keeps its history without inflating every later month.
     func budgetBooks(for bookID: UUID?, in selected: [MoneyEntry]? = nil) -> [MoneyBook] {
-        let used = selected.map { Set($0.filter { $0.deletedAt == nil }.compactMap(\.bookID)) }
+        let used = selected.map { Set($0.filter { $0.deletedAt == nil && !$0.isPending }.compactMap(\.bookID)) }
         return books.filter { book in
             book.budget != nil && (bookID.map { book.id == $0 } ?? (!book.archived || used?.contains(book.id) ?? true))
         }
@@ -272,6 +272,14 @@ struct FinanceData: Codable, Equatable {
     mutating func updateEntry(_ entry: MoneyEntry, expected: MoneyEntry?, baseCurrency: String, referenceRates: [MoneyRate] = []) throws {
         try requireBaseCurrency(baseCurrency)
         guard entries.first(where: { $0.id == entry.id }) == expected else { throw TaskBackup.invalid(L("账单已在其他窗口修改。请重新打开再编辑。", "This entry changed in another window. Reopen it before editing.")) }
+        if let expected, expected.isPending != entry.isPending {
+            throw TaskBackup.invalid(L("已入账账单不能改为待入账；待入账账单请使用确认入账。", "Posted entries cannot become pending. Use Confirm entry to post a pending entry."))
+        }
+        if entry.isPending {
+            guard entry.kind == .expense || entry.kind == .income else {
+                throw TaskBackup.invalid(L("只有收入和支出可以设为待入账。", "Only income and expenses can be pending."))
+            }
+        }
         if let expected, expected.kind != entry.kind {
             if let reason = entryKindChangeBlock(expected) { throw TaskBackup.invalid(reason) }
             guard entry.kind == .expense || entry.kind == .income else {
@@ -281,10 +289,37 @@ struct FinanceData: Codable, Equatable {
         try checkAccounts(for: entry, replacing: expected)
         // Older editor state can contain asset quotes; actual posting amounts remain authoritative.
         try mergeReferenceRates(referenceRates.filter { !$0.isManual })
+        if entry.isPending { version = max(version, 2) }
         entries.removeAll { $0.id == entry.id }; entries.append(entry)
         if entry.kind == .expense {
             for i in entries.indices where entries[i].refundOf == entry.id { entries[i].bookID = entry.bookID; entries[i].categoryID = entry.categoryID }
         }
+    }
+    /// Posting keeps the planned date and recorded amounts. Missing historical FX stays visible until filled.
+    mutating func confirmPending(_ expected: MoneyEntry, now: Date = Date()) throws {
+        guard let index = entries.firstIndex(where: { $0.id == expected.id }), entries[index] == expected,
+              expected.isPending, expected.deletedAt == nil else {
+            throw TaskBackup.invalid(L("账单已修改、删除或入账，请刷新后重试。", "This entry changed, was deleted or is already posted. Refresh and try again."))
+        }
+        guard expected.isDueForConfirmation(at: now) else {
+            throw TaskBackup.invalid(L("计划日期尚未到达，请在当天或之后确认入账。", "Confirm this entry on or after its planned date."))
+        }
+        guard expected.kind == .expense || expected.kind == .income,
+              books.contains(where: { $0.id == expected.bookID && !$0.archived }) else {
+            throw TaskBackup.invalid(L("请选择可用账本后再确认入账。", "Choose an available book before confirming this entry."))
+        }
+        if let id = expected.categoryID {
+            guard let category = categories.first(where: { $0.id == id }), !category.archived,
+                  category.isIncome == (expected.kind == .income),
+                  category.parentID.map({ parent in categories.contains { $0.id == parent && !$0.archived } }) ?? true else {
+                throw TaskBackup.invalid(L("请选择相应收支类型的可用分类后再确认入账。", "Choose an available category of the matching income or expense type before confirming."))
+            }
+        }
+        try checkAccounts(for: expected, replacing: nil)
+        var next = self
+        next.entries[index].pending = false
+        try next.validate()
+        self = next
     }
     /// One pass for an entire asset page, including archived accounts and both transfer sides.
     func accountBalances() -> [UUID: Decimal] {
@@ -350,7 +385,7 @@ struct FinanceData: Codable, Equatable {
     func runningBalances(_ id: UUID) -> [UUID: Decimal] {
         guard let account = accounts.first(where: { $0.id == id }) else { return [:] }
         var balance = account.opening, result: [UUID: Decimal] = [:]
-        for e in entries.filter({ $0.deletedAt == nil && $0.matches(bookID: nil, accountID: id) }).sorted(by: { MoneyEntry.newestFirst($1, $0) }) {
+        for e in entries.filter({ $0.deletedAt == nil && !$0.isPending && $0.matches(bookID: nil, accountID: id) }).sorted(by: { MoneyEntry.newestFirst($1, $0) }) {
             balance += e.accountChange(for: id); result[e.id] = balance
         }
         return result
@@ -489,7 +524,7 @@ struct FinanceData: Codable, Equatable {
     }
     var missingConversionEntries: [MoneyEntry] {
         entries.filter { entry in
-            guard entry.deletedAt == nil else { return false }
+            guard entry.deletedAt == nil && !entry.isPending else { return false }
             switch entry.kind {
             case .income, .expense, .refund: return entry.baseAmount == nil
             case .transfer: return entry.fee > 0 && entry.baseFee == nil
@@ -551,7 +586,7 @@ struct FinanceData: Codable, Equatable {
             else if [.expense, .income, .refund].contains(allowed.kind), allowed.baseAmount == nil { allowed.baseAmount = change.updated.baseAmount }
             else { throw TaskBackup.invalid(L("账单已有折算金额，请重新预览。", "The entry already has a conversion. Preview again.")) }
             allowed.rateNote = change.updated.rateNote
-            guard allowed == change.updated, allowed.deletedAt == nil else { throw TaskBackup.invalid(L("折算预览无效，请重试。", "Invalid conversion preview. Please try again.")) }
+            guard allowed == change.updated, allowed.deletedAt == nil, !allowed.isPending else { throw TaskBackup.invalid(L("折算预览无效，请重试。", "Invalid conversion preview. Please try again.")) }
             next.entries[index] = allowed
         }
         try next.validate()
@@ -559,7 +594,7 @@ struct FinanceData: Codable, Equatable {
     }
     func totals(_ selected: [MoneyEntry]) -> (income: Decimal, expense: Decimal, refunds: Decimal, missing: Int) {
         var income: Decimal = 0, expense: Decimal = 0, refunds: Decimal = 0, missing = 0
-        for e in selected where e.deletedAt == nil {
+        for e in selected where e.deletedAt == nil && !e.isPending {
             if e.kind != .transfer && e.kind != .adjustment {
                 if let amount = e.baseAmount {
                     switch e.kind { case .income: income += amount; case .expense: expense += amount; case .refund: refunds += amount; default: break }
@@ -573,7 +608,8 @@ struct FinanceData: Codable, Equatable {
         func check(_ valid: Bool, _ zh: String, _ en: String) throws { if !valid { throw TaskBackup.invalid(L(zh, en)) } }
         func unique<T: Identifiable>(_ items: [T]) -> Bool where T.ID: Hashable { Set(items.map(\.id)).count == items.count }
         try check(entries.count <= 100_000 && accounts.count <= 1000 && books.count <= 1000 && categories.count <= 1000, "记账数据超过当前支持的大小。", "Ledger exceeds supported size.")
-        try check(version == 1 && Money.currencies.contains(baseCurrency), "记账数据版本或本位币无效。", "Invalid ledger version or base currency.")
+        try check((1...2).contains(version) && Money.currencies.contains(baseCurrency), "记账数据版本或本位币无效。", "Invalid ledger version or base currency.")
+        try check(version >= 2 || !entries.contains(where: \.isPending), "待入账账单需要新版记账数据格式。", "Pending entries require the newer ledger format.")
         try check(unique(accounts) && unique(books) && unique(categories) && unique(entries), "记账数据含重复编号。", "Duplicate ledger identifiers.")
         try validateCategoryHierarchy()
         let accountMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
@@ -587,6 +623,7 @@ struct FinanceData: Codable, Equatable {
         try check((accounts.map(\.symbol) + books.map(\.symbol)).allSatisfy { $0.map { !$0.isEmpty && $0.count <= 80 } ?? true }, "图标无效。", "Invalid icon.")
         for e in entries {
             let account = e.accountID.flatMap { accountMap[$0] }, destination = e.destinationID.flatMap { accountMap[$0] }
+            try check(!e.isPending || e.kind == .expense || e.kind == .income, "只有收入和支出可以设为待入账。", "Only income and expenses can be pending.")
             try check(name(e.title) && e.notes.count <= 10000 && e.tags.count <= 500 && e.rateNote.count <= 500 && e.date.timeIntervalSince1970.isFinite && (-62135596800...253402300799).contains(e.date.timeIntervalSince1970) && (e.deletedAt.map { $0.timeIntervalSince1970.isFinite && (-62135596800...253402300799).contains($0.timeIntervalSince1970) } ?? true), "账单名称、日期或备注无效。", "Invalid entry title, date or notes.")
             try check(Money.currencies.contains(e.currency) && Money.valid(e.amount, currency: e.currency, signed: e.kind == .adjustment) && (e.amount > 0 || e.kind == .adjustment && e.amount != 0), "账单金额必须有效且非零。", "Entry amount must be valid and nonzero.")
             try check(e.bookID.map { bookIDs.contains($0) } ?? false, "请选择账本。", "Choose a book.")
@@ -610,7 +647,7 @@ struct FinanceData: Codable, Equatable {
             if e.kind == .adjustment { try check(account != nil && e.currency == account?.currency, "余额调整需要同币种账户。", "Adjustments require an account in the same currency.") }
             if e.kind == .refund {
                 guard let original = e.refundOf.flatMap({ entryMap[$0] }) else { throw TaskBackup.invalid(L("退款缺少原消费。", "Refund requires the original expense.")) }
-                try check(original.kind == .expense && original.currency == e.currency && original.bookID == e.bookID && original.categoryID == e.categoryID && (e.deletedAt != nil || original.deletedAt == nil), "退款应与原消费的币种、账本和分类一致；请先处理关联退款再删除消费。", "Refunds must match the original currency, book and category; handle linked refunds before deleting the expense.")
+                try check(original.kind == .expense && !original.isPending && original.currency == e.currency && original.bookID == e.bookID && original.categoryID == e.categoryID && (e.deletedAt != nil || original.deletedAt == nil), "退款须关联已入账消费，并与原消费的币种、账本和分类一致；请先处理关联退款再删除消费。", "Refunds require a posted expense with the same currency, book and category; handle linked refunds before deleting the expense.")
                 try check(e.date >= original.date, "退款日期不能早于原消费。", "Refund date cannot precede the expense.")
             } else { try check(e.refundOf == nil, "非退款账单不能关联原消费。", "Only refunds reference an expense.") }
         }
@@ -629,6 +666,7 @@ struct FinanceData: Codable, Equatable {
         try validate(); try incoming.validate()
         guard baseCurrency == incoming.baseCurrency else { throw TaskBackup.invalid(L("本位币不同，不能合并记账数据。", "Ledgers with different base currencies cannot be merged.")) }
         var result = self
+        result.version = max(version, incoming.version)
         result.accounts = try merge(accounts, incoming.accounts); result.books = try merge(books, incoming.books)
         result.categories = try merge(categories, incoming.categories); result.entries = try merge(entries, incoming.entries)
         for rate in incoming.rates where !result.rates.contains(where: { $0.base == rate.base && $0.quote == rate.quote }) { result.rates.append(rate) }
@@ -640,10 +678,10 @@ struct FinanceData: Codable, Equatable {
             let safe = ["=", "+", "-", "@", "\t", "\r"].contains(String(text.prefix(1))) ? "'" + text : text
             return "\"" + safe.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
-        let header = ["ID", "Date", "Type", "Title", "Currency", "Amount", "Account", "Account currency", "Account amount", "Destination", "Destination currency", "Received", "Fee", "Base currency", "Base amount", "Base fee", "Book", "Category", "Tags", "Notes", "Task ID", "Refund of", "Rate note"]
+        let header = ["ID", "Date", "Type", "Title", "Currency", "Amount", "Account", "Account currency", "Account amount", "Destination", "Destination currency", "Received", "Fee", "Base currency", "Base amount", "Base fee", "Book", "Category", "Tags", "Notes", "Task ID", "Refund of", "Rate note", "Status"]
         let rows = selected.map { e -> [String] in
             let a = accounts.first { $0.id == e.accountID }, d = accounts.first { $0.id == e.destinationID }
-            return [e.id.uuidString, e.date.ISO8601Format(), e.kind.rawValue, e.title, e.currency, Money.text(e.amount), a?.name ?? "", a?.currency ?? "", Money.text(e.accountAmount), d?.name ?? "", d?.currency ?? "", Money.text(e.destinationAmount), Money.text(e.fee), baseCurrency, e.baseAmount.map(Money.text) ?? "", e.baseFee.map(Money.text) ?? "", books.first { $0.id == e.bookID }?.name ?? "", categoryPath(e.categoryID), e.tags, e.notes, e.taskID?.uuidString ?? "", e.refundOf?.uuidString ?? "", e.rateNote]
+            return [e.id.uuidString, e.date.ISO8601Format(), e.kind.rawValue, e.title, e.currency, Money.text(e.amount), a?.name ?? "", a?.currency ?? "", Money.text(e.accountAmount), d?.name ?? "", d?.currency ?? "", Money.text(e.destinationAmount), Money.text(e.fee), baseCurrency, e.baseAmount.map(Money.text) ?? "", e.baseFee.map(Money.text) ?? "", books.first { $0.id == e.bookID }?.name ?? "", categoryPath(e.categoryID), e.tags, e.notes, e.taskID?.uuidString ?? "", e.refundOf?.uuidString ?? "", e.rateNote, e.isPending ? "pending" : "posted"]
         }
         return "\u{FEFF}" + ([header] + rows).map { $0.map(cell).joined(separator: ",") }.joined(separator: "\r\n")
     }

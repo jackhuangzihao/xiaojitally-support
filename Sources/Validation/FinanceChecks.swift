@@ -58,10 +58,19 @@ import SwiftData
         try ledger.setManualRate(from: "USD", to: "CNY", text: "7.1")
         try ledger.mergeReferenceRates([MoneyRate(base: "AUD", quote: "CNY", rate: Decimal(string: "4.7")!, date: ExchangeRates.dayString(Date()))])
         UserDefaults.standard.set(false, forKey: "moneyAutoRates")
-        try FinanceStore.stage(ledger, in: context)
         let day = Dates.calendar.startOfDay(for: Date())
         let task = TaskItem(title: "验收：已有任务", scheduledAt: day.addingTimeInterval(15 * 3600)); task.hasTime = true; task.endAt = day.addingTimeInterval(16 * 3600)
         context.insert(task)
+        let tomorrow = Dates.calendar.date(byAdding: .day, value: 1, to: day)!
+        let plannedTask = TaskItem(title: "验收：明日待入账任务", scheduledAt: tomorrow.addingTimeInterval(12 * 3600)); plannedTask.hasTime = true
+        context.insert(plannedTask)
+        var due = lunch; due.id = UUID(); due.title = "验收：待入账支出 24"; due.pending = true
+        due.date = day; due.amount = 24; due.accountAmount = 24; due.baseAmount = 24; due.taskID = task.id
+        var future = due; future.id = UUID(); future.title = "验收：明日待入账收入 36"; future.kind = .income
+        future.date = tomorrow; future.amount = 36; future.accountAmount = 36; future.baseAmount = 36
+        future.categoryID = ledger.categories.first { $0.isIncome }!.id; future.taskID = plannedTask.id
+        ledger.entries += [due, future]
+        try FinanceStore.stage(ledger, in: context)
         let thursday = Dates.calendar.date(byAdding: .day, value: 3, to: Dates.calendar.dateInterval(of: .weekOfYear, for: Date())!.start)!
         let repeated = TaskItem(title: "验收：每日重复", scheduledAt: thursday.addingTimeInterval(13.5 * 3600))
         repeated.hasTime = true; repeated.endAt = thursday.addingTimeInterval(17.5 * 3600); repeated.isDone = true; repeated.completedAt = Date(); repeated.repeatRule = "daily"
@@ -243,7 +252,7 @@ import SwiftData
         lightweight.finance = try FinanceStore.payload(context).map { try JSONDecoder().decode(FinanceData.self, from: $0) }
         try require(try TaskBackup.decode(lightweight.encoded()).finance == value, "background-decoded ledger joins the full portable backup")
         let before = try TaskBackup.capture(context)
-        try require(before.version == 7 && before.finance == value, "full backup contains finance")
+        try require(before.version == 8 && before.finance == value, "full backup contains finance")
         let backup = try TaskBackup.decode(before.encoded())
         try require(backup.finance == value, "portable backup exact round trip")
         let fresh = try Store.make(url: directory.appendingPathComponent("Restored.store"))
@@ -1277,6 +1286,105 @@ import SwiftData
             try require(ledger.removalBlock(.account, id: account.id) != nil, "Recently deleted entries still protect their account")
             ledger.entries = [entry]; ledger.entries[0].accountID = nil; ledger.entries[0].destinationID = account.id
             try require(ledger.removalBlock(.account, id: account.id) != nil, "incoming transfers protect their destination account")
+        }
+        // Planned entries retain their identity and affect money only after an explicit, guarded confirmation.
+        do {
+            var ledger = FinanceData.initial
+            let card = MoneyAccount(name: "Pending card", currency: "USD", opening: 100)
+            ledger.accounts = [card]; ledger.books[0].budget = 1000
+            let today = Dates.calendar.startOfDay(for: Date()), tomorrow = Dates.calendar.date(byAdding: .day, value: 1, to: today)!
+            var planned = MoneyEntry(); planned.title = "Planned expense"; planned.currency = "USD"; planned.amount = 10
+            planned.accountID = card.id; planned.accountAmount = 10; planned.bookID = ledger.books[0].id
+            planned.categoryID = ledger.categories.first { !$0.isIncome }!.id
+            planned.date = tomorrow; planned.pending = true
+            try ledger.updateEntry(planned, expected: nil, baseCurrency: "CNY"); try ledger.validate()
+            let original = ledger
+            try require(!planned.isDueForConfirmation(at: today) && planned.isDueForConfirmation(at: tomorrow), "confirmation starts on the planned calendar day")
+            try rejects("future pending entry cannot post early") { try ledger.confirmPending(planned, now: today) }
+            try require(ledger == original, "failed confirmation is atomic")
+            var midnightCalendar = Calendar(identifier: .gregorian); midnightCalendar.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
+            let evening = midnightCalendar.date(from: DateComponents(year: 2026, month: 10, day: 7, hour: 23))!
+            var timed = planned; timed.date = evening
+            try require(timed.isDueForConfirmation(at: midnightCalendar.startOfDay(for: evening), calendar: midnightCalendar), "timed plans can be confirmed earlier on their own local day")
+            timed.date = Date(timeIntervalSince1970: .infinity)
+            try require(!timed.isDueForConfirmation(at: today), "invalid planned dates never reach calendar calculations")
+            try require(ledger.balance(card.id) == 100 && ledger.accountBalances()[card.id] == 100 && ledger.balanceAfterSaving(planned, for: card.id) == 100, "planned amounts do not change account balances or editor previews")
+            try require(ledger.accountFlow(card.id, in: ledger.entries).outgoing == 0 && ledger.runningBalances(card.id).isEmpty, "pending rows are excluded from account flows and running balances")
+            let totals = ledger.totals(ledger.entries), pendingStats = ledger.statisticsTotal(ledger.entries, income: false, in: "CNY", history: nil, days: nil)
+            try require(totals.expense == 0 && totals.income == 0 && totals.missing == 0 && pendingStats.total == 0 && pendingStats.missing == 0 && pendingStats.convertedCount == 0, "pending FX never counts as spending or missing conversions")
+            try require(ledger.statisticsTotal(ledger.entries, income: false, in: "USD", history: nil, days: nil).total == 0 && planned.statisticsAmount(income: false) == nil, "original-currency and base statistics both exclude pending amounts")
+            try require(ledger.budgetSpending(ledger.entries, for: nil).total == 0 && ledger.budgetSpending(ledger.entries, for: nil).missing == 0, "pending spending does not consume the budget")
+            try require(ledger.byCategory(ledger.entries, income: false).rows.isEmpty && ledger.remainingRefund(for: planned.id) == 0, "pending spending has no category contribution or refundable balance")
+            let drilldown = MoneyDrilldown(range: DateInterval(start: today, end: tomorrow.addingTimeInterval(86400)), key: .category(planned.categoryID), income: false)
+            try require(!drilldown.matches(planned) && !drilldown.matches(planned, data: ledger), "statistical drill-downs exclude unposted plans")
+            try require(ledger.missingConversionEntries.isEmpty && ledger.missingConversionPreview(history: nil).changes.isEmpty, "bulk conversion never changes unposted plans")
+            try require(ledger.csv(ledger.entries).contains("\"Status\"") && ledger.csv(ledger.entries).contains("\"pending\""), "CSV marks planned amounts explicitly")
+            var revised = planned; revised.amount = 12; revised.accountAmount = 12
+            try ledger.updateEntry(revised, expected: planned, baseCurrency: "CNY")
+            try rejects("stale confirmation cannot post a newer amount") { try ledger.confirmPending(planned, now: tomorrow) }
+            try require(ledger.balance(card.id) == 100 && ledger.entries == [revised], "editing pending keeps it unposted with the same identity")
+            var bypass = revised; bypass.pending = false
+            try rejects("normal save cannot silently post a pending entry") { try ledger.updateEntry(bypass, expected: revised, baseCurrency: "CNY") }
+            ledger = original
+            ledger.accounts[0].archived = true
+            try rejects("archived account blocks confirmation") { try ledger.confirmPending(planned, now: tomorrow) }
+            ledger = original; ledger.books[0].archived = true
+            try rejects("archived book blocks confirmation") { try ledger.confirmPending(planned, now: tomorrow) }
+            ledger = original; ledger.categories[0].archived = true
+            try rejects("archived category blocks confirmation") { try ledger.confirmPending(planned, now: tomorrow) }
+            ledger = original; ledger.categories[0].income = true
+            try rejects("mismatched category blocks confirmation") { try ledger.confirmPending(planned, now: tomorrow) }
+            ledger = original; ledger.entries[0].bookID = UUID()
+            try rejects("missing book blocks confirmation") { try ledger.confirmPending(ledger.entries[0], now: tomorrow) }
+            ledger = original; ledger.entries[0].accountAmount = 20
+            let invalid = ledger
+            try rejects("invalid amounts are revalidated before confirmation") { try ledger.confirmPending(ledger.entries[0], now: tomorrow) }
+            try require(ledger == invalid, "validation failure does not partially post a plan")
+            ledger = original; try ledger.trash(planned)
+            try rejects("deleted plan cannot be confirmed") { try ledger.confirmPending(ledger.entries[0], now: tomorrow) }
+            try ledger.restore(ledger.entries[0])
+            try require(ledger.entries == [planned] && ledger.balance(card.id) == 100, "restoring a pending entry does not post it")
+            var refund = planned; refund.id = UUID(); refund.pending = nil; refund.kind = .refund; refund.refundOf = planned.id
+            ledger.entries.append(refund)
+            try rejects("refunds cannot reference unposted expenses") { try ledger.validate() }
+            for kind in [MoneyKind.transfer, .refund, .adjustment] {
+                var unsupported = planned; unsupported.kind = kind
+                var check = original; check.entries = [unsupported]
+                try rejects("only income or expense supports pending: \(kind.rawValue)") { try check.validate() }
+            }
+            ledger = original
+            try ledger.setManualRate(from: "USD", to: "CNY", text: "7")
+            try ledger.confirmPending(planned, now: tomorrow)
+            let posted = ledger.entries[0]
+            try require(ledger.entries.count == 1 && posted.id == planned.id && !posted.isPending && posted.date == planned.date && posted.baseAmount == nil, "confirmation preserves identity, date and missing FX rather than applying today's asset quote")
+            try require(ledger.balance(card.id) == 90 && ledger.statisticsTotal(ledger.entries, income: false, in: "USD", history: nil, days: nil).total == 10 && ledger.missingConversionEntries == [posted], "confirmation debits once and exposes genuine missing conversion")
+            try rejects("repeating confirmation cannot double-post") { try ledger.confirmPending(planned, now: tomorrow) }
+            try rejects("already-posted current row cannot be confirmed again") { try ledger.confirmPending(posted, now: tomorrow) }
+            try rejects("posted entries cannot become pending through editing") { try ledger.updateEntry(planned, expected: posted, baseCurrency: "CNY") }
+            try require(ledger.balance(card.id) == 90 && ledger.csv(ledger.entries).contains("\"posted\""), "rejected status transitions preserve the posted amount")
+            var income = planned; income.id = UUID(); income.kind = .income; income.categoryID = ledger.categories.first { $0.isIncome }!.id
+            try ledger.updateEntry(income, expected: nil, baseCurrency: "CNY")
+            try require(ledger.statisticsTotal(ledger.entries, income: true, in: "USD", history: nil, days: nil).total == 0, "planned income is not counted early")
+            try ledger.confirmPending(income, now: tomorrow)
+            try require(ledger.balance(card.id) == 100 && ledger.statisticsTotal(ledger.entries, income: true, in: "USD", history: nil, days: nil).total == 10, "confirmed income credits exactly once")
+            var legacy = original; legacy.version = 1; legacy.entries = []
+            try legacy.validate()
+            var oldEntry = planned; oldEntry.pending = nil
+            legacy.entries = [oldEntry]; try legacy.validate()
+            let legacyJSON = try JSONEncoder().encode(legacy)
+            let decoded = try JSONDecoder().decode(FinanceData.self, from: legacyJSON)
+            try require(!decoded.entries[0].isPending && decoded.balance(card.id) == 90 && !String(decoding: legacyJSON, as: UTF8.self).contains("pending"), "older entries without a status remain posted")
+            legacy.entries = [planned]
+            try rejects("old ledger version cannot hide pending data from older clients") { try legacy.validate() }
+            legacy.entries = []
+            try require(try legacy.merging(original).version == 2, "merging a pending ledger upgrades its format")
+            try legacy.updateEntry(planned, expected: nil, baseCurrency: "CNY"); try legacy.validate()
+            try require(legacy.version == 2, "saving the first plan upgrades an older ledger")
+            let pendingStore = try Store.make(url: directory.appendingPathComponent("Pending.store"))
+            try FinanceStore.stage(original, in: pendingStore.mainContext); try Store.save(pendingStore.mainContext)
+            let pendingBackup = try TaskBackup.capture(pendingStore.mainContext)
+            let pendingRoundTrip = try TaskBackup.decode(pendingBackup.encoded())
+            try require(pendingRoundTrip.version == 8 && pendingRoundTrip.finance == original, "pending survives storage and portable backup without entering balances")
         }
         print("FINANCE PASS: \(checks) checks — accounts, books, transfers, refunds, FX, backup and persistence")
         return checks

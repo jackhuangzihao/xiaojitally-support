@@ -22,14 +22,16 @@ import SwiftData
         cached = (bytes, value)
         return value
     }
-    static func stage(_ value: FinanceData, in context: ModelContext) throws {
+    static func stage(_ value: FinanceData, in context: ModelContext, trackSyncChanges: Bool = true) throws {
         try value.validate()
         var normalized = value
+        normalized.version = 2
         for i in normalized.entries.indices {
             normalized.entries[i].date = MoneyEntry.timestamp(normalized.entries[i].date)
             normalized.entries[i].deletedAt = normalized.entries[i].deletedAt.map(MoneyEntry.timestamp)
         }
         for i in normalized.rates.indices { normalized.rates[i].fetchedAt = MoneyEntry.timestamp(normalized.rates[i].fetchedAt) }
+        if trackSyncChanges { try SyncChanges.trackFinance(from: read(context), to: normalized, in: context) }
         let data = try JSONEncoder().encode(normalized)
         let existing = try context.fetch(FetchDescriptor<FinanceLedger>())
         guard existing.count <= 1 else { throw TaskBackup.invalid("Multiple ledgers") }
