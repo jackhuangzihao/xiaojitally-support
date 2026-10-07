@@ -119,6 +119,19 @@ struct FinanceEntityEditor: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
+    private var monthlyBudgetField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L("每月预算", "Monthly budget") + " · " + original.baseCurrency)
+                .font(.subheadline.weight(.medium))
+            TextField(L("输入预算金额（可不填）", "Enter budget amount (optional)"), text: $budget)
+                .textFieldStyle(.roundedBorder).labelsHidden().monospacedDigit()
+                .frame(minHeight: 44).focused($textFocused)
+                .accessibilityLabel(L("每月预算", "Monthly budget") + " · " + original.baseCurrency)
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+        }
+    }
     private var fallbackSymbol: String {
         switch kind {
         case .account: return (MoneyAccountType(rawValue: type) ?? .debit).symbol
@@ -205,14 +218,7 @@ struct FinanceEntityEditor: View {
                     }
                     else { Text(L("填开始记账时已有的钱，不算新增收入。信用卡欠款填负数，例如 -1200。", "Enter the money you already have when you start tracking; this is not new income. Enter credit card debt as a negative amount, such as -1200.")).font(.caption).foregroundStyle(.secondary) }
                 } else if kind == .book {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(L("每月预算", "Monthly budget") + " · " + original.baseCurrency).font(.subheadline.weight(.medium))
-                        TextField(L("可不填", "Optional"), text: $budget).focused($textFocused).monospacedDigit()
-                            .accessibilityLabel(L("每月预算", "Monthly budget"))
-                            #if os(iOS)
-                            .keyboardType(.decimalPad)
-                            #endif
-                    }
+                    monthlyBudgetField
                     Picker(L("默认账户", "Default account"), selection: $accountID) {
                         Text(L("每次选择", "Choose each time")).tag(nil as UUID?)
                         ForEach(original.accounts.filter { !$0.archived || $0.id == accountID }) { Text($0.name + " · " + $0.currency).tag(Optional($0.id)) }
@@ -224,6 +230,8 @@ struct FinanceEntityEditor: View {
                         .disabled(kind == .book && !archived && original.bookArchiveBlock(id) != nil)
                     Text(kind == .category
                          ? L("预设分类也可以隐藏。保存后新增账单不再显示此分类，历史账目保留；隐藏大类会同时隐藏子分类，可在已归档分类中恢复。", "Preset categories can be hidden too. Save to remove this option from new entries while keeping history. Hiding a main category includes its children; restore it under Archived categories.")
+                         : kind == .account
+                         ? L("归档后在新账单中隐藏此账户，保留历史和余额；余额仍计入净资产。", "Archiving hides this account from new entries. Its history and balance are kept, and the balance still counts toward net worth.")
                          : L("归档后保留历史账目，在新增时隐藏。", "Archiving keeps all history and hides this option for new entries.")).font(.caption).foregroundStyle(.secondary)
                 }
                 if let id {

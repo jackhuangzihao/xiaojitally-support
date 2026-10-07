@@ -44,7 +44,7 @@ extension FinanceHome {
                         ForEach(data.accounts.filter(\.archived)) { accountRow($0, balance: balances[$0.id, default: 0]) }
                     }
                 } footer: {
-                    Text(L("归档只隐藏入口，余额仍计入总资产。", "Archiving hides these accounts; their balances remain in net worth."))
+                    Text(L("归档用于停用账户，历史和余额仍保留。余额变化请通过转账或“核对余额”记录。", "Archive accounts you no longer use. History and balances remain; record balance changes with a transfer or Check balance."))
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -110,10 +110,16 @@ extension FinanceHome {
                             if assetCurrencies.count > 1 {
                                 Menu {
                                     ForEach(assetCurrencies, id: \.self) { code in Button(Money.name(code) + " · " + code) { foreignCurrency = code } }
-                                } label: { Label(L("其他币种 · ", "Other accounts · ") + currency, systemImage: "chevron.down").frame(minHeight: compact ? 44 : nil) }
-                                    .font(.caption).menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text(L("其他币种 · ", "Other currencies · ") + currency)
+                                        Image(systemName: "chevron.down").accessibilityHidden(true)
+                                    }.frame(minHeight: compact ? 44 : nil)
+                                }
+                                .font(.caption).menuStyle(.borderlessButton).menuIndicator(.hidden)
+                                .fixedSize(horizontal: false, vertical: true)
                             } else {
-                                Text(L("其他币种 · ", "Other accounts · ") + currency).font(.caption).foregroundStyle(.secondary)
+                                Text(L("其他币种 · ", "Other currencies · ") + currency).font(.caption).foregroundStyle(.secondary)
                             }
                             Text(display(summary.balances[currency, default: 0], currency))
                                 .font(.system(size: compact ? 19 : 22, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
