@@ -1,4 +1,4 @@
-"""Run: python3 Checks/check_finance_account_switch.py [Sources/Finance/FinanceEntryEditor.swift]
+"""Run: python3 Checks/check_finance_account_switch.py [Sources/Finance/Editors/FinanceEntryEditor.swift]
 Exercises the actual account-change handler without opening a user's database.
 """
 from pathlib import Path
@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 
-source = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / 'Sources/Finance/FinanceEntryEditor.swift'
+source = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / 'Sources/Finance/Editors/FinanceEntryEditor.swift'
 text = source.read_text()
 start = text.index('.onChange(of: draft.accountID)')
 end = text.index('.onChange(of: draft.kind)', start)

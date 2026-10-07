@@ -1409,31 +1409,3 @@ extension CloudMerge {
         return count
     }
 }
-
-extension CloudSync {
-    /// Called only with the performance check's disposable store; no CloudKit or user data access.
-    @MainActor static func snapshotPerformance(in context: ModelContext) throws {
-        let local = try TaskBackup.capture(context), baseline = try CloudMerge.bytes(local), digest = CloudMerge.digest(baseline)
-        let cached = SnapshotCache(contextID: ObjectIdentifier(context), revision: Store.revision, baseline: baseline,
-                                   local: local, localBytes: baseline, base: try TaskBackup.decode(baseline, allowLargeFile: true), baselineDigest: digest)
-        var uncached: [Double] = [], reused: [Double] = []
-        for _ in 0..<3 {
-            var start = ProcessInfo.processInfo.systemUptime
-            let captured = try TaskBackup.capture(context), encoded = try CloudMerge.bytes(captured)
-            let base = try TaskBackup.decode(baseline, allowLargeFile: true), baselineDigest = CloudMerge.digest(baseline)
-            uncached.append(ProcessInfo.processInfo.systemUptime - start)
-            guard encoded == cached.localBytes, try CloudMerge.bytes(base) == baseline, baselineDigest == cached.baselineDigest else {
-                throw TaskBackup.invalid("Sync cache differs from uncached preparation")
-            }
-            start = ProcessInfo.processInfo.systemUptime
-            for _ in 0..<1000 {
-                guard cached.matches(context, baseline: baseline), cached.localBytes == baseline, cached.baselineDigest == digest else {
-                    throw TaskBackup.invalid("Unchanged sync poll did not reuse its prepared snapshot")
-                }
-            }
-            reused.append((ProcessInfo.processInfo.systemUptime - start) / 1000)
-        }
-        print(String(format: "PERF unchanged sync snapshot, %d tasks/%d entries: uncached %.3f ms/poll, cached %.6f ms/poll (median of 3)",
-                     local.tasks.count, local.finance?.entries.count ?? 0, uncached.sorted()[1] * 1000, reused.sorted()[1] * 1000))
-    }
-}

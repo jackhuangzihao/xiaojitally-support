@@ -216,23 +216,26 @@ python3 Checks/check_release_bundle.py /path/to/小记.app \
 
 磁盘目录与 Xcode 分组一致。仍为一个应用编译模块，没有引入新的包或依赖。
 
+2026-10-08 完成第一阶段源码整理：主应用 65 → 81 个 Swift 文件，按完整类型与现成方法组搬移；保留访问权限、状态归属、数据格式与业务逻辑。整理前回退点为 Git 标签 `before-source-organization-20261008`（`1a5a338`）。完整 14 阶段检查通过：Mac 1,584 项、iOS 模拟器 1,497 项，包含旧库迁移、账户币种、三种构建与包检查、5,000 项数据性能检查；证据见工作区 `检查证据/源码整理实施-20261008`。本地版本仍为 1.0（76）。
+
 | 目录 | 主要职责与入口 |
 | --- | --- |
 | [Sources/App](Sources/App) | `JianshiApp` 启动；`ContentView` 窗口导航和日历状态；设置、编辑草稿、侧栏交互 |
-| [Sources/Tasks](Sources/Tasks) | 任务模型、规则、清单树、提醒、撤销、任务行、复制；任务与清单编辑器 |
-| [Sources/Calendar](Sources/Calendar) | 日安排 `AgendaView`、周 `WeekView`、月 `MonthView`；日期导航、详情、布局计算和拖动 |
-| [Sources/Finance](Sources/Finance) | `FinanceHome` 页面状态；账单、统计、资产、管理；账单/账户编辑器、金额规则和参考汇率 |
-| [Sources/Storage](Sources/Storage) | `Store` 保存与恢复保护；`TaskBackup` 数据格式；自动备份、iCloud 同步及备份界面 |
+| [Sources/Tasks](Sources/Tasks) | 模型、规则、动作、提醒；`Editor/` 放任务与清单编辑器，`TaskRecurrence` 放重复任务方法 |
+| [Sources/Calendar](Sources/Calendar) | 日安排 `AgendaView`、周 `WeekView`、月 `MonthView`；导航、详情与布局；`Drag/` 放拖动会话、探针和落点计算 |
+| [Sources/Finance](Sources/Finance) | `Data/` 模型与规则、`Views/` 页面、`Editors/` 编辑器、`Components/` 共享视图 |
+| [Sources/Storage](Sources/Storage) | `Store` 保存与恢复保护；`Backup/` 备份格式及界面；`Sync/` iCloud 同步与修改记录 |
 | [Sources/Shared](Sources/Shared) | 日期与语言工具、翻页手势、共享小组件数据与桥接 |
-| [Sources/Validation](Sources/Validation) | 既有功能、财务、同步、编辑冲突和性能自检；使用合成数据 |
+| [Sources/Validation](Sources/Validation) | 功能、财务、编辑冲突检查；`Fixtures/` 放界面样例，`PerformanceChecks` 和 `SandboxChecks` 放现有专项检查；使用合成数据 |
 | [Checks](Checks) | 统一检查入口、工程引用检查、发布包检查及冻结旧库 |
 
 ### 如何找修改位置
 
-- 修改任务编辑页面：`Tasks/TaskEditor.swift` 是入口；`TaskEditorSchedule` 管日期和重复选项，`TaskEditorFinance` 管附带账单，`TaskEditorSuggestions` 管历史建议，`TaskEditorPersistence` 管草稿与保存。
+- 修改任务编辑页面：`Tasks/Editor/TaskEditor.swift` 是入口；同目录的 `TaskEditorSchedule` 管日期和重复选项，`TaskEditorFinance` 管附带账单，`TaskEditorSuggestions` 管历史建议，`TaskEditorPersistence` 管草稿与保存。
 - 修改日历某种显示：先找 `Calendar/AgendaView`、`WeekView`、`MonthView`，公共导航和详情分别在 `CalendarNavigation`、`CalendarDetails`。任务变更入口在 `Tasks/TaskActions`。
-- 修改财务某一页：先找 `FinanceEntries`、`FinanceStatisticsView`、`FinanceAssets`、`FinanceManagement`；金额校验和账本操作放在 `FinanceData`，统计规则放在 `FinanceStatistics`，不要在页面另写一份规则。
-- 修改存储：任务仍通过 `Storage/Store` 保存，财务通过 `Finance/FinanceStore` 读写同一存储；文件整理没有改变模型名称、云端格式或数据位置。
+- 修改财务某一页：先找 `Finance/Views` 的 `FinanceEntries`、`FinanceStatisticsView`、`FinanceAssets`、`FinanceManagement`；基础账本操作在 `Finance/Data/FinanceData`，校验、汇率和示例操作在同目录的 `FinanceData+Validation`、`FinanceData+Rates`、`FinanceData+Samples`，统计规则在 `FinanceStatistics`，不要在页面另写一份规则。
+- 修改存储：任务仍通过 `Storage/Store` 保存，财务通过 `Finance/Data/FinanceStore` 读写同一存储；文件整理没有改变模型名称、云端格式或数据位置。
+- 修改拖动：`Calendar/Drag/WeekDrag` 保留完整周拖动会话；显示和原生探针分别在 `WeekDragViews`、`WeekDragProbes`，其他日期翻页探针在 `TaskDragPaging`，落点计算在 `CalendarDropGeometry`。
 
 ### 拆分约定
 
