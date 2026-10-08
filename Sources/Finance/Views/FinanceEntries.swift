@@ -15,7 +15,8 @@ extension FinanceHome {
         let showBook = accountDetailID != nil || (bookFilterID == nil && data.books.count > 1)
         let balances: [UUID: Decimal] = !trash && showRunningBalances ? accountDetailID.map { data.runningBalances($0) } ?? [:] : [:]
         return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            // Keep changing summary heights out of the ledger's lazy height estimates during saves.
+            VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 14) {
                     if trash {
                         bookSelector
@@ -41,14 +42,16 @@ extension FinanceHome {
                                           remove: { confirmDelete = $0 })
                 }
                 if entries.isEmpty && (trash || pendingEntries.isEmpty || drilldown != nil) { emptyState.padding(.top, 40).frame(maxWidth: .infinity) }
-                ForEach(keys, id: \.self) { day in
-                    Section {
-                        ForEach(days[day] ?? []) { entry in
-                            FinanceEntryRow(entry: entry, data: data, showBook: showBook, hidden: hidden, accountID: trash ? nil : accountDetailID, balanceAfter: balances[entry.id],
-                                            restore: trash ? { restore(entry) } : nil,
-                                            open: { if !trash { editor = EntryRequest(entry: entry, expected: entry) } }) { actions(entry) }
-                        }
-                    } header: { dayHeader(day, days[day] ?? []) }
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    ForEach(keys, id: \.self) { day in
+                        Section {
+                            ForEach(days[day] ?? []) { entry in
+                                FinanceEntryRow(entry: entry, data: data, showBook: showBook, hidden: hidden, accountID: trash ? nil : accountDetailID, balanceAfter: balances[entry.id],
+                                                restore: trash ? { restore(entry) } : nil,
+                                                open: { if !trash { editor = EntryRequest(entry: entry, expected: entry) } }) { actions(entry) }
+                            }
+                        } header: { dayHeader(day, days[day] ?? []) }
+                    }
                 }
             }.padding(.horizontal, compact ? 12 : 14).padding(.bottom, 24)
         }
