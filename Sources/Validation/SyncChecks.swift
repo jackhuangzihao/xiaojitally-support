@@ -5,7 +5,7 @@ import CloudKit
 
 extension CloudMerge {
     @MainActor static func check() throws -> Int {
-        var count = try CloudSyncSettings.checkViewFootprint() + checkConflictChoices()
+        var count = try CloudSyncSettings.checkViewFootprint() + checkConflictChoices() + checkAutomaticSync()
         func check(_ condition: Bool, _ label: String) throws {
             guard condition else { throw TaskBackup.invalid("SYNC CHECK: " + label) }; count += 1
         }
@@ -103,9 +103,9 @@ extension CloudMerge {
             subtasksLeft = subtasksBase; subtasksRight = subtasksBase
             subtasksLeft.tasks[0].subtasks[0].title = "Renamed step"
             subtasksRight.tasks[0].subtasks[0].isDone = true
-            try requiresReview("concurrent subtask changes remain an explicit array-level conflict") {
-                _ = try merge(local: subtasksLeft, cloud: subtasksRight, base: subtasksBase)
-            }
+            let mergedSteps = try merge(local: subtasksLeft, cloud: subtasksRight, base: subtasksBase).tasks.first { $0.id == first.id }!.subtasks
+            try check(mergedSteps[0].title == "Renamed step" && mergedSteps[0].isDone,
+                      "independent subtask title and completion changes merge")
             var removed = original; removed.tasks.removeFirst()
             removed = try tracked(removed, from: original, at: late.addingTimeInterval(60))
             for reverse in [false, true] {

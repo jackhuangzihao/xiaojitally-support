@@ -21,7 +21,8 @@ enum CloudMerge {
     }
     static func value<T: Equatable>(_ local: T, _ cloud: T, _ base: T, label: @autoclosure () -> String,
                                     choice: Choice?, decision: @autoclosure () -> SyncChanges.Decision? = nil,
-                                    report: ((String) -> Void)? = nil, review: ConflictReview? = nil, key: String = "") throws -> T {
+                                    report: ((String) -> Void)? = nil, review: ConflictReview? = nil, key: String = "",
+                                    field: String? = nil) throws -> T {
         if local == cloud { return local }
         // A first-sync deletion requires review even when both records carry timestamps.
         let decisionResult = decision()
@@ -29,8 +30,14 @@ enum CloudMerge {
             if cloud == base { return local }
             if local == base { return cloud }
         }
+        let manual = review?.choices[key] ?? choice
+        if manual == nil, decisionResult?.needsReview != true, let field,
+           let selected = review?.automatic?.choice(record: key, field: field) {
+            review?.recordAutomatic(key: key + ":" + field)
+            return selected == .local ? local : cloud
+        }
         if let review { review.record(key: key, detail: label()) }
-        switch review?.choices[key] ?? choice {
+        switch manual {
         case .local: return local
         case .cloud: return cloud
         case nil:
@@ -112,11 +119,19 @@ enum CloudMerge {
             // Only unchanged membership, links and deletion state permit merging individual occurrences.
             if left != right, left != original, right != original,
                taskStructureMatches(left, original), taskStructureMatches(right, original) {
-                let lifecycle = try value(zip(left, original).map { taskLifecycle($0, base: $1) },
+                let standalone = component.count == 1 && (left + right + original).allSatisfy {
+                    $0.repeatRule == "none" && $0.nextOccurrenceID == nil
+                }
+                let lifecycle: [TaskBackup.TaskRecord]
+                if standalone {
+                    lifecycle = [try ordinaryTaskLifecycle(left[0], right[0], original[0], choice: choice, report: report, review: review)]
+                } else {
+                    lifecycle = try value(zip(left, original).map { taskLifecycle($0, base: $1) },
                                           zip(right, original).map { taskLifecycle($0, base: $1) }, original,
                     label: L("任务时间、提醒与重复状态", "Task schedule, reminders and recurrence") + "\n" +
                         component.filter { l[$0] != r[$0] }.map { taskDifference(l[$0], r[$0]) }.joined(separator: "\n\n"),
                     choice: choice, report: report, review: review, key: "task-lifecycle:" + component.map(\.uuidString).joined(separator: ","))
+                }
                 for index in original.indices {
                     result.append(try taskFields(left[index], right[index], original[index], lifecycle: lifecycle[index],
                                                  choice: choice, report: report, review: review))
@@ -273,8 +288,17 @@ enum CloudMerge {
         return ((accounts + chosenAccounts).sorted { $0.id.uuidString < $1.id.uuidString },
                 (entries + chosenEntries).sorted { $0.id.uuidString < $1.id.uuidString })
     }
-    static func merge(local rawLocal: TaskBackup, cloud rawCloud: TaskBackup, base rawBase: TaskBackup?, choice: Choice? = nil,
-                      cloudExists: Bool = true, choices: [String: Choice] = [:]) throws -> TaskBackup {
+    struct MergeResult {
+        let snapshot: TaskBackup
+        let automaticFieldCount: Int
+    }
+    static func merge(local: TaskBackup, cloud: TaskBackup, base: TaskBackup?, choice: Choice? = nil,
+                      cloudExists: Bool = true, choices: [String: Choice] = [:], now: Date = Date()) throws -> TaskBackup {
+        try mergeResult(local: local, cloud: cloud, base: base, choice: choice,
+                        cloudExists: cloudExists, choices: choices, now: now).snapshot
+    }
+    static func mergeResult(local rawLocal: TaskBackup, cloud rawCloud: TaskBackup, base rawBase: TaskBackup?, choice: Choice? = nil,
+                            cloudExists: Bool = true, choices: [String: Choice] = [:], now: Date = Date()) throws -> MergeResult {
         var local = try TaskBackup.decode(bytes(rawLocal), allowLargeFile: true)
         var cloud = try TaskBackup.decode(bytes(rawCloud), allowLargeFile: true)
         let base = try rawBase.map { try TaskBackup.decode(bytes($0), allowLargeFile: true) }
@@ -287,16 +311,19 @@ enum CloudMerge {
             if isUntouchedInitialFinance(local) { local.finance = cloud.finance }
             else if isUntouchedInitialFinance(cloud), local.finance != nil { cloud.finance = local.finance }
         }
-        let review = ConflictReview(choices: choices, local: local, cloud: cloud, base: base)
+        let resolution = try SyncChanges.Resolution(local: local, cloud: cloud, base: base)
+        let review = ConflictReview(choices: choices, local: local, cloud: cloud, base: base,
+                                    automatic: AutomaticSyncPolicy(revisions: resolution, now: now))
         var conflicts: [String] = []
         var reported = Set<String>()
         let report: (String) -> Void = { if reported.insert($0).inserted { conflicts.append($0) } }
-        let resolution = try SyncChanges.Resolution(local: local, cloud: cloud, base: base)
         let decision = resolution.decision
         var result = TaskBackup(lists: [], tasks: [])
-        result.lists = try rows(local.lists, cloud.lists, base?.lists ?? [], id: { $0.id }, label: L("清单（名称、颜色、顺序或层级存在差异）", "List (name, color, order or hierarchy differs)"), describe: { $0.name }, choice: choice, kind: "list", decision: decision, report: report, review: review)
+        result.lists = try rows(local.lists, cloud.lists, base?.lists ?? [], id: { $0.id }, label: L("清单（名称、颜色、顺序或层级存在差异）", "List (name, color, order or hierarchy differs)"), describe: { $0.name }, choice: choice, kind: "list", decision: decision,
+                                mergeFields: { try listFields($0, $1, $2, choice: choice, report: report, review: review) }, report: report, review: review)
         result.tasks = try taskRows(local.tasks, cloud.tasks, base?.tasks ?? [], choice: choice, decision: decision, report: report, review: review)
-        result.weekTitles = try rows(local.weekTitles ?? [], cloud.weekTitles ?? [], base?.weekTitles ?? [], id: { $0.id }, label: L("周标题", "Week title"), describe: { $0.week + " · " + $0.title }, choice: choice, kind: "week", decision: decision, report: report, review: review)
+        result.weekTitles = try rows(local.weekTitles ?? [], cloud.weekTitles ?? [], base?.weekTitles ?? [], id: { $0.id }, label: L("周标题", "Week title"), describe: { $0.week + " · " + $0.title }, choice: choice, kind: "week", decision: decision,
+                                     mergeFields: { try weekFields($0, $1, $2, choice: choice, report: report, review: review) }, report: report, review: review)
         if let l = local.finance, let r = cloud.finance {
             let b = base?.finance
             // Changing base currency revalues every posting. A concurrent posting cannot be mixed into it.
@@ -326,12 +353,13 @@ enum CloudMerge {
             }
             throw error
         }
+        syncLog.debug("Automatically resolved \(review.automaticCount, privacy: .public) field conflicts")
         syncLog.debug("Validated sync merge; manual conflict choice: \(choice != nil || !choices.isEmpty, privacy: .public)")
-        return result
+        return MergeResult(snapshot: result, automaticFieldCount: review.automaticCount)
     }
     static func bytes(_ snapshot: TaskBackup) throws -> Data {
         var stable = snapshot
-        stable.version = 8
+        stable.version = 9
         stable.finance?.version = 2
         stable.createdAt = Date(timeIntervalSince1970: 0)
         stable.lists.sort { $0.id.uuidString < $1.id.uuidString }

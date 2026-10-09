@@ -9,6 +9,10 @@ extension CloudMerge {
     /// One merge owns this collector. Stable record/group keys never depend on text or language.
     final class ConflictReview {
         let choices: [String: Choice]
+        let automatic: AutomaticSyncPolicy?
+        private var automaticKeys = Set<String>()
+        var automaticCount: Int { automaticKeys.count }
+        func recordAutomatic(key: String) { automaticKeys.insert(key) }
         private(set) var items: [ConflictItem] = []
         private var seen = Set<String>()
         private let localSnapshot: TaskBackup
@@ -18,8 +22,8 @@ extension CloudMerge {
         private lazy var cloud = ConflictDetails(cloudSnapshot)
         private lazy var base = baseSnapshot.map(ConflictDetails.init)
 
-        init(choices: [String: Choice], local: TaskBackup, cloud: TaskBackup, base: TaskBackup? = nil) {
-            self.choices = choices
+        init(choices: [String: Choice], local: TaskBackup, cloud: TaskBackup, base: TaskBackup? = nil, automatic: AutomaticSyncPolicy? = nil) {
+            self.choices = choices; self.automatic = automatic
             localSnapshot = local; cloudSnapshot = cloud; baseSnapshot = base
         }
         func record(key: String, detail: String) {

@@ -24,6 +24,7 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
     private(set) var detail = ""
     private(set) var lastSync: Date?
     private(set) var conflict = false
+    private(set) var lastAutomaticFieldCount = 0
     private(set) var conflictItems: [CloudMerge.ConflictItem] = []
     private(set) var conflictReviewID = UUID()
     private(set) var conflictWarning: String?
@@ -96,7 +97,7 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             let state = try state(context); state.enabled = value
             applying = true; defer { applying = false }
             try Store.save(context)
-            enabled = value; generation += 1; snapshotCache = nil; detail = ""; conflict = false
+            enabled = value; generation += 1; snapshotCache = nil; detail = ""; conflict = false; lastAutomaticFieldCount = 0
             debounce?.cancel()
             if value { Task { await sync() } }
         } catch { detail = error.localizedDescription }
@@ -127,7 +128,6 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
         }
         guard enabled, !running, editors == 0, let context, Store.recovery.failure == nil, !context.hasChanges else { return }
         if let retryAfter, Date() < retryAfter { return }
-        if conflict && !resolvingConflict { return }
         var resolutionResult = "interrupted"
         if resolvingConflict { syncLog.notice("Conflict resolution started") }
         running = true
@@ -216,15 +216,18 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
                 resolutionResult = "succeeded"
                 return
             }
+            // A pending review must still observe another device's progress. Unchanged inputs keep the same sheet token.
+            if conflict && !resolvingConflict && conflictLocal == localBytes && conflictCloud == remoteBytes { return }
             if resolvingConflict && (conflictLocal != localBytes || conflictCloud != remoteBytes) {
                 conflict = false; conflictLocal = nil; conflictCloud = nil
                 throw TaskBackup.invalid(L("数据已变化，请重新同步后再处理冲突。", "Data changed. Sync again before resolving conflicts."))
             }
-            let merged: TaskBackup, mergedBytes: Data
+            let merged: TaskBackup, mergedBytes: Data, automaticCount: Int
             do {
-                (merged, mergedBytes) = try await Task.detached {
-                    let merged = try CloudMerge.merge(local: local, cloud: cloud, base: base, cloudExists: existingCloud, choices: choices)
-                    return (merged, try CloudMerge.bytes(merged))
+                (merged, mergedBytes, automaticCount) = try await Task.detached {
+                    let result = try CloudMerge.mergeResult(local: local, cloud: cloud, base: base,
+                                                             cloudExists: existingCloud, choices: choices)
+                    return (result.snapshot, try CloudMerge.bytes(result.snapshot), result.automaticFieldCount)
                 }.value
             }
             catch let error as CloudMerge.Conflict {
@@ -246,7 +249,7 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             // Use per-entity CloudKit records if measured personal ledgers outgrow snapshot uploads.
             // Always retain both sides before changing either, including before conflict resolution.
             if state.baseline == nil || mergedBytes != localBytes || mergedBytes != remoteBytes || resolvingConflict {
-                try await protect(localBytes, remoteBytes, conflict: resolvingConflict)
+                try await protect(localBytes, remoteBytes, conflict: resolvingConflict || automaticCount > 0)
             }
             guard canContinue(ticket, in: context) else { return }
             if resolvingConflict && capturedRevision != Store.revision {
@@ -274,11 +277,15 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             // Edits made while the upload was in flight are merged again, never overwritten by its old snapshot.
             let current = try TaskBackup.capture(context)
             let importRevision = Store.revision
-            let (final, finalBytes, changed) = try await Task.detached {
-                let final = try CloudMerge.merge(local: current, cloud: merged, base: local)
-                let bytes = try CloudMerge.bytes(final)
-                return (final, bytes, try bytes != CloudMerge.bytes(current))
+            let (final, finalBytes, changed, rebaseCount) = try await Task.detached {
+                let result = try CloudMerge.mergeResult(local: current, cloud: merged, base: local)
+                let bytes = try CloudMerge.bytes(result.snapshot)
+                return (result.snapshot, bytes, try bytes != CloudMerge.bytes(current), result.automaticFieldCount)
             }.value
+            if rebaseCount > 0 {
+                let currentBytes = try await Task.detached { try CloudMerge.bytes(current) }.value
+                try await protect(currentBytes, mergedBytes, conflict: true)
+            }
             guard canContinue(ticket, in: context) else { return }
             // A quick edit can save while the worker runs. Discard stale work and retry from fresh data.
             applying = true
@@ -288,6 +295,8 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             // A save may normalize list colors. Refill from the actual committed context on the next poll.
             snapshotCache = nil
             lastSync = state.lastSync; detail = ""; conflict = false; conflictLocal = nil; conflictCloud = nil
+            lastAutomaticFieldCount = automaticCount + rebaseCount
+            syncLog.notice("Sync committed; automatic field decisions: \(self.lastAutomaticFieldCount, privacy: .public)")
             resolutionResult = "succeeded"
             if finalBytes != mergedBytes { pendingSave = true; detail = L("新修改等待上传。", "New edits are waiting to upload.") }
         } catch {
