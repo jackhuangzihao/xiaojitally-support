@@ -5,7 +5,7 @@ import CloudKit
 
 extension CloudMerge {
     @MainActor static func check() throws -> Int {
-        var count = try CloudSyncSettings.checkViewFootprint() + checkConflictChoices() + checkAutomaticSync()
+        var count = try CloudSyncSettings.checkViewFootprint() + checkConflictChoices() + checkAutomaticSync() + SyncHistoryChecks.run()
         func check(_ condition: Bool, _ label: String) throws {
             guard condition else { throw TaskBackup.invalid("SYNC CHECK: " + label) }; count += 1
         }

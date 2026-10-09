@@ -85,9 +85,19 @@ enum BackupFiles {
             .appendingPathComponent("JianshiBackups/Automatic", isDirectory: true)
     }
 
-    private static func conflictDirectories(in directory: URL) throws -> [(url: URL, date: Date)] {
+    enum SyncRecoveryKind: String {
+        case manualConflict, automaticMerge
+        var directoryName: String { self == .manualConflict ? "Conflicts" : "AutomaticMerges" }
+        var prefix: String { self == .manualConflict ? "Jianshi-Conflict-" : "Jianshi-AutomaticMerge-" }
+        var retainedPairs: Int { self == .manualConflict ? 5 : 2 }
+        static func required(manualReview: Bool, automaticCount: Int) -> [Self] {
+            (manualReview ? [.manualConflict] : []) + (automaticCount > 0 ? [.automaticMerge] : [])
+        }
+    }
+
+    private static func recoveryDirectories(in directory: URL, kind: SyncRecoveryKind) throws -> [(url: URL, date: Date)] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
-        let prefix = "Jianshi-Conflict-"
+        let prefix = kind.prefix
         return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]).compactMap { url in
             let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard values.isDirectory == true, values.isSymbolicLink != true, url.lastPathComponent.hasPrefix(prefix),
@@ -96,12 +106,13 @@ enum BackupFiles {
         }.sorted { $0.date > $1.date }
     }
 
-    /// Keep the last five conflict pairs independently of hourly routine sync backups.
-    static func protectConflict(local: Data, cloud: Data, directory: URL, now: Date = Date()) throws {
+    /// Automatic resolutions must never evict originals that needed manual review.
+    static func protectSyncCopies(local: Data, cloud: Data, directory: URL,
+                                  kind: SyncRecoveryKind = .manualConflict, now: Date = Date()) throws {
         _ = try TaskBackup.decode(local, allowLargeFile: true)
         _ = try TaskBackup.decode(cloud, allowLargeFile: true)
-        let fm = FileManager.default, conflicts = directory.appendingPathComponent("Conflicts", isDirectory: true)
-        let existing = try conflictDirectories(in: conflicts)
+        let fm = FileManager.default, conflicts = directory.appendingPathComponent(kind.directoryName, isDirectory: true)
+        let existing = try recoveryDirectories(in: conflicts, kind: kind)
         if let latest = existing.first,
            (try? Data(contentsOf: latest.url.appendingPathComponent("local.json"))) == local,
            (try? Data(contentsOf: latest.url.appendingPathComponent("cloud.json"))) == cloud { return }
@@ -115,17 +126,18 @@ enum BackupFiles {
             guard try Data(contentsOf: file) == data else { throw CocoaError(.fileReadCorruptFile) }
         }
         // The pair becomes visible only after both originals are verified; backward clocks retain its order.
-        let date = max(now, existing.first?.date.addingTimeInterval(0.001) ?? now)
-        let stamp = String(format: "%020.0f", date.timeIntervalSince1970 * 1000)
-        let completed = conflicts.appendingPathComponent("Jianshi-Conflict-" + stamp + "-" + UUID().uuidString, isDirectory: true)
+        let milliseconds = max((now.timeIntervalSince1970 * 1000).rounded(),
+                               existing.first.map { ($0.date.timeIntervalSince1970 * 1000).rounded() + 1 } ?? 0)
+        let stamp = String(format: "%020.0f", milliseconds)
+        let completed = conflicts.appendingPathComponent(kind.prefix + stamp + "-" + UUID().uuidString, isDirectory: true)
         try fm.moveItem(at: staging, to: completed)
-        for old in existing.dropFirst(4) { try fm.removeItem(at: old.url) }
-        log.notice("Protected sync conflict originals; retained pairs: \(min(existing.count + 1, 5), privacy: .public)")
+        for old in existing.dropFirst(kind.retainedPairs - 1) { try fm.removeItem(at: old.url) }
+        log.notice("Protected sync originals (\(kind.rawValue, privacy: .public)); retained pairs: \(min(existing.count + 1, kind.retainedPairs), privacy: .public)")
     }
 
-    static func conflictCopy(directory: URL, local: Bool) throws -> Data? {
-        let conflicts = directory.appendingPathComponent("Conflicts", isDirectory: true)
-        guard let latest = try conflictDirectories(in: conflicts).first else { return nil }
+    static func syncRecoveryCopy(directory: URL, local: Bool, kind: SyncRecoveryKind = .manualConflict) throws -> Data? {
+        let conflicts = directory.appendingPathComponent(kind.directoryName, isDirectory: true)
+        guard let latest = try recoveryDirectories(in: conflicts, kind: kind).first else { return nil }
         let data = try Data(contentsOf: latest.url.appendingPathComponent(local ? "local.json" : "cloud.json"))
         _ = try TaskBackup.decode(data, allowLargeFile: true)
         return data

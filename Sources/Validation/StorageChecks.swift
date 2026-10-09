@@ -504,10 +504,10 @@ import AppKit
                 let originals = recovery.appendingPathComponent("Conflicts")
                 var cloud = backup; cloud.tasks[0].title = "Original cloud conflict"
                 let cloudData = try cloud.encoded()
-                try require(try BackupFiles.conflictCopy(directory: recovery, local: true) == nil,
+                try require(try BackupFiles.syncRecoveryCopy(directory: recovery, local: true) == nil,
                             "No conflict recovery copy is reported before the first conflict")
-                try BackupFiles.protectConflict(local: data, cloud: cloudData, directory: recovery, now: now)
-                try BackupFiles.protectConflict(local: data, cloud: cloudData, directory: recovery, now: now)
+                try BackupFiles.protectSyncCopies(local: data, cloud: cloudData, directory: recovery, now: now)
+                try BackupFiles.protectSyncCopies(local: data, cloud: cloudData, directory: recovery, now: now)
                 try require(try FileManager.default.contentsOfDirectory(atPath: originals.path).count == 1,
                             "Repeated conflict review retains one complete original pair")
                 for index in 0..<3 {
@@ -516,13 +516,13 @@ import AppKit
                         _ = try BackupFiles.write(routine.encoded(), directory: recovery, owner: owner, now: now.addingTimeInterval(Double(index)))
                     }
                 }
-                try require(try BackupFiles.conflictCopy(directory: recovery, local: true) == data
-                            && BackupFiles.conflictCopy(directory: recovery, local: false) == cloudData,
+                try require(try BackupFiles.syncRecoveryCopy(directory: recovery, local: true) == data
+                            && BackupFiles.syncRecoveryCopy(directory: recovery, local: false) == cloudData,
                             "Hourly routine sync pruning cannot remove either pre-decision conflict original")
                 var failed = false
-                do { try BackupFiles.protectConflict(local: data, cloud: Data("broken".utf8), directory: recovery) }
+                do { try BackupFiles.protectSyncCopies(local: data, cloud: Data("broken".utf8), directory: recovery) }
                 catch { failed = true }
-                try require(failed && (try BackupFiles.conflictCopy(directory: recovery, local: false)) == cloudData
+                try require(failed && (try BackupFiles.syncRecoveryCopy(directory: recovery, local: false)) == cloudData
                             && (try FileManager.default.contentsOfDirectory(atPath: originals.path).count) == 1,
                             "An invalid conflict side leaves the previous complete pair untouched")
                 var finalLocal = data, finalCloud = cloudData
@@ -530,13 +530,13 @@ import AppKit
                     var local = backup; local.tasks[0].title = "Local pair \(index)"
                     cloud.tasks[0].title = "Cloud pair \(index)"
                     finalLocal = try local.encoded(); finalCloud = try cloud.encoded()
-                    try BackupFiles.protectConflict(local: finalLocal, cloud: finalCloud, directory: recovery, now: now.addingTimeInterval(-Double(index)))
+                    try BackupFiles.protectSyncCopies(local: finalLocal, cloud: finalCloud, directory: recovery, now: now.addingTimeInterval(-Double(index)))
                 }
                 let pairs = try FileManager.default.contentsOfDirectory(at: originals, includingPropertiesForKeys: nil)
                 try require(pairs.count == 5 && pairs.allSatisfy { $0.lastPathComponent.hasPrefix("Jianshi-Conflict-") },
                             "Conflict protection keeps five complete pairs without partial files or unbounded growth")
-                try require(try BackupFiles.conflictCopy(directory: recovery, local: true) == finalLocal
-                            && BackupFiles.conflictCopy(directory: recovery, local: false) == finalCloud,
+                try require(try BackupFiles.syncRecoveryCopy(directory: recovery, local: true) == finalLocal
+                            && BackupFiles.syncRecoveryCopy(directory: recovery, local: false) == finalCloud,
                             "Latest conflict exports remain a matching pair when the device clock moves backwards")
                 for pair in pairs {
                     let local = try TaskBackup.decode(Data(contentsOf: pair.appendingPathComponent("local.json")))
@@ -544,6 +544,78 @@ import AppKit
                     try require(local.tasks[0].title.split(separator: " ").last == cloud.tasks[0].title.split(separator: " ").last,
                                 "Retained conflict originals never mix records from different decisions")
                 }
+                let manualNames = Set(pairs.map(\.lastPathComponent))
+                let automaticPairs = recovery.appendingPathComponent("AutomaticMerges")
+                try require(try BackupFiles.syncRecoveryCopy(directory: recovery, local: true, kind: .automaticMerge) == nil,
+                            "Existing manual conflict directories are not mislabeled as automatic resolutions")
+                var newestAutomaticLocal = data, newestAutomaticCloud = cloudData
+                for round in 0..<3 {
+                    for index in 0..<8 {
+                        var local = backup; local.tasks[0].title = "Automatic local \(round)-\(index)"
+                        cloud.tasks[0].title = "Automatic cloud \(round)-\(index)"
+                        newestAutomaticLocal = try local.encoded(); newestAutomaticCloud = try cloud.encoded()
+                        for _ in 0..<2 {
+                            try BackupFiles.protectSyncCopies(local: newestAutomaticLocal, cloud: newestAutomaticCloud,
+                                                              directory: recovery, kind: .automaticMerge, now: now.addingTimeInterval(-Double(index)))
+                        }
+                        try require(try FileManager.default.contentsOfDirectory(atPath: automaticPairs.path).count == (round == 0 && index == 0 ? 1 : 2),
+                                    "Automatic resolutions retain at most two pairs and deduplicate repeated inputs")
+                    }
+                    try require(try Set(FileManager.default.contentsOfDirectory(atPath: originals.path)) == manualNames,
+                                "Repeated automatic retention leaves every existing manual conflict pair untouched")
+                    try require(try BackupFiles.syncRecoveryCopy(directory: recovery, local: true) == finalLocal
+                                && BackupFiles.syncRecoveryCopy(directory: recovery, local: false) == finalCloud,
+                                "Automatic resolutions never replace the manual conflict export")
+                }
+                try require(try BackupFiles.syncRecoveryCopy(directory: recovery, local: true, kind: .automaticMerge) == newestAutomaticLocal
+                            && BackupFiles.syncRecoveryCopy(directory: recovery, local: false, kind: .automaticMerge) == newestAutomaticCloud,
+                            "Automatic recovery exports select both originals from their own latest pair")
+                let automaticNames = try Set(FileManager.default.contentsOfDirectory(atPath: automaticPairs.path))
+                failed = false
+                do { try BackupFiles.protectSyncCopies(local: Data("broken".utf8), cloud: cloudData, directory: recovery, kind: .automaticMerge) }
+                catch { failed = true }
+                try require(failed && (try Set(FileManager.default.contentsOfDirectory(atPath: automaticPairs.path))) == automaticNames,
+                            "Invalid automatic inputs do not prune or create a partial recovery pair")
+                try require(BackupFiles.SyncRecoveryKind.required(manualReview: true, automaticCount: 2) == [.manualConflict, .automaticMerge]
+                            && BackupFiles.SyncRecoveryKind.required(manualReview: false, automaticCount: 2) == [.automaticMerge]
+                            && BackupFiles.SyncRecoveryKind.required(manualReview: true, automaticCount: 0) == [.manualConflict]
+                            && BackupFiles.SyncRecoveryKind.required(manualReview: false, automaticCount: 0).isEmpty,
+                            "Mixed manual and automatic decisions protect both pools; routine sync does not consume either pool")
+                // Simulate an older release's directory layout without migration or rewriting its originals.
+                let legacyRecovery = directory.appendingPathComponent("legacy-sync-recovery")
+                let legacyPair = legacyRecovery.appendingPathComponent("Conflicts/Jianshi-Conflict-00000000000000000001-legacy")
+                try FileManager.default.createDirectory(at: legacyPair, withIntermediateDirectories: true)
+                try data.write(to: legacyPair.appendingPathComponent("local.json")); try cloudData.write(to: legacyPair.appendingPathComponent("cloud.json"))
+                try BackupFiles.protectSyncCopies(local: newestAutomaticLocal, cloud: newestAutomaticCloud, directory: legacyRecovery, kind: .automaticMerge)
+                try require(try BackupFiles.syncRecoveryCopy(directory: legacyRecovery, local: true) == data
+                            && BackupFiles.syncRecoveryCopy(directory: legacyRecovery, local: false) == cloudData,
+                            "Automatic-pool creation preserves and exports the previous release's conflict originals")
+            }
+            do {
+                let suite = "local.jianshi.sync-summary-check-" + UUID().uuidString
+                let defaults = UserDefaults(suiteName: suite)!
+                defer { defaults.removePersistentDomain(forName: suite) }
+                try require(AutomaticSyncSummary.load(account: "account-a", defaults: defaults) == nil,
+                            "Automatic sync feedback starts empty without inventing a previous decision")
+                let summary = AutomaticSyncSummary.record(count: 2, date: now, account: "account-a", defaults: defaults)
+                let reopenedDefaults = UserDefaults(suiteName: suite)!
+                try require(summary == AutomaticSyncSummary(count: 2, date: now)
+                            && AutomaticSyncSummary.load(account: "account-a", defaults: reopenedDefaults) == summary,
+                            "Latest automatic count and date survive settings recreation")
+                try require(AutomaticSyncSummary.record(count: 0, date: now.addingTimeInterval(1), account: "account-a", defaults: defaults) == summary,
+                            "A later routine sync does not erase feedback about the last automatic resolution")
+                try require(AutomaticSyncSummary.load(account: "account-b", defaults: defaults) == nil
+                            && AutomaticSyncSummary.load(account: "", defaults: defaults) == nil,
+                            "Account changes and unbound stores never display a previous account's automatic feedback")
+                try require(AutomaticSyncSummary.record(count: 0, account: "account-b", defaults: defaults) == nil
+                            && AutomaticSyncSummary.load(account: "account-a", defaults: defaults) == summary,
+                            "Switching back to the original account restores its feedback without leaking it to another account")
+                let newer = AutomaticSyncSummary.record(count: 4, date: now.addingTimeInterval(2), account: "account-a", defaults: defaults)
+                try require(newer?.count == 4 && newer?.date == now.addingTimeInterval(2),
+                            "The next automatic resolution replaces the count and date together")
+                defaults.set(["account": CloudMerge.digest(Data("account-a".utf8)), "count": -1, "date": now], forKey: "lastAutomaticSyncSummary")
+                try require(AutomaticSyncSummary.load(account: "account-a", defaults: defaults) == nil,
+                            "Malformed persisted automatic feedback is ignored without touching sync data")
             }
 
             let decoded = try TaskBackup.decode(data)

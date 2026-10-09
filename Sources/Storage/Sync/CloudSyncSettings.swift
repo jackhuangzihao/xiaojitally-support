@@ -57,8 +57,9 @@ struct CloudSyncSettings: View {
             }
             Text(L("不同字段自动合并；普通字段冲突优先保留较新修改。删除、账目等重要冲突仍需核对。使用同一 Apple 账户，打开 App 后同步；离线仍可编辑。", "Separate fields merge automatically; ordinary field conflicts keep the newer edit. Deletions and important financial conflicts still need review. Sync uses the same Apple Account while the app is open. Offline editing remains available."))
                 .font(.caption).foregroundStyle(.secondary)
-            if sync.lastAutomaticFieldCount > 0 {
-                Text(L("上次同步自动处理了 \(sync.lastAutomaticFieldCount) 处字段差异。", "Last sync automatically resolved \(sync.lastAutomaticFieldCount) field differences."))
+            if let summary = sync.automaticSummary {
+                Text(L("最近一次自动采用较新的 \(summary.count) 处修改：", "Most recent automatic resolution kept \(summary.count) newer edits: ")
+                     + summary.date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale)))
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let date = sync.lastSync { Text(L("上次完成：", "Last completed: ") + date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))).font(.caption).foregroundStyle(.secondary) }
@@ -69,6 +70,8 @@ struct CloudSyncSettings: View {
             Menu(L("导出同步恢复副本", "Export sync recovery copy")) {
                 Button(L("上次冲突处理前的本机副本", "Local copy before last conflict resolution")) { exportConflictCopy(local: true) }
                 Button(L("上次冲突处理前的云端副本", "Cloud copy before last conflict resolution")) { exportConflictCopy(local: false) }
+                Button(L("上次自动处理前的本机副本", "Local copy before last automatic resolution")) { exportConflictCopy(local: true, kind: .automaticMerge) }
+                Button(L("上次自动处理前的云端副本", "Cloud copy before last automatic resolution")) { exportConflictCopy(local: false, kind: .automaticMerge) }
                 Divider()
                 Button(L("合并前的本机副本", "Local copy before merge")) { exportCopy(owner: "sync-local") }
                 Button(L("合并前的云端副本", "Cloud copy before merge")) { exportCopy(owner: "sync-cloud") }
@@ -85,13 +88,13 @@ struct CloudSyncSettings: View {
         }
     }
 
-    private func exportConflictCopy(local: Bool) {
+    private func exportConflictCopy(local: Bool, kind: BackupFiles.SyncRecoveryKind = .manualConflict) {
         Task {
             do {
                 let directory = try CloudSync.recoveryDirectory()
                 let data = try await Task.detached {
-                    guard let data = try BackupFiles.conflictCopy(directory: directory, local: local) else {
-                        throw TaskBackup.invalid(L("尚无冲突恢复副本。", "No conflict recovery copy yet."))
+                    guard let data = try BackupFiles.syncRecoveryCopy(directory: directory, local: local, kind: kind) else {
+                        throw TaskBackup.invalid(kind == .manualConflict ? L("尚无冲突恢复副本。", "No conflict recovery copy yet.") : L("尚无自动处理的恢复副本。", "No automatic resolution recovery copy yet."))
                     }
                     return data
                 }.value
@@ -137,7 +140,7 @@ private struct SyncConflictReview: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    Text(L("逐组选择要保留的版本。重复任务的时间与分支、账户币种与关联流水仍一起处理；其他独立修改继续合并。冲突前的双方副本会单独保留。", "Choose which version to keep for each group. Repeating schedules and branches, and account currencies with related postings, stay together. Independent changes still merge. Both copies from before the conflict are retained separately."))
+                    Text(L("选择只用于仍需核对的差异，已自动合并的字段会保留。重复任务的时间与分支、账户币种与关联流水仍一起处理。冲突前的双方副本会单独保留。", "Your choice applies only to differences still needing review. Automatically merged fields are kept. Repeating schedules and branches, and account currencies with related postings, stay together. Both copies from before the conflict are retained separately."))
                         .font(.callout).foregroundStyle(.secondary)
                     if let warning { Text(warning).font(.callout).foregroundStyle(.orange) }
                     Menu(L("为所有组选择…", "Choose for all groups…")) {

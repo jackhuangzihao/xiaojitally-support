@@ -27,6 +27,7 @@ extension SelfCheck {
             return result
         }
         try measure("save 5000 tasks") { try Store.save(context) }
+        try measure("edit one of 5000 tasks") { tasks[0].notes = "Edited note"; try Store.save(context) }
         let week = Dates.weekCells(day), month = Dates.monthCells(day)
         _ = measure("week layout 5000 tasks") { let indexed = CalendarIndex.byDay(tasks, days: week); return week.map { PlanBlock.layout(indexed[$0] ?? [], day: $0) } }
         _ = measure("month grouping 5000 tasks") { CalendarIndex.byDay(tasks, days: month).mapValues { TaskItem.ordered($0, incompleteFirst: true) } }
@@ -52,9 +53,24 @@ extension SelfCheck {
         }
         try measure("save 5000 money entries") { try FinanceStore.stage(finance, in: context); try Store.save(context) }
         try measure("edit one of 5000 money entries") { try FinanceStore.update(context) { $0.entries[0].title = "Edited" } }
+        let historyCount = try SyncChanges.read(context)?.count
+        let evictionStore = try Store.make(url: root.appendingPathComponent("history-cache-eviction.store"))
+        let evictionKey = SyncChanges.key("task", UUID())
+        try SyncChanges.stage([evictionKey: .init(date: day, fingerprint: try SyncChanges.fingerprint("Cache eviction"))], in: evictionStore.mainContext)
+        try Store.save(evictionStore.mainContext, trackSyncChanges: false)
+        try measure("edit one of 5000 money entries, cold sync-history cache") {
+            try FinanceStore.update(context) { $0.entries[0].notes = "Cold cache edit" }
+        }
         try measure("lightweight backup capture with 5000 money entries") { _ = try TaskBackup.capture(context, includeFinance: false); _ = try FinanceStore.payload(context) }
         let money = try FinanceStore.read(context)!
-        guard money.balance(account.id) == 50000 else { throw TaskBackup.invalid("Performance ledger balance incorrect") }
+        let history = try SyncChanges.read(context), editedKey = SyncChanges.key("entry", money.entries[0].id)
+        guard money.entries.count == 5000, money.balance(account.id) == 50000,
+              history?.count == historyCount,
+              try history?[editedKey]?.fingerprint == SyncChanges.fingerprint(money.entries[0]),
+              try history?[editedKey]?.fields?["notes"]?.fingerprint == SyncChanges.fingerprint("Cold cache edit"),
+              history?[editedKey]?.fields?["notes"]?.date != nil else {
+            throw TaskBackup.invalid("Performance edit changed ledger totals or lost sync history")
+        }
         let payload = try FinanceStore.payload(context)!
         try measure("20 uncached decode+validate reads, 5000 entries") {
             for _ in 0..<20 {

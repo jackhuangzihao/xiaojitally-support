@@ -6,7 +6,14 @@ import OSLog
 private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.jianshi.personal", category: "CloudSync")
 
 enum CloudMerge {
-    static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+    static func digest(_ data: Data) -> String {
+        let hexadecimal = Array("0123456789abcdef".utf8)
+        var bytes: [UInt8] = []; bytes.reserveCapacity(64)
+        for byte in SHA256.hash(data: data) {
+            bytes.append(hexadecimal[Int(byte >> 4)]); bytes.append(hexadecimal[Int(byte & 15)])
+        }
+        return String(decoding: bytes, as: UTF8.self)
+    }
     enum Choice: String { case local, cloud }
     struct Conflict: LocalizedError {
         let label: String
@@ -30,13 +37,14 @@ enum CloudMerge {
             if cloud == base { return local }
             if local == base { return cloud }
         }
-        let manual = review?.choices[key] ?? choice
-        if manual == nil, decisionResult?.needsReview != true, let field,
+        // A record-level review choice applies only to differences that still need review.
+        if decisionResult?.needsReview != true, let field,
            let selected = review?.automatic?.choice(record: key, field: field) {
             review?.recordAutomatic(key: key + ":" + field)
             return selected == .local ? local : cloud
         }
         if let review { review.record(key: key, detail: label()) }
+        let manual = review?.choices[key] ?? choice
         switch manual {
         case .local: return local
         case .cloud: return cloud

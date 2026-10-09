@@ -18,7 +18,37 @@ enum SyncChanges {
     struct Decision {
         var needsReview: Bool
     }
-    @MainActor private static var cached: (data: Data, value: Revisions)?
+    private struct CachedHistory {
+        let data: Data
+        let value: Revisions
+        let records: [String: Data]?
+
+        static func encode(_ revisions: Revisions, reusing previous: CachedHistory?) throws -> CachedHistory {
+            // Only previously validated, identical records can bypass validation and encoding.
+            try validate(revisions.filter { previous?.value[$0.key] != $0.value })
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            var records: [String: Data] = [:]; records.reserveCapacity(revisions.count)
+            var byteCount = 2
+            for (key, revision) in revisions {
+                let encoded: Data
+                if previous?.value[key] == revision, let existing = previous?.records?[key] { encoded = existing }
+                else {
+                    var record = try encoder.encode(key); record.append(58)
+                    record.append(try encoder.encode(revision)); encoded = record
+                }
+                records[key] = encoded; byteCount += encoded.count + 1
+            }
+            var data = Data(); data.reserveCapacity(byteCount); data.append(123)
+            for (index, record) in records.sorted(by: { $0.key < $1.key }).enumerated() {
+                if index > 0 { data.append(44) }
+                data.append(record.value)
+            }
+            data.append(125)
+            return CachedHistory(data: data, value: revisions, records: records)
+        }
+    }
+    // Keep just one history; switching stores or rolling back requires matching the stored bytes again.
+    @MainActor private static var cached: CachedHistory?
 
     static func key(_ kind: String, _ id: UUID) -> String { kind + ":" + id.uuidString }
     static func fingerprint<T: Encodable>(_ value: T) throws -> String {
@@ -39,7 +69,7 @@ enum SyncChanges {
             date.timeIntervalSince1970.isFinite && (-62135596800...253402300799).contains(date.timeIntervalSince1970)
         }
         func validFingerprint(_ value: String) -> Bool {
-            value.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+            value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
         }
         let kinds: Set<String> = ["task", "list", "week", "account", "book", "category", "entry"]
         guard revisions.allSatisfy({ key, revision in
@@ -67,16 +97,22 @@ enum SyncChanges {
         if let cached, cached.data == data { return cached.value }
         let result = try JSONDecoder().decode(Revisions.self, from: data)
         try validate(result)
-        cached = (data, result)
+        cached = CachedHistory(data: data, value: result, records: nil)
         return result
     }
     @MainActor static func stage(_ revisions: Revisions?, in context: ModelContext) throws {
-        try validate(revisions)
-        guard let row = try state(context, create: revisions?.isEmpty == false) else { return }
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let data = try revisions.flatMap { $0.isEmpty ? nil : try encoder.encode($0) }
-        if row.changeHistory != data { row.changeHistory = data }
-        if let data, let revisions { cached = (data, revisions) }
+        let existing = try state(context, create: false)
+        guard let revisions, !revisions.isEmpty else {
+            if existing?.changeHistory != nil { existing?.changeHistory = nil }
+            cached = nil
+            return
+        }
+        let previous = cached.flatMap { $0.data == existing?.changeHistory ? $0 : nil }
+        let next = try CachedHistory.encode(revisions, reusing: previous)
+        guard let row = try existing ?? state(context, create: true) else { return }
+        // The full JSON remains in the same transaction as the edit; the cache never commits data.
+        if row.changeHistory != next.data { row.changeHistory = next.data }
+        cached = next
     }
     static func record(_ fingerprints: [String: String?], in revisions: inout Revisions, now: Date,
                        fieldFingerprints: [String: [String: String]] = [:],

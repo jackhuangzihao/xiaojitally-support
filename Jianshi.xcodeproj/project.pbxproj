@@ -115,6 +115,7 @@
 		3939300D0B230BF2A35BBA99 /* AutomaticSyncPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD9DA9C49366DAF3658F9CB /* AutomaticSyncPolicy.swift */; };
 		785A153D859A9EB22DB55AD7 /* SyncFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7956C6146A75D2D437E745 /* SyncFields.swift */; };
 		5B8A237446346EE46B9CF013 /* AutomaticSyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FEE8043D3B6344347E9F7E5 /* AutomaticSyncChecks.swift */; };
+		F06F619CDF4920295A094162 /* SyncHistoryChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F53C3735A23674ECB3BCA69 /* SyncHistoryChecks.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -227,6 +228,7 @@
 		DFD9DA9C49366DAF3658F9CB /* AutomaticSyncPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomaticSyncPolicy.swift; sourceTree = "<group>"; };
 		1B7956C6146A75D2D437E745 /* SyncFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncFields.swift; sourceTree = "<group>"; };
 		7FEE8043D3B6344347E9F7E5 /* AutomaticSyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomaticSyncChecks.swift; sourceTree = "<group>"; };
+		5F53C3735A23674ECB3BCA69 /* SyncHistoryChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncHistoryChecks.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -371,6 +373,7 @@
 				FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */,
 				AD9CF1800BC14F20AEDD0004 /* SyncConflictChecks.swift */,
 				7FEE8043D3B6344347E9F7E5 /* AutomaticSyncChecks.swift */,
+				5F53C3735A23674ECB3BCA69 /* SyncHistoryChecks.swift */,
 				80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */,
 			);
 			path = Validation;
@@ -680,6 +683,7 @@
 				49CE29AF22F09F9FF3DB4627 /* SyncChecks.swift in Sources */,
 				AD9CF1800BC14F20AEDD0003 /* SyncConflictChecks.swift in Sources */,
 				5B8A237446346EE46B9CF013 /* AutomaticSyncChecks.swift in Sources */,
+				F06F619CDF4920295A094162 /* SyncHistoryChecks.swift in Sources */,
 				5EF967BA40959D15C918405F /* TaskLifecycleChecks.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -733,7 +737,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 77;
+				CURRENT_PROJECT_VERSION = 78;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -767,7 +771,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 77;
+				CURRENT_PROJECT_VERSION = 78;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -879,7 +883,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiStore.entitlements;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 77;
+				CURRENT_PROJECT_VERSION = 78;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;

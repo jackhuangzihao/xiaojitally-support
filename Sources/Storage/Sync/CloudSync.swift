@@ -16,6 +16,28 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
     init() {}
 }
 
+/// Device-local feedback only; never part of the cloud payload or conflict decisions.
+struct AutomaticSyncSummary: Equatable {
+    let count: Int
+    let date: Date
+    private static let defaultsKey = "lastAutomaticSyncSummary"
+
+    static func load(account: String, defaults: UserDefaults = .standard) -> Self? {
+        guard !account.isEmpty, let value = defaults.dictionary(forKey: defaultsKey),
+              value["account"] as? String == CloudMerge.digest(Data(account.utf8)),
+              let count = value["count"] as? Int, count > 0,
+              let date = value["date"] as? Date, date.timeIntervalSince1970.isFinite else { return nil }
+        return Self(count: count, date: date)
+    }
+
+    static func record(count: Int, date: Date = Date(), account: String, defaults: UserDefaults = .standard) -> Self? {
+        // A later routine sync must not hide the most recent automatic resolution.
+        guard count > 0, !account.isEmpty, date.timeIntervalSince1970.isFinite else { return load(account: account, defaults: defaults) }
+        defaults.set(["account": CloudMerge.digest(Data(account.utf8)), "count": count, "date": date], forKey: defaultsKey)
+        return Self(count: count, date: date)
+    }
+}
+
 @MainActor @Observable final class CloudSync {
     static let shared = CloudSync()
     static let containerID = "iCloud.local.jianshi.personal"
@@ -24,7 +46,7 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
     private(set) var detail = ""
     private(set) var lastSync: Date?
     private(set) var conflict = false
-    private(set) var lastAutomaticFieldCount = 0
+    private(set) var automaticSummary: AutomaticSyncSummary?
     private(set) var conflictItems: [CloudMerge.ConflictItem] = []
     private(set) var conflictReviewID = UUID()
     private(set) var conflictWarning: String?
@@ -68,18 +90,19 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
         else if editors == 0 { localSaved() }
     }
     func attach(_ container: ModelContainer) {
-        generation += 1; snapshotCache = nil
+        generation += 1; snapshotCache = nil; automaticSummary = nil
         if let observer { NotificationCenter.default.removeObserver(observer) }
         originalContainer = container
         do {
             if let state = try container.mainContext.fetch(FetchDescriptor<CloudSyncState>()).first {
                 enabled = state.enabled; lastSync = state.lastSync
+                automaticSummary = AutomaticSyncSummary.load(account: state.account)
             }
         } catch { detail = error.localizedDescription }
         observer = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.generation += 1; self.snapshotCache = nil
+                self.generation += 1; self.snapshotCache = nil; self.automaticSummary = nil
                 self.localSaved()
             }
         }
@@ -97,7 +120,7 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             let state = try state(context); state.enabled = value
             applying = true; defer { applying = false }
             try Store.save(context)
-            enabled = value; generation += 1; snapshotCache = nil; detail = ""; conflict = false; lastAutomaticFieldCount = 0
+            enabled = value; generation += 1; snapshotCache = nil; detail = ""; conflict = false
             debounce?.cancel()
             if value { Task { await sync() } }
         } catch { detail = error.localizedDescription }
@@ -147,10 +170,11 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             let state = try state(context)
             if !state.account.isEmpty && state.account != account {
                 snapshotCache = nil
-                accountChanged = true
+                accountChanged = true; automaticSummary = nil
                 throw TaskBackup.invalid(L("iCloud 账户已改变。为避免把原账户数据传给其他人，同步已暂停。切回原账户后可继续。", "The iCloud account changed. Sync is paused to avoid uploading the previous account’s data. Switch back to the original account to continue."))
             }
             accountChanged = false
+            automaticSummary = AutomaticSyncSummary.load(account: account)
             // Bind before the first upload, including failed/offline attempts. Never silently rebind accounts.
             if state.account.isEmpty {
                 state.account = account
@@ -231,7 +255,7 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
                 }.value
             }
             catch let error as CloudMerge.Conflict {
-                try await protect(localBytes, remoteBytes, conflict: true)
+                try await protect(localBytes, remoteBytes, recovery: [.manualConflict])
                 guard canContinue(ticket, in: context) else { return }
                 conflict = true; conflictLocal = localBytes; conflictCloud = remoteBytes
                 conflictItems = error.items; conflictReviewID = UUID(); conflictWarning = error.warning
@@ -249,7 +273,7 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             // Use per-entity CloudKit records if measured personal ledgers outgrow snapshot uploads.
             // Always retain both sides before changing either, including before conflict resolution.
             if state.baseline == nil || mergedBytes != localBytes || mergedBytes != remoteBytes || resolvingConflict {
-                try await protect(localBytes, remoteBytes, conflict: resolvingConflict || automaticCount > 0)
+                try await protect(localBytes, remoteBytes, recovery: BackupFiles.SyncRecoveryKind.required(manualReview: resolvingConflict, automaticCount: automaticCount))
             }
             guard canContinue(ticket, in: context) else { return }
             if resolvingConflict && capturedRevision != Store.revision {
@@ -284,7 +308,7 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             }.value
             if rebaseCount > 0 {
                 let currentBytes = try await Task.detached { try CloudMerge.bytes(current) }.value
-                try await protect(currentBytes, mergedBytes, conflict: true)
+                try await protect(currentBytes, mergedBytes, recovery: [.automaticMerge])
             }
             guard canContinue(ticket, in: context) else { return }
             // A quick edit can save while the worker runs. Discard stale work and retry from fresh data.
@@ -295,8 +319,9 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             // A save may normalize list colors. Refill from the actual committed context on the next poll.
             snapshotCache = nil
             lastSync = state.lastSync; detail = ""; conflict = false; conflictLocal = nil; conflictCloud = nil
-            lastAutomaticFieldCount = automaticCount + rebaseCount
-            syncLog.notice("Sync committed; automatic field decisions: \(self.lastAutomaticFieldCount, privacy: .public)")
+            let automaticTotal = automaticCount + rebaseCount
+            automaticSummary = AutomaticSyncSummary.record(count: automaticTotal, account: account)
+            syncLog.notice("Sync committed; automatic field decisions: \(automaticTotal, privacy: .public)")
             resolutionResult = "succeeded"
             if finalBytes != mergedBytes { pendingSave = true; detail = L("新修改等待上传。", "New edits are waiting to upload.") }
         } catch {
@@ -318,11 +343,11 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
         try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("JianshiBackups/BeforeSync", isDirectory: true)
     }
-    private func protect(_ local: Data, _ cloud: Data, conflict: Bool = false) async throws {
+    private func protect(_ local: Data, _ cloud: Data, recovery: [BackupFiles.SyncRecoveryKind] = []) async throws {
         let directory = try Self.recoveryDirectory()
         try await Task.detached {
-            if conflict { try BackupFiles.protectConflict(local: local, cloud: cloud, directory: directory) }
-            // Routine snapshots keep hourly/daily retention; conflict pairs rotate separately.
+            for kind in recovery { try BackupFiles.protectSyncCopies(local: local, cloud: cloud, directory: directory, kind: kind) }
+            // Routine, manual and automatic recovery copies each have independent retention.
             _ = try BackupFiles.save(TaskBackup.decode(local, allowLargeFile: true), directory: directory, owner: "sync-local", force: false)
             _ = try BackupFiles.save(TaskBackup.decode(cloud, allowLargeFile: true), directory: directory, owner: "sync-cloud", force: false)
         }.value

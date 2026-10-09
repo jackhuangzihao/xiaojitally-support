@@ -42,6 +42,21 @@ extension CloudMerge {
                 throw TaskBackup.invalid("AUTOMATIC SYNC CHECK: " + label)
             }
         }
+        func resolved(_ local: TaskBackup, _ cloud: TaskBackup, _ base: TaskBackup,
+                      choices: [String: Choice], automatic expected: Int) throws -> TaskBackup {
+            let result = try mergeResult(local: local, cloud: cloud, base: base, choices: choices, now: now)
+            let encoded = try bytes(result.snapshot)
+            let reversed = choices.mapValues { $0 == .local ? Choice.cloud : Choice.local }
+            let other = try mergeResult(local: cloud, cloud: local, base: base, choices: reversed, now: now)
+            try check(result.automaticFieldCount == expected && other.automaticFieldCount == expected,
+                      "manual review does not count unresolved fields as automatic")
+            try check(try bytes(other.snapshot) == encoded, "manual decisions and automatic fields survive exchanged device roles")
+            for _ in 0..<3 {
+                try check(try bytes(merge(local: result.snapshot, cloud: result.snapshot, base: base, now: now)) == encoded,
+                          "a resolved merge stays unchanged on later syncs")
+            }
+            return result.snapshot
+        }
 
         // Repeat with different records and clocks so order cannot accidentally determine a winner.
         for round in 0..<3 {
@@ -93,8 +108,40 @@ extension CloudMerge {
             let ordinary = try converges(local, cloud, base, automatic: 6)
             try check(ordinary.tasks == cloud.tasks, "task title, note, priority, list, timing and completion choose their newer values")
             let manual = try mergeResult(local: local, cloud: cloud, base: base, choice: .local, now: now)
-            try check(manual.snapshot.tasks == local.tasks && manual.automaticFieldCount == 0,
-                      "an explicit choice takes precedence and is not counted as automatic")
+            try check(manual.snapshot.tasks == cloud.tasks && manual.automaticFieldCount == 6,
+                      "a manual fallback cannot override fields already resolved automatically")
+
+            var mixedBase = base
+            mixedBase.tasks[0].subtasks = [Subtask(title: "Original step")]
+            mixedBase = try tracked(mixedBase, from: base, at: t0)
+            local = mixedBase; cloud = mixedBase
+            local.tasks[0].title = "Earlier title"; cloud.tasks[0].title = "Later title"
+            local.tasks[0].subtasks[0].title = "Local step"; cloud.tasks[0].subtasks[0].title = "Cloud step"
+            local.lists[0].name = "Earlier list"; cloud.lists[0].name = "Later list"
+            local.lists[0].parentID = lists[1].id; cloud.lists[0].parentID = lists[2].id
+            local.finance!.entries[0].notes = "Earlier note"; cloud.finance!.entries[0].notes = "Later note"
+            local.finance!.entries[0].amount = 120; local.finance!.entries[0].baseAmount = 120
+            cloud.finance!.entries[0].amount = 150; cloud.finance!.entries[0].baseAmount = 150
+            local = try tracked(local, from: mixedBase, at: t1); cloud = try tracked(cloud, from: mixedBase, at: t2)
+            try requiresReview(local, cloud, mixedBase, "subtasks, hierarchy and monetary fields still require review beside automatic text")
+            let listKey = SyncChanges.key("list", lists[0].id)
+            let entryKey = SyncChanges.key("entry", ledger.entries[0].id)
+            for selected in [Choice.local, .cloud] {
+                let reviewed = try resolved(local, cloud, mixedBase,
+                    choices: [key: selected, listKey: selected, entryKey: selected], automatic: 3)
+                let chosen = selected == .local ? local : cloud
+                try check(reviewed.tasks[0].title == cloud.tasks[0].title
+                          && reviewed.tasks[0].subtasks == chosen.tasks[0].subtasks,
+                          "choosing a subtask version keeps the automatically selected newer task title")
+                let list = reviewed.lists.first { $0.id == lists[0].id }
+                try check(list?.name == cloud.lists[0].name && list?.parentID == chosen.lists[0].parentID,
+                          "choosing hierarchy keeps the automatically selected newer list name")
+                try check(reviewed.finance?.entries[0].notes == cloud.finance?.entries[0].notes
+                          && reviewed.finance?.entries[0].amount == chosen.finance?.entries[0].amount,
+                          "choosing monetary fields keeps the automatically selected newer entry note")
+                try check(reviewed.syncChanges?[key]?.fields?["title"] == cloud.syncChanges?[key]?.fields?["title"],
+                          "manual review preserves the automatic title's original field revision")
+            }
             local = base; cloud = base
             local.tasks[0].scheduledAt = task.scheduledAt!.addingTimeInterval(86400)
             local.tasks[0].endAt = local.tasks[0].scheduledAt!.addingTimeInterval(7200)
@@ -245,6 +292,74 @@ extension CloudMerge {
                       "manually retaining an edited subtask also preserves its original position")
             try check(try bytes(merge(local: cloud, cloud: local, base: orderedBase, choice: .cloud, now: now)) == bytes(retained),
                       "manual subtask retention preserves order when device roles are exchanged")
+
+            let a = Subtask(title: "A"), b = Subtask(title: "B"), c = Subtask(title: "C")
+            let beginning = Subtask(title: "Beginning"), middle = Subtask(title: "Middle"), end = Subtask(title: "End")
+            orderedBase.tasks[0].subtasks = [a, b, c]
+            local = orderedBase; cloud = orderedBase
+            local.tasks[0].subtasks = [c, a, b]
+            for (insertion, expected) in [([beginning, a, b, c], [c, beginning, a, b]),
+                                           ([a, middle, b, c], [c, a, middle, b]),
+                                           ([a, b, c, end], [c, end, a, b])] {
+                cloud.tasks[0].subtasks = insertion
+                let inserted = try converges(local, cloud, orderedBase, automatic: 0)
+                try check(inserted.tasks[0].subtasks.map(\.id) == expected.map(\.id),
+                          "beginning, middle and end insertions retain their adjacent existing step through a concurrent reorder")
+            }
+            local = orderedBase; cloud = orderedBase
+            local.tasks[0].subtasks = [c, b]
+            cloud.tasks[0].subtasks = [a, middle, b, c]
+            let deletedAnchor = try converges(local, cloud, orderedBase, automatic: 0)
+            try check(deletedAnchor.tasks[0].subtasks.map(\.id) == [c, middle, b].map(\.id),
+                      "an insertion with a removed predecessor remains before its next surviving step")
+            local = orderedBase; cloud = orderedBase
+            local.tasks[0].subtasks = [a, middle, b, c]
+            cloud.tasks[0].subtasks = [a, b, middle, c]
+            try requiresReview(local, cloud, orderedBase, "the same new step inserted at different positions remains reviewable")
+            for selected in [Choice.local, .cloud] {
+                let position = try resolved(local, cloud, orderedBase, choices: [key: selected], automatic: 0)
+                try check(position.tasks[0].subtasks == (selected == .local ? local : cloud).tasks[0].subtasks,
+                          "a manual insertion-position choice selects only the disputed position")
+            }
+            local = orderedBase; cloud = orderedBase
+            local.tasks[0].subtasks.insert(contentsOf: addedA, at: 1)
+            cloud.tasks[0].subtasks.insert(contentsOf: addedB, at: 1)
+            let concurrentInsertions = try converges(local, cloud, orderedBase, automatic: 0)
+            try check(concurrentInsertions.tasks[0].subtasks.first?.id == a.id
+                      && concurrentInsertions.tasks[0].subtasks.suffix(2).map(\.id) == [b.id, c.id],
+                      "independent concurrent insertions share the intended interior slot")
+            for additions in [addedA, addedB] {
+                let ids = Set(additions.map(\.id))
+                try check(concurrentInsertions.tasks[0].subtasks.filter { ids.contains($0.id) }.map(\.id) == additions.map(\.id),
+                          "interior insertions preserve each device's ordering")
+            }
+            local = orderedBase; cloud = orderedBase
+            local.tasks[0].subtasks = [beginning, middle]
+            cloud.tasks[0].subtasks.append(end)
+            let noAnchors = try converges(local, cloud, orderedBase, automatic: 0)
+            try check(Set(noAnchors.tasks[0].subtasks.map(\.id)) == Set([beginning.id, middle.id, end.id])
+                      && noAnchors.tasks[0].subtasks.filter { $0.id != end.id } == [beginning, middle],
+                      "deleting every original anchor preserves new steps and their internal order")
+            for crossedAnchors in [false, true] {
+                local = orderedBase; cloud = orderedBase
+                if crossedAnchors {
+                    local.tasks[0].subtasks = [c, a, b]
+                    cloud.tasks[0].subtasks = [a, beginning, b, c, end]
+                } else {
+                    local.tasks[0].subtasks = [a, beginning, end, b, c]
+                    cloud.tasks[0].subtasks = [a, end, beginning, b, c]
+                }
+                try requiresReview(local, cloud, orderedBase, "incompatible insertion order or crossing anchors requires review")
+                for selected in [Choice.local, .cloud] {
+                    let sorted = try resolved(local, cloud, orderedBase, choices: [key: selected], automatic: 0)
+                    let preferred = (selected == .local ? local : cloud).tasks[0].subtasks.map(\.id)
+                    let all = Set(local.tasks[0].subtasks.map(\.id)).union(cloud.tasks[0].subtasks.map(\.id))
+                    let actual = sorted.tasks[0].subtasks.map(\.id)
+                    try check(Set(actual) == all && actual.count == all.count
+                              && actual.filter(Set(preferred).contains) == preferred,
+                              "an explicit order choice keeps its relative order and every step exactly once")
+                }
+            }
         }
 
         for sample in 0..<50 {

@@ -110,23 +110,67 @@ extension CloudMerge {
         let order = try value(retainedOrder(local), retainedOrder(cloud), baseOrder, label: label, choice: choice,
                               report: report, review: review, key: key)
         let added = Set(merged.keys).subtracting(order)
-        let leftAdded = local.map(\.id).filter(added.contains), rightAdded = cloud.map(\.id).filter(added.contains)
+        let positions = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        func insertionSlots(_ rows: [Subtask]) -> [UUID: Int] {
+            // Insertions follow their surviving predecessor through a reorder; leading ones precede their next anchor.
+            var slot = rows.lazy.compactMap { positions[$0.id] }.first ?? order.count
+            var slots: [UUID: Int] = [:]
+            for row in rows {
+                if let position = positions[row.id] { slot = position + 1 }
+                else if added.contains(row.id) { slots[row.id] = slot }
+            }
+            return slots
+        }
+        let leftSlots = insertionSlots(local), rightSlots = insertionSlots(cloud)
+        var slots: [Int: Set<UUID>] = [:]
+        for id in added.sorted(by: { $0.uuidString < $1.uuidString }) {
+            let slot = try value(leftSlots[id], rightSlots[id], nil, label: label, choice: choice,
+                                 report: report, review: review, key: key) ?? order.count
+            slots[slot, default: []].insert(id)
+        }
+        var result: [UUID] = []
+        for slot in 0...order.count {
+            if let additions = slots[slot] {
+                let left = local.map(\.id).filter(additions.contains), right = cloud.map(\.id).filter(additions.contains)
+                result += try orderedSubtaskAdditions(additions, local: left, cloud: right) {
+                    try value(left, right, [], label: label, choice: choice, report: report, review: review, key: key)
+                }
+            }
+            if slot < order.count { result.append(order[slot]) }
+        }
+        let resultPositions = Dictionary(uniqueKeysWithValues: result.enumerated().map { ($1, $0) })
+        let insertedSequences = [local, cloud].map { $0.map(\.id).filter(added.contains) }
+        if insertedSequences.contains(where: { sequence in
+            let positions = sequence.compactMap { resultPositions[$0] }
+            return zip(positions, positions.dropFirst()).contains { $0 > $1 }
+        }) {
+            // Moving anchors can contradict the order of new steps. Review that order rather than silently reversing it.
+            let preferred = try value(local.map(\.id).filter { merged[$0] != nil },
+                                      cloud.map(\.id).filter { merged[$0] != nil }, baseOrder,
+                                      label: label, choice: choice, report: report, review: review, key: key)
+            let selected = Set(preferred)
+            result = preferred + result.filter { !selected.contains($0) }
+        }
+        return result.compactMap { merged[$0] }
+    }
+
+    private static func orderedSubtaskAdditions(_ added: Set<UUID>, local: [UUID], cloud: [UUID],
+                                                resolve: () throws -> [UUID]) rethrows -> [UUID] {
         var edges: [UUID: Set<UUID>] = [:]
-        for sequence in [leftAdded, rightAdded] {
+        for sequence in [local, cloud] {
             for (before, after) in zip(sequence, sequence.dropFirst()) { edges[after, default: []].insert(before) }
         }
         var remaining = added, additions: [UUID] = []
         while !remaining.isEmpty {
             let available = remaining.filter { (edges[$0] ?? []).isDisjoint(with: remaining) }.sorted { $0.uuidString < $1.uuidString }
             guard let next = available.first else {
-                let preferred = try value(leftAdded, rightAdded, [], label: label, choice: choice,
-                                          report: report, review: review, key: key)
+                let preferred = try resolve()
                 additions = preferred + added.subtracting(preferred).sorted { $0.uuidString < $1.uuidString }
                 break
             }
             additions.append(next); remaining.remove(next)
         }
-        return (order + additions).compactMap { merged[$0] }
+        return additions
     }
 
     static func listFields(_ local: TaskBackup.ListRecord, _ cloud: TaskBackup.ListRecord, _ base: TaskBackup.ListRecord,
