@@ -79,6 +79,14 @@ import AppKit
                     let span = Dates.clockSpan(from: start, to: next, on: start, calendar: c)
                     try require(span.start == 0 && span.end == 1440 && Dates.clockTime(on: start, minute: 1440, calendar: c) == next,
                                 "Midnight clipping and 24:00 use the next calendar day: " + zone)
+                    for minute in [-1500, -1440, -60, 1500, 2880] {
+                        let result = Dates.clockTime(on: start, minute: minute, calendar: c)
+                        let offset = Int(floor(Double(minute) / 1440))
+                        let destination = c.date(byAdding: .day, value: offset, to: start)!
+                        try require(c.isDate(result, inSameDayAs: destination)
+                                    && Dates.clockMinute(result, calendar: c) == Double(minute - offset * 1440),
+                                    "Signed timeline minutes preserve calendar day and wall time across DST: " + zone)
+                    }
                 }
             }
             var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "Australia/Sydney")!
@@ -91,6 +99,24 @@ import AppKit
                         "Both autumn occurrences have the same wall-clock coordinate")
             try require(Dates.clockTime(on: autumn, minute: 150, reference: second, calendar: c) == second,
                         "Resizing an existing repeated-hour task keeps its original occurrence")
+            let following = c.date(byAdding: .day, value: 1, to: autumn)!
+            try require(Dates.clockTime(on: following, minute: 150 - 1440, reference: second, calendar: c) == second,
+                        "A continuation keeps the original repeated-hour occurrence on its normalized start day")
+            let afterSpring = c.date(byAdding: .day, value: 1, to: spring)!
+            try require(Dates.clockTime(on: afterSpring, minute: 135 - 1440, calendar: c) == missing,
+                        "A continuation resolves a missing spring hour on its normalized start day")
+            for (zone, month, day) in [("America/Santiago", 9, 6), ("America/Havana", 3, 8), ("Africa/Cairo", 4, 24)] {
+                var midnightCalendar = Calendar(identifier: .gregorian)
+                midnightCalendar.timeZone = TimeZone(identifier: zone)!
+                let transition = midnightCalendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: 12))!
+                let transitionStart = midnightCalendar.startOfDay(for: transition)
+                for offset in [-1, 1] {
+                    let adjacent = midnightCalendar.date(byAdding: .day, value: offset, to: transition)!
+                    try require(Dates.clockTime(on: transitionStart, minute: offset * 1440, calendar: midnightCalendar)
+                                == midnightCalendar.startOfDay(for: adjacent),
+                                "A day starting after midnight does not carry its hour into adjacent-day drops: " + zone)
+                }
+            }
             let backwards = Dates.clockSpan(from: first.addingTimeInterval(900), to: second.addingTimeInterval(-900), on: autumn, calendar: c)
             try require(backwards.end > backwards.start, "Task crossing the repeated hour never has a negative frame")
         }

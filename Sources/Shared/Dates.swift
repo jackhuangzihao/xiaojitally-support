@@ -37,16 +37,19 @@ enum Dates {
         return Double((p.hour ?? 0) * 60 + (p.minute ?? 0)) + Double(p.second ?? 0) / 60
     }
     static func clockTime(on day: Date, minute: Int, reference: Date? = nil, calendar: Calendar = Dates.calendar) -> Date {
-        let start = calendar.startOfDay(for: day)
-        if minute >= 1440 { return calendar.date(byAdding: .day, value: 1, to: start)! }
-        let m = max(0, minute)
+        // Continuation drags can start on an earlier day; shift calendar days before resolving DST hours.
+        let remainder = minute % 1440
+        let dayOffset = minute / 1440 - (remainder < 0 ? 1 : 0)
+        let m = remainder < 0 ? remainder + 1440 : remainder
+        let shiftedDay = calendar.date(byAdding: .day, value: dayOffset, to: calendar.startOfDay(for: day))!
+        let start = calendar.startOfDay(for: shiftedDay)
         func resolve(_ policy: Calendar.RepeatedTimePolicy) -> Date {
             calendar.nextDate(after: start.addingTimeInterval(-1), matching: DateComponents(hour: m / 60, minute: m % 60, second: 0),
                               matchingPolicy: .nextTimePreservingSmallerComponents, repeatedTimePolicy: policy)!
         }
         let first = resolve(.first)
         // Keep the existing occurrence of an ambiguous autumn hour when editing that same day.
-        if let reference, calendar.isDate(reference, inSameDayAs: day) {
+        if let reference, calendar.isDate(reference, inSameDayAs: start) {
             let last = resolve(.last)
             if calendar.timeZone.secondsFromGMT(for: last) == calendar.timeZone.secondsFromGMT(for: reference) { return last }
         }

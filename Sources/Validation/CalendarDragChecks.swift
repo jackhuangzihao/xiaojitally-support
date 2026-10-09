@@ -111,12 +111,13 @@ import AppKit
             #if os(macOS)
             // AppKit pointer sessions are not used by iOS native drag and drop.
             let session = WeekDrag()
+            let nextWeekPoint = CGPoint(x: geometry.canvas.maxX + 10, y: 300)
             session.canvas = geometry.canvas; session.viewport = geometry.viewport; session.layout = layout
             let dragTask = TaskItem(title: "Edge session", scheduledAt: date(2026, 9, 18))
             let original = TaskSchedule(dragTask)
             var receivedOffset: Int?
             session.begin(dragTask, color: .accentColor, grabOffset: 0) { _, offset in receivedOffset = offset }
-            session.move(to: CGPoint(x: 734, y: 300))
+            session.move(to: nextWeekPoint)
             session.tick(now: 0); session.tick(now: 0.7)
             try require(session.weekOffset == 1 && TaskSchedule(dragTask) == original, "Hover previews another week without changing a task")
             session.move(to: CGPoint(x: wednesday, y: sixPM))
@@ -144,7 +145,7 @@ import AppKit
             session.complete()
             try require(gestureDrops == 4, "Next gesture recovers after cancellation without a source callback")
             session.begin(dragTask, color: .accentColor, grabOffset: 0) { _, _ in gestureDrops += 1 }
-            session.move(to: CGPoint(x: 734, y: 300)); session.tick(now: 0); session.tick(now: 0.7)
+            session.move(to: nextWeekPoint); session.tick(now: 0); session.tick(now: 0.7)
             try require(!session.checkPhysicalButton(pressed: false, now: 1), "Missing release stops edge work immediately")
             _ = session.checkPhysicalButton(pressed: false, now: 1.2)
             session.tick(now: 10)
@@ -258,7 +259,7 @@ import AppKit
                         "A month drag hands over the day and the month it was dropped in, and changes nothing by itself")
             receivedOffset = nil
             session.begin(dragTask, color: .accentColor, grabOffset: 0) { _, offset in receivedOffset = offset }
-            session.move(to: CGPoint(x: 734, y: 300))
+            session.move(to: nextWeekPoint)
             session.tick(now: 0); session.tick(now: 0.5); session.tick(now: 1.3)
             try require(session.weekOffset == 2, "Resting on the edge turns a second week")
             session.complete()
@@ -266,7 +267,7 @@ import AppKit
                         "Letting go on the edge strip slides back and changes nothing")
             receivedOffset = nil
             session.begin(dragTask, color: .accentColor, grabOffset: 0) { _, offset in receivedOffset = offset }
-            session.move(to: CGPoint(x: 734, y: 300))
+            session.move(to: nextWeekPoint)
             session.tick(now: 0); session.tick(now: 0.7); session.cancel(); session.complete()
             try require(receivedOffset == nil && session.weekOffset == 0 && TaskSchedule(dragTask) == original,
                         "Cancel restores original week and never commits a task")
@@ -297,7 +298,7 @@ import AppKit
             session.begin(dragTask, color: .accentColor, grabOffset: 0) { zone, offset in
                 landedZone = zone; landedWeek = offset; dropCount += 1
             }
-            session.samplePointer(at: CGPoint(x: 734, y: 300), pressed: true)
+            session.samplePointer(at: nextWeekPoint, pressed: true)
             session.tick(now: 0); session.tick(now: 0.7)
             session.panelView = nil // Simulate removal of the old page's host/source.
             session.samplePointer(at: CGPoint(x: wednesday, y: sixPM), pressed: true)
@@ -315,7 +316,7 @@ import AppKit
             session.samplePointer(at: CGPoint(x: wednesday, y: 75), pressed: false)
             try require(landedWeek == -1 && landedZone == .allDay(2), "Previous-week paging can land on the all-day row")
             session.begin(dragTask, color: .accentColor, grabOffset: 0) { zone, _ in landedZone = zone }
-            session.samplePointer(at: CGPoint(x: 734, y: 300), pressed: true)
+            session.samplePointer(at: nextWeekPoint, pressed: true)
             session.tick(now: 0); session.tick(now: 0.7)
             session.samplePointer(at: CGPoint(x: 800, y: 300), pressed: false)
             try require(landedZone == .undated, "After paging a task can still return to the undated area")
@@ -332,7 +333,7 @@ import AppKit
             session.begin(dragTask, color: .accentColor, grabOffset: 0) { zone, offset in
                 landedZone = zone; landedWeek = offset
             }
-            let edgeScreen = testWindow.convertPoint(toScreen: host.convert(CGPoint(x: 734, y: 300), to: nil))
+            let edgeScreen = testWindow.convertPoint(toScreen: host.convert(nextWeekPoint, to: nil))
             let finalScreen = testWindow.convertPoint(toScreen: host.convert(CGPoint(x: wednesday, y: sixPM), to: nil))
             session.sampleScreenPointer(at: edgeScreen, pressed: true)
             session.tick(now: 0); session.tick(now: 0.7)

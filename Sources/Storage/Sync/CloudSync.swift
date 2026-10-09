@@ -24,6 +24,10 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
     private(set) var detail = ""
     private(set) var lastSync: Date?
     private(set) var conflict = false
+    private(set) var conflictItems: [CloudMerge.ConflictItem] = []
+    private(set) var conflictReviewID = UUID()
+    private(set) var conflictWarning: String?
+    private(set) var conflictSelections: [String: CloudMerge.Choice] = [:]
     private(set) var accountChanged = false
     private var originalContainer: ModelContainer?
     private var debounce: Task<Void, Never>?
@@ -114,11 +118,16 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
         enabled && ticket == generation && editors == 0 && context === self.context &&
             Store.recovery.failure == nil && !context.hasChanges
     }
-    func sync(choice: CloudMerge.Choice? = nil) async {
+    func sync(choices: [String: CloudMerge.Choice] = [:], reviewID: UUID? = nil) async {
+        guard choices.isEmpty || reviewID != nil else { return }
+        let resolvingConflict = reviewID != nil
+        if resolvingConflict && (!conflict || reviewID != conflictReviewID) {
+            syncLog.notice("Ignored expired conflict review")
+            return
+        }
         guard enabled, !running, editors == 0, let context, Store.recovery.failure == nil, !context.hasChanges else { return }
         if let retryAfter, Date() < retryAfter { return }
-        if conflict && choice == nil { return }
-        let resolvingConflict = choice != nil
+        if conflict && !resolvingConflict { return }
         var resolutionResult = "interrupted"
         if resolvingConflict { syncLog.notice("Conflict resolution started") }
         running = true
@@ -207,21 +216,24 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
                 resolutionResult = "succeeded"
                 return
             }
-            if choice != nil && (conflictLocal != localBytes || conflictCloud != remoteBytes) {
+            if resolvingConflict && (conflictLocal != localBytes || conflictCloud != remoteBytes) {
                 conflict = false; conflictLocal = nil; conflictCloud = nil
                 throw TaskBackup.invalid(L("数据已变化，请重新同步后再处理冲突。", "Data changed. Sync again before resolving conflicts."))
             }
             let merged: TaskBackup, mergedBytes: Data
             do {
                 (merged, mergedBytes) = try await Task.detached {
-                    let merged = try CloudMerge.merge(local: local, cloud: cloud, base: base, choice: choice, cloudExists: existingCloud)
+                    let merged = try CloudMerge.merge(local: local, cloud: cloud, base: base, cloudExists: existingCloud, choices: choices)
                     return (merged, try CloudMerge.bytes(merged))
                 }.value
             }
             catch let error as CloudMerge.Conflict {
-                try await protect(localBytes, remoteBytes)
+                try await protect(localBytes, remoteBytes, conflict: true)
                 guard canContinue(ticket, in: context) else { return }
                 conflict = true; conflictLocal = localBytes; conflictCloud = remoteBytes
+                conflictItems = error.items; conflictReviewID = UUID(); conflictWarning = error.warning
+                let keys = Set(error.items.map(\.id))
+                conflictSelections = choices.filter { keys.contains($0.key) }
                 throw error
             } catch {
                 try await protect(localBytes, remoteBytes)
@@ -233,9 +245,11 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
             // ponytail: one atomic asset keeps finance relationships consistent, bounded at 50 MB.
             // Use per-entity CloudKit records if measured personal ledgers outgrow snapshot uploads.
             // Always retain both sides before changing either, including before conflict resolution.
-            if state.baseline == nil || mergedBytes != localBytes || mergedBytes != remoteBytes || choice != nil { try await protect(localBytes, remoteBytes) }
+            if state.baseline == nil || mergedBytes != localBytes || mergedBytes != remoteBytes || resolvingConflict {
+                try await protect(localBytes, remoteBytes, conflict: resolvingConflict)
+            }
             guard canContinue(ticket, in: context) else { return }
-            if choice != nil && capturedRevision != Store.revision {
+            if resolvingConflict && capturedRevision != Store.revision {
                 conflict = false; conflictLocal = nil; conflictCloud = nil; pendingSave = true
                 throw TaskBackup.invalid(L("处理冲突时数据又有变化，将重新检查。", "Data changed while resolving conflicts. Checking again."))
             }
@@ -295,10 +309,11 @@ private let syncLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.j
         try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("JianshiBackups/BeforeSync", isDirectory: true)
     }
-    private func protect(_ local: Data, _ cloud: Data) async throws {
+    private func protect(_ local: Data, _ cloud: Data, conflict: Bool = false) async throws {
         let directory = try Self.recoveryDirectory()
         try await Task.detached {
-            // Reuse the existing hourly/daily retention policy instead of unbounded copies per edit.
+            if conflict { try BackupFiles.protectConflict(local: local, cloud: cloud, directory: directory) }
+            // Routine snapshots keep hourly/daily retention; conflict pairs rotate separately.
             _ = try BackupFiles.save(TaskBackup.decode(local, allowLargeFile: true), directory: directory, owner: "sync-local", force: false)
             _ = try BackupFiles.save(TaskBackup.decode(cloud, allowLargeFile: true), directory: directory, owner: "sync-cloud", force: false)
         }.value
@@ -323,6 +338,7 @@ extension CloudSync {
         let rows = (1...320).map { index in
             L("任务 \(index)\n本机：核对出行安排 \(index) · 未完成\n云端：核对出行安排 \(index) · 已完成\n差异：完成状态或完成时间、备注", "Task \(index)\nLocal: Review travel plans \(index) · Open\nCloud: Review travel plans \(index) · Completed\nDifferences: completion status/time, notes")
         }
+        sync.conflictItems = rows.enumerated().map { CloudMerge.ConflictItem(id: "fixture-\($0.offset)", detail: $0.element) }
         sync.detail = CloudMerge.Conflict(label: rows.joined(separator: "\n\n——\n\n")).localizedDescription
         return sync
     }

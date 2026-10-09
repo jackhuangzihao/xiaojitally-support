@@ -100,6 +100,7 @@
 		32CCA85C74E9A02182448A14 /* FinanceStatisticsCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 278C9DF6A8E7D6BEA4D42C85 /* FinanceStatisticsCharts.swift */; };
 		A269E543FF2E6342B9EC07C2 /* FinanceStatisticsRanking.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3C335AA3657DAF6A938A395 /* FinanceStatisticsRanking.swift */; };
 		66380285BEC77DB4D1EFB516 /* CloudMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D764A9DF4389638A6F25F73C /* CloudMerge.swift */; };
+		AD9CF1800BC14F20AEDD0001 /* CloudConflictDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD9CF1800BC14F20AEDD0002 /* CloudConflictDetails.swift */; };
 		FE315486890077061A20316B /* CloudRecordMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBA6024415EE8043E151D66B /* CloudRecordMerge.swift */; };
 		89D3B66B241D919F263D772B /* CloudSyncSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */; };
 		4AD3CCE31A4450FEFAC413C0 /* CalendarChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F152FB33F53E0AE69B6B588 /* CalendarChecks.swift */; };
@@ -108,6 +109,7 @@
 		7DDC792CCD0B156C42C00E52 /* FinanceDataChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4D2D4F287F99283011DBE8A /* FinanceDataChecks.swift */; };
 		CCF6156930A8DD3D24D2818F /* FinancePostingChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 543C32B7D889132FA50EC172 /* FinancePostingChecks.swift */; };
 		7DD06E8FEC3F9167136904AA /* StorageChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C9D751F6DBA738D278EA05 /* StorageChecks.swift */; };
+		AD9CF1800BC14F20AEDD0003 /* SyncConflictChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD9CF1800BC14F20AEDD0004 /* SyncConflictChecks.swift */; };
 		49CE29AF22F09F9FF3DB4627 /* SyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */; };
 		5EF967BA40959D15C918405F /* TaskLifecycleChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */; };
 /* End PBXBuildFile section */
@@ -207,6 +209,7 @@
 		278C9DF6A8E7D6BEA4D42C85 /* FinanceStatisticsCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceStatisticsCharts.swift"; sourceTree = "<group>"; };
 		E3C335AA3657DAF6A938A395 /* FinanceStatisticsRanking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceStatisticsRanking.swift"; sourceTree = "<group>"; };
 		D764A9DF4389638A6F25F73C /* CloudMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudMerge.swift"; sourceTree = "<group>"; };
+		AD9CF1800BC14F20AEDD0002 /* CloudConflictDetails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudConflictDetails.swift; sourceTree = "<group>"; };
 		FBA6024415EE8043E151D66B /* CloudRecordMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudRecordMerge.swift"; sourceTree = "<group>"; };
 		F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudSyncSettings.swift"; sourceTree = "<group>"; };
 		7F152FB33F53E0AE69B6B588 /* CalendarChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarChecks.swift"; sourceTree = "<group>"; };
@@ -215,6 +218,7 @@
 		F4D2D4F287F99283011DBE8A /* FinanceDataChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceDataChecks.swift"; sourceTree = "<group>"; };
 		543C32B7D889132FA50EC172 /* FinancePostingChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinancePostingChecks.swift"; sourceTree = "<group>"; };
 		84C9D751F6DBA738D278EA05 /* StorageChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StorageChecks.swift"; sourceTree = "<group>"; };
+		AD9CF1800BC14F20AEDD0004 /* SyncConflictChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictChecks.swift; sourceTree = "<group>"; };
 		FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SyncChecks.swift"; sourceTree = "<group>"; };
 		80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TaskLifecycleChecks.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -359,6 +363,7 @@
 				947DDE6F11D0E1FF1D48198C /* SelfCheck.swift */,
 				84C9D751F6DBA738D278EA05 /* StorageChecks.swift */,
 				FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */,
+				AD9CF1800BC14F20AEDD0004 /* SyncConflictChecks.swift */,
 				80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */,
 			);
 			path = Validation;
@@ -444,6 +449,7 @@
 			children = (
 				D764A9DF4389638A6F25F73C /* CloudMerge.swift */,
 				FBA6024415EE8043E151D66B /* CloudRecordMerge.swift */,
+				AD9CF1800BC14F20AEDD0002 /* CloudConflictDetails.swift */,
 				EBFC656CEDD94E3B720F20C3 /* CloudSync.swift */,
 				F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */,
 				C5F1D85FC27BE5FEC9B39282 /* SyncChanges.swift */,
@@ -652,6 +658,7 @@
 				A269E543FF2E6342B9EC07C2 /* FinanceStatisticsRanking.swift in Sources */,
 				66380285BEC77DB4D1EFB516 /* CloudMerge.swift in Sources */,
 				FE315486890077061A20316B /* CloudRecordMerge.swift in Sources */,
+				AD9CF1800BC14F20AEDD0001 /* CloudConflictDetails.swift in Sources */,
 				89D3B66B241D919F263D772B /* CloudSyncSettings.swift in Sources */,
 				4AD3CCE31A4450FEFAC413C0 /* CalendarChecks.swift in Sources */,
 				14B146919FD9C6EE8B079F01 /* CalendarDragChecks.swift in Sources */,
@@ -660,6 +667,7 @@
 				CCF6156930A8DD3D24D2818F /* FinancePostingChecks.swift in Sources */,
 				7DD06E8FEC3F9167136904AA /* StorageChecks.swift in Sources */,
 				49CE29AF22F09F9FF3DB4627 /* SyncChecks.swift in Sources */,
+				AD9CF1800BC14F20AEDD0003 /* SyncConflictChecks.swift in Sources */,
 				5EF967BA40959D15C918405F /* TaskLifecycleChecks.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

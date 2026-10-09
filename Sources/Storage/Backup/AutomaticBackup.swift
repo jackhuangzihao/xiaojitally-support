@@ -1,8 +1,10 @@
 import SwiftUI
 import SwiftData
+import OSLog
 
 /// Portable JSON files, retained by time rather than by number of edits.
 enum BackupFiles {
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.jianshi.personal", category: "Backup")
     static func ownedFiles(directory: URL, owner: String) throws -> [(url: URL, date: Date)] {
         let prefix = "Jianshi-Auto-\(owner)-"
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
@@ -81,6 +83,52 @@ enum BackupFiles {
         try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                     appropriateFor: nil, create: true)
             .appendingPathComponent("JianshiBackups/Automatic", isDirectory: true)
+    }
+
+    private static func conflictDirectories(in directory: URL) throws -> [(url: URL, date: Date)] {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        let prefix = "Jianshi-Conflict-"
+        return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]).compactMap { url in
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true, url.lastPathComponent.hasPrefix(prefix),
+                  let milliseconds = Double(url.lastPathComponent.dropFirst(prefix.count).prefix(20)), milliseconds.isFinite else { return nil }
+            return (url, Date(timeIntervalSince1970: milliseconds / 1000))
+        }.sorted { $0.date > $1.date }
+    }
+
+    /// Keep the last five conflict pairs independently of hourly routine sync backups.
+    static func protectConflict(local: Data, cloud: Data, directory: URL, now: Date = Date()) throws {
+        _ = try TaskBackup.decode(local, allowLargeFile: true)
+        _ = try TaskBackup.decode(cloud, allowLargeFile: true)
+        let fm = FileManager.default, conflicts = directory.appendingPathComponent("Conflicts", isDirectory: true)
+        let existing = try conflictDirectories(in: conflicts)
+        if let latest = existing.first,
+           (try? Data(contentsOf: latest.url.appendingPathComponent("local.json"))) == local,
+           (try? Data(contentsOf: latest.url.appendingPathComponent("cloud.json"))) == cloud { return }
+        try fm.createDirectory(at: conflicts, withIntermediateDirectories: true)
+        let staging = conflicts.appendingPathComponent(".partial-" + UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: staging) }
+        for (name, data) in [("local.json", local), ("cloud.json", cloud)] {
+            let file = staging.appendingPathComponent(name)
+            try data.write(to: file, options: .atomic)
+            guard try Data(contentsOf: file) == data else { throw CocoaError(.fileReadCorruptFile) }
+        }
+        // The pair becomes visible only after both originals are verified; backward clocks retain its order.
+        let date = max(now, existing.first?.date.addingTimeInterval(0.001) ?? now)
+        let stamp = String(format: "%020.0f", date.timeIntervalSince1970 * 1000)
+        let completed = conflicts.appendingPathComponent("Jianshi-Conflict-" + stamp + "-" + UUID().uuidString, isDirectory: true)
+        try fm.moveItem(at: staging, to: completed)
+        for old in existing.dropFirst(4) { try fm.removeItem(at: old.url) }
+        log.notice("Protected sync conflict originals; retained pairs: \(min(existing.count + 1, 5), privacy: .public)")
+    }
+
+    static func conflictCopy(directory: URL, local: Bool) throws -> Data? {
+        let conflicts = directory.appendingPathComponent("Conflicts", isDirectory: true)
+        guard let latest = try conflictDirectories(in: conflicts).first else { return nil }
+        let data = try Data(contentsOf: latest.url.appendingPathComponent(local ? "local.json" : "cloud.json"))
+        _ = try TaskBackup.decode(data, allowLargeFile: true)
+        return data
     }
 }
 

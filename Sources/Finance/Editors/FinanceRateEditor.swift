@@ -201,13 +201,8 @@ struct FinanceRateEditor: View {
             let changed = currencies.filter { restoreReference.contains($0) || (values[$0] != nil && values[$0] != originalText($0)) }
             if !changed.isEmpty {
                 try FinanceStore.update(context) { ledger in
-                    for currency in changed {
-                        guard ledger.assetRate(from: currency, to: self.currency) == data.assetRate(from: currency, to: self.currency) else {
-                            throw TaskBackup.invalid(L("汇率已更新，请重新打开后修改。", "Rates have changed. Reopen this editor before changing them."))
-                        }
-                        if restoreReference.contains(currency) { ledger.removeManualRate(from: currency, to: self.currency) }
-                        else { try ledger.setManualRate(from: currency, to: self.currency, text: values[currency, default: ""]) }
-                    }
+                    try ledger.updateAssetRates(to: currency, values: values.filter { changed.contains($0.key) },
+                                                clearingManual: restoreReference.intersection(changed), expected: data)
                 }
             }
             dismiss()

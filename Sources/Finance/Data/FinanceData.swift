@@ -225,6 +225,15 @@ struct FinanceData: Codable, Equatable {
                 throw TaskBackup.invalid(L("已有收支账单只能在收入和支出之间切换。", "An existing income or expense can only switch between income and spending."))
             }
         }
+        // Existing historical links remain editable after their category is archived.
+        if let id = entry.categoryID, entry.kind == .expense || entry.kind == .income,
+           expected == nil || expected?.kind != entry.kind || expected?.categoryID != id {
+            guard let category = categories.first(where: { $0.id == id }), !category.archived,
+                  category.isIncome == (entry.kind == .income),
+                  category.parentID.map({ parent in categories.contains { $0.id == parent && !$0.archived } }) ?? true else {
+                throw TaskBackup.invalid(L("所选分类已改变，请选择相应收支类型的可用分类。", "The selected category changed. Choose an available category matching the entry’s income or expense type."))
+            }
+        }
         try checkAccounts(for: entry, replacing: expected)
         // Older editor state can contain asset quotes; actual posting amounts remain authoritative.
         try mergeReferenceRates(referenceRates.filter { !$0.isManual })

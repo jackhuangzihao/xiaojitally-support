@@ -302,6 +302,45 @@ import SwiftData
         }
     }
 
+    static func entryCategories(require: (Bool, String) throws -> Void, rejects: (String, () throws -> Void) throws -> Void) throws {
+        var ledger = FinanceData.initial
+        let category = MoneyCategory(name: "Draft category", income: false)
+        try ledger.updateCategory(category, expected: nil)
+        var entry = MoneyEntry(); entry.title = "Open expense draft"; entry.amount = 10; entry.baseAmount = 10
+        entry.bookID = ledger.books[0].id; entry.categoryID = category.id
+        var incomeCategory = category; incomeCategory.income = true
+        try ledger.updateCategory(incomeCategory, expected: category)
+        let changed = ledger
+        try rejects("category type changed in another window rejects the stale expense draft") {
+            try ledger.updateEntry(entry, expected: nil, baseCurrency: "CNY")
+        }
+        try require(ledger == changed, "category race rejects before changing the ledger")
+        try ledger.updateCategory(category, expected: incomeCategory)
+        try ledger.updateEntry(entry, expected: nil, baseCurrency: "CNY")
+        var archived = category; archived.archived = true
+        try ledger.updateCategory(archived, expected: category)
+        var edited = entry; edited.notes = "Historical detail correction"
+        try ledger.updateEntry(edited, expected: entry, baseCurrency: "CNY")
+        try require(ledger.entries == [edited], "existing archived category links survive ordinary historical edits")
+        let historical = ledger
+        var copy = edited; copy.id = UUID()
+        try rejects("a new copy cannot silently post to an archived category") { try ledger.updateEntry(copy, expected: nil, baseCurrency: "CNY") }
+        var income = edited; income.kind = .income
+        try rejects("changing kind cannot retain an archived expense category") { try ledger.updateEntry(income, expected: edited, baseCurrency: "CNY") }
+        copy.categoryID = UUID()
+        try rejects("a category deleted after the editor opened cannot be saved") { try ledger.updateEntry(copy, expected: nil, baseCurrency: "CNY") }
+        try require(ledger == historical, "rejected category selections preserve existing history")
+        income.categoryID = ledger.categories.first { $0.isIncome && !$0.archived }!.id
+        try ledger.updateEntry(income, expected: edited, baseCurrency: "CNY")
+        try require(ledger.entries == [income], "a corrected type change saves with an available matching category")
+        var active = income; active.categoryID = archived.id
+        try rejects("switching an existing entry to an archived category is rejected") { try ledger.updateEntry(active, expected: income, baseCurrency: "CNY") }
+        copy.categoryID = nil
+        try ledger.updateEntry(copy, expected: nil, baseCurrency: "CNY")
+        try ledger.validate()
+        try require(ledger.entries.contains(copy), "uncategorized entries remain supported")
+    }
+
     static func accountActions(require: (Bool, String) throws -> Void, rejects: (String, () throws -> Void) throws -> Void) throws {
         // The visible account actions retain the same history and concurrent-edit protections as the editor.
         do {

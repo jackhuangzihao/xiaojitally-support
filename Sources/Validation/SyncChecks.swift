@@ -5,7 +5,7 @@ import CloudKit
 
 extension CloudMerge {
     @MainActor static func check() throws -> Int {
-        var count = try CloudSyncSettings.checkViewFootprint()
+        var count = try CloudSyncSettings.checkViewFootprint() + checkConflictChoices()
         func check(_ condition: Bool, _ label: String) throws {
             guard condition else { throw TaskBackup.invalid("SYNC CHECK: " + label) }; count += 1
         }
@@ -408,6 +408,48 @@ extension CloudMerge {
                       "an explicit backup restore receives a new modification time")
             try check(restored.syncChanges?[key]?.fingerprint == SyncChanges.fingerprint(restored.tasks[0]),
                       "replace restore keeps the live replacement fingerprint instead of a deleted-object tombstone")
+        }
+        do {
+            let source = try Store.make(url: directory.appendingPathComponent("restore-tombstone-source.store")), sourceContext = source.mainContext
+            let task = TaskItem(title: "Deleted before export")
+            sourceContext.insert(task)
+            var ledger = FinanceData.initial
+            let entry = MoneyEntry(title: "Deleted bill", amount: 12, bookID: ledger.books[0].id, baseAmount: 12)
+            let keys = [SyncChanges.key("task", task.id), SyncChanges.key("entry", entry.id)]
+            ledger.entries = [entry]
+            try FinanceStore.stage(ledger, in: sourceContext); try Store.save(sourceContext)
+            let oldCloud = try TaskBackup.capture(sourceContext)
+            sourceContext.delete(task); ledger.entries = []
+            try FinanceStore.stage(ledger, in: sourceContext); try Store.save(sourceContext)
+            let incoming = try TaskBackup.decode(TaskBackup.capture(sourceContext).encoded())
+            for replace in [false, true] {
+                let restoreURL = directory.appendingPathComponent("restored-tombstones-\(replace).store")
+                let target = try Store.make(url: restoreURL)
+                try incoming.restore(target.mainContext, replace: replace)
+                let reopened = try Store.make(url: restoreURL)
+                let restored = try TaskBackup.capture(reopened.mainContext)
+                try check(keys.allSatisfy { restored.syncChanges?[$0] == incoming.syncChanges?[$0] && restored.syncChanges?[$0]?.fingerprint == nil },
+                          "fresh-device restore preserves task and bill deletion history after reopening")
+                try requiresReview("first sync after a restored deletion cannot silently resurrect the cloud record") {
+                    _ = try merge(local: restored, cloud: oldCloud, base: nil)
+                }
+                let resolved = try merge(local: restored, cloud: oldCloud, base: nil, choice: .local)
+                try check(resolved.tasks.isEmpty && resolved.finance?.entries.isEmpty == true,
+                          "review can retain both restored task and bill deletions")
+            }
+            let target = try Store.make(url: directory.appendingPathComponent("restore-tombstone-live.store"))
+            try oldCloud.restore(target.mainContext, replace: true)
+            let live = try TaskBackup.capture(target.mainContext)
+            try incoming.restore(target.mainContext, replace: false)
+            let retained = try TaskBackup.capture(target.mainContext)
+            try check(retained.tasks.count == 1 && retained.finance?.entries.count == 1
+                      && keys.allSatisfy { retained.syncChanges?[$0] == live.syncChanges?[$0] && retained.syncChanges?[$0]?.fingerprint != nil },
+                      "merge restore never imports tombstones over retained live records or refreshes unchanged edits")
+            try incoming.restore(target.mainContext, replace: true)
+            let replaced = try TaskBackup.capture(target.mainContext)
+            try check(keys.allSatisfy { replaced.syncChanges?[$0]?.fingerprint == nil
+                      && (replaced.syncChanges?[$0]?.date ?? .distantPast) > (live.syncChanges?[$0]?.date ?? .distantPast) },
+                      "replace restore records actual deletions as fresh edits instead of copying old tombstone times")
         }
         let container = try Store.make(url: url), context = container.mainContext
         try stage(base, in: context); try context.save()

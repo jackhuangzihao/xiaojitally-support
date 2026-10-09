@@ -74,7 +74,7 @@ struct WeekCalendarView: View {
         weekDrag.releaseHeldScroll(); presentation.close(); actions.today()
     }
     private var pageTransition: AnyTransition { .push(from: slideForward ? .trailing : .leading) }
-    private var planTrailing: CGFloat { 0 }
+    private var planTrailing: CGFloat { CGFloat(weekDrag.trailing) }
     let weekTitles: [CalendarWeekTitle]
     let canPaste: Bool
     let saveWeekTitle: (String, String, String) -> Bool

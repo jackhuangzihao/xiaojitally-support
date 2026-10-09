@@ -221,6 +221,33 @@ import SwiftData
         }
     }
 
+    static func assetRateEdits(require: (Bool, String) throws -> Void, rejects: (String, () throws -> Void) throws -> Void) throws {
+        var ledger = FinanceData.initial
+        ledger.rates = [MoneyRate(base: "CNY", quote: "AUD", rate: Decimal(string: "0.2")!, date: "2026-10-08"),
+                        MoneyRate(base: "USD", quote: "CNY", rate: 7, date: "2026-10-08")]
+        let opened = ledger
+        try require(ledger.assetRate(from: "USD", to: "AUD")?.rate == Decimal(string: "1.4"), "rate editor starts with a crossed USD quote")
+        try ledger.updateAssetRates(to: "AUD", values: ["CNY": "0.25", "USD": "1.5"], clearingManual: [], expected: opened)
+        try require(ledger.assetRate(from: "CNY", to: "AUD")?.rate == Decimal(string: "0.25")
+                    && ledger.assetRate(from: "USD", to: "AUD")?.rate == Decimal(string: "1.5"),
+                    "editing a bridge and its dependent quote together saves both requested rates")
+        try require(ledger.storedRate(from: "USD", to: "CNY") == opened.storedRate(from: "USD", to: "CNY"), "rate batch preserves unrelated stored pairs")
+        let saved = ledger
+        try rejects("a genuinely stale batch cannot overwrite another editor's rates") {
+            try ledger.updateAssetRates(to: "AUD", values: ["CNY": "0.3", "USD": "1.6"], clearingManual: [], expected: opened)
+        }
+        try require(ledger == saved, "stale rate batch leaves every quote unchanged")
+        try rejects("an invalid later rate rejects the complete batch") {
+            try ledger.updateAssetRates(to: "AUD", values: ["CNY": "0.3", "USD": "0"], clearingManual: [], expected: saved)
+        }
+        try require(ledger == saved, "invalid later rate cannot retain an earlier valid write")
+        try ledger.updateAssetRates(to: "AUD", values: ["USD": "1.6"], clearingManual: ["CNY"], expected: saved)
+        try require(ledger.storedRate(from: "CNY", to: "AUD") == nil
+                    && ledger.assetRate(from: "USD", to: "AUD")?.rate == Decimal(string: "1.6"),
+                    "clearing a bridge and editing its dependent quote uses the same pre-write snapshot")
+        try ledger.validate()
+    }
+
     static func netWorth(require: (Bool, String) throws -> Void, rejects: (String, () throws -> Void) throws -> Void) throws {
         // Net worth aggregates each original currency before conversion, and never hides missing quotes.
         do {

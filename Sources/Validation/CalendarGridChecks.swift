@@ -51,6 +51,25 @@ import UIKit
         try require(TaskSchedule(timed) == before, "Building a preview in another page never changes the task")
         // The touch grid shares desktop drop semantics, with reachable in-screen edge bands.
         let layout = TimelineLayout(startMinute: 0, endMinute: 1440, scale: 1)
+        let boundaryDrag = WeekDrag()
+        boundaryDrag.canvas = CGRect(x: 0, y: 100, width: 744, height: 1440)
+        boundaryDrag.viewport = CGRect(x: 0, y: 100, width: 744, height: 500)
+        boundaryDrag.allDay = CGRect(x: 0, y: 50, width: 744, height: 44)
+        boundaryDrag.layout = layout
+        boundaryDrag.begin(timed, color: .accentColor, grabOffset: 0) { _, _ in }
+        try require(boundaryDrag.trailing == 0, "Default week drawing and drag geometry leave the full width to seven day columns")
+        // A 744-point canvas draws a 44-point gutter and seven 100-point columns.
+        for index in 0..<7 {
+            for inset in [1.0, 99.0] {
+                let x = 44 + Double(index) * 100 + inset
+                boundaryDrag.move(to: CGPoint(x: x, y: 300))
+                try require(boundaryDrag.zone == .timed(day: index, minute: 195) && boundaryDrag.edge == 0,
+                            "Both drawn edges of day \(index) stay in that day without triggering navigation")
+                boundaryDrag.move(to: CGPoint(x: x, y: 70))
+                try require(boundaryDrag.zone == .allDay(index), "All-day drawing and timed drag columns stay aligned")
+            }
+        }
+        boundaryDrag.cancel(); boundaryDrag.complete()
         let mobileGeometry = WeekDropGeometry(canvas: CGRect(x: 0, y: -200, width: 374, height: 1440),
             viewport: CGRect(x: 0, y: 100, width: 374, height: 500),
             allDay: CGRect(x: 0, y: 50, width: 374, height: 44), undated: .zero,
@@ -107,6 +126,25 @@ import UIKit
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: first)!
         let grab = drag.pickupOffset(for: overnight, on: tomorrow, at: CGPoint(x: 100, y: mobileGeometry.canvas.minY + 30))
         try require(grab == 90, "Both platforms preserve the pickup offset on a cross-midnight continuation")
+        overnight.reminderKind = ReminderPreset.tenMinutes.rawValue
+        overnight.reminderAt = overnight.scheduledAt!.addingTimeInterval(-600)
+        drag.canvas = CGRect(x: 0, y: 100, width: 374, height: 1440)
+        var movedContinuation = false
+        drag.begin(overnight, color: .accentColor, grabOffset: grab) { zone, _ in
+            if case .timed(let day, let minute) = zone {
+                let destination = Dates.clockTime(on: Dates.weekCells(first)[day], minute: minute, reference: overnight.clockDate)
+                movedContinuation = TaskMove(overnight, to: destination, kind: .timed).apply(to: overnight, shiftDeadline: false)
+            }
+        }
+        drag.move(to: CGPoint(x: 34 + 3.5 * mobileGeometry.column, y: 130))
+        try require(drag.zone == .timed(day: 3, minute: -60), "Continuation drop retains the previous day's signed start minute")
+        drag.complete()
+        let movedStartDay = calendar.date(byAdding: .day, value: 2, to: first)!
+        let movedStart = Dates.clockTime(on: movedStartDay, minute: 1380)
+        try require(movedContinuation && overnight.scheduledAt == movedStart
+                    && overnight.endAt == movedStart.addingTimeInterval(7200)
+                    && overnight.reminderAt == movedStart.addingTimeInterval(-600),
+                    "Saving a dragged continuation preserves 23:00 start, two-hour duration and relative reminder")
         #if os(iOS)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let panel = UIView(frame: window.bounds); window.addSubview(panel); window.isHidden = false

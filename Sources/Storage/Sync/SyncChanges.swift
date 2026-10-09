@@ -138,6 +138,11 @@ enum SyncChanges {
         var changes: [String: String?] = [:]
         for key in Set(old.keys).union(new.keys) where old[key] != new[key] { changes[key] = .some(new[key]) }
         var revisions = original.syncChanges ?? [:]
+        // Absent rows cannot produce a restore edit, but their imported deletion history must survive.
+        for (key, revision) in snapshot.syncChanges ?? [:] where revision.fingerprint == nil && old[key] == nil && new[key] == nil {
+            if let existing = revisions[key], existing.fingerprint == nil, existing.date >= revision.date { continue }
+            revisions[key] = revision
+        }
         record(changes, in: &revisions, now: now)
         return revisions.isEmpty ? nil : revisions
     }

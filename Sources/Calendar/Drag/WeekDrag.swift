@@ -47,11 +47,7 @@ import UIKit
     @ObservationIgnored var monthViewport = CGRect.zero
     /// The month a month-view drag started in; nil while dragging in the week view.
     @ObservationIgnored private(set) var monthAnchor: Date?
-    #if os(macOS)
-    @ObservationIgnored var trailing = 20.0
-    #else
     @ObservationIgnored var trailing = 0.0
-    #endif
     @ObservationIgnored weak var scrollView: AnyObject?
     @ObservationIgnored weak var panelView: AnyObject?
     #if os(iOS)

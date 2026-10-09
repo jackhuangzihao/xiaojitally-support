@@ -65,6 +65,22 @@ extension FinanceData {
     mutating func removeManualRate(from: String, to: String) {
         rates.removeAll { $0.isManual && ($0.base == from && $0.quote == to || $0.base == to && $0.quote == from) }
     }
+    mutating func updateAssetRates(to currency: String, values: [String: String], clearingManual: Set<String>, expected: FinanceData) throws {
+        let changed = Set(values.keys).union(clearingManual).sorted()
+        // Validate the whole snapshot before any write changes a dependent cross rate.
+        for source in changed {
+            guard assetRate(from: source, to: currency) == expected.assetRate(from: source, to: currency) else {
+                throw TaskBackup.invalid(L("汇率已更新，请重新打开后修改。", "Rates have changed. Reopen this editor before changing them."))
+            }
+        }
+        var next = self
+        let now = Date()
+        for source in changed {
+            if clearingManual.contains(source) { next.removeManualRate(from: source, to: currency) }
+            else { try next.setManualRate(from: source, to: currency, text: values[source, default: ""], at: now) }
+        }
+        rates = next.rates
+    }
     /// Posting estimates use dated reference quotes only; manual quotes belong to asset valuation.
     func cachedReferenceRates(from base: String, quotes: [String], onOrBefore day: String, including pending: [MoneyRate] = []) -> [MoneyRate] {
         var selected: [String: MoneyRate] = [:]

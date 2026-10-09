@@ -499,6 +499,53 @@ import AppKit
             catch { failedExternal = true }
             try require(failedExternal && (try? Data(contentsOf: latest!)) == data, "External write failure leaves local history readable")
 
+            do {
+                let recovery = directory.appendingPathComponent("sync-recovery")
+                let originals = recovery.appendingPathComponent("Conflicts")
+                var cloud = backup; cloud.tasks[0].title = "Original cloud conflict"
+                let cloudData = try cloud.encoded()
+                try require(try BackupFiles.conflictCopy(directory: recovery, local: true) == nil,
+                            "No conflict recovery copy is reported before the first conflict")
+                try BackupFiles.protectConflict(local: data, cloud: cloudData, directory: recovery, now: now)
+                try BackupFiles.protectConflict(local: data, cloud: cloudData, directory: recovery, now: now)
+                try require(try FileManager.default.contentsOfDirectory(atPath: originals.path).count == 1,
+                            "Repeated conflict review retains one complete original pair")
+                for index in 0..<3 {
+                    var routine = backup; routine.tasks[0].title = "Later routine sync \(index)"
+                    for owner in ["sync-local", "sync-cloud"] {
+                        _ = try BackupFiles.write(routine.encoded(), directory: recovery, owner: owner, now: now.addingTimeInterval(Double(index)))
+                    }
+                }
+                try require(try BackupFiles.conflictCopy(directory: recovery, local: true) == data
+                            && BackupFiles.conflictCopy(directory: recovery, local: false) == cloudData,
+                            "Hourly routine sync pruning cannot remove either pre-decision conflict original")
+                var failed = false
+                do { try BackupFiles.protectConflict(local: data, cloud: Data("broken".utf8), directory: recovery) }
+                catch { failed = true }
+                try require(failed && (try BackupFiles.conflictCopy(directory: recovery, local: false)) == cloudData
+                            && (try FileManager.default.contentsOfDirectory(atPath: originals.path).count) == 1,
+                            "An invalid conflict side leaves the previous complete pair untouched")
+                var finalLocal = data, finalCloud = cloudData
+                for index in 0..<7 {
+                    var local = backup; local.tasks[0].title = "Local pair \(index)"
+                    cloud.tasks[0].title = "Cloud pair \(index)"
+                    finalLocal = try local.encoded(); finalCloud = try cloud.encoded()
+                    try BackupFiles.protectConflict(local: finalLocal, cloud: finalCloud, directory: recovery, now: now.addingTimeInterval(-Double(index)))
+                }
+                let pairs = try FileManager.default.contentsOfDirectory(at: originals, includingPropertiesForKeys: nil)
+                try require(pairs.count == 5 && pairs.allSatisfy { $0.lastPathComponent.hasPrefix("Jianshi-Conflict-") },
+                            "Conflict protection keeps five complete pairs without partial files or unbounded growth")
+                try require(try BackupFiles.conflictCopy(directory: recovery, local: true) == finalLocal
+                            && BackupFiles.conflictCopy(directory: recovery, local: false) == finalCloud,
+                            "Latest conflict exports remain a matching pair when the device clock moves backwards")
+                for pair in pairs {
+                    let local = try TaskBackup.decode(Data(contentsOf: pair.appendingPathComponent("local.json")))
+                    let cloud = try TaskBackup.decode(Data(contentsOf: pair.appendingPathComponent("cloud.json")))
+                    try require(local.tasks[0].title.split(separator: " ").last == cloud.tasks[0].title.split(separator: " ").last,
+                                "Retained conflict originals never mix records from different decisions")
+                }
+            }
+
             let decoded = try TaskBackup.decode(data)
             try require(decoded.tasks.count == 3 && decoded.lists.count == 1, "Backup roundtrip counts")
             try require(decoded.lists.first?.colorHex == "12ABCF", "Backup captures custom list color")

@@ -178,7 +178,8 @@ struct TaskBackup: Codable {
         if let finance = merged.finance { try FinanceStore.stage(finance, in: context, trackSyncChanges: false) }
         if let weekTitles = merged.weekTitles { try CalendarWeekTitle.stage(weekTitles, in: context) }
         // A user-requested restore is a new edit; importing cloud changes is not.
-        let restored = try Self.capture(context)
+        var restored = try Self.capture(context)
+        restored.syncChanges = merged.syncChanges
         try SyncChanges.stage(SyncChanges.restored(restored, replacing: original), in: context)
         try Store.save(context, trackSyncChanges: false)
     }
