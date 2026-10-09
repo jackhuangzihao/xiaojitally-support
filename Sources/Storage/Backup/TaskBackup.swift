@@ -5,7 +5,7 @@ import SwiftData
 struct TaskBackup: Codable {
     var format = "jianshi-backup"
     // Old clients reject this version before merging, instead of silently removing new metadata.
-    var version = 9
+    var version = 10
     var finance: FinanceData? = nil
     var weekTitles: [WeekTitleRecord]? = nil
     var syncChanges: SyncChanges.Revisions? = nil
@@ -85,7 +85,7 @@ struct TaskBackup: Codable {
     }
     static func invalid(_ message: String) -> NSError { NSError(domain: "Jianshi.Backup", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     func validate() throws {
-        guard format == "jianshi-backup", (1...9).contains(version) else { throw Self.invalid(L("不是受支持的小记备份版本，请更新 App 后重试。", "Unsupported Tally backup format or version. Update the app and retry.")) }
+        guard format == "jianshi-backup", (1...10).contains(version) else { throw Self.invalid(L("不是受支持的小记备份版本，请更新 App 后重试。", "Unsupported Tally backup format or version. Update the app and retry.")) }
         try finance?.validate()
         try SyncChanges.validate(syncChanges)
         if let weekTitles {
@@ -147,7 +147,7 @@ struct TaskBackup: Codable {
             result.weekTitles = (existing.weekTitles ?? []) + (weekTitles ?? []).filter { !weeks.contains($0.week) }
         }
         result.syncChanges = try SyncChanges.Resolution(local: existing, cloud: self, base: nil).revisions(for: result)
-        result.version = 9
+        result.version = 10
         try result.validate() // Validate the complete merged graph and records before changing live models.
         return result
     }

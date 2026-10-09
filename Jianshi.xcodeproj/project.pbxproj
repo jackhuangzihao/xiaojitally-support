@@ -54,6 +54,7 @@
 		0928A07E7B503EA500C597E8 /* BackupSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 902B35E6CA42DC66801BFE9D /* BackupSettings.swift */; };
 		710078CBFCED3CAA25AB26DA /* CloudSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBFC656CEDD94E3B720F20C3 /* CloudSync.swift */; };
 		668C519EEC146D67434A57E8 /* SyncChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5F1D85FC27BE5FEC9B39282 /* SyncChanges.swift */; };
+		13461953D7C6454897AE101E /* SyncHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD6853CC28E747ED8C3E6569 /* SyncHistory.swift */; };
 		355B09372ECC745094625DD7 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D237576A3A54719B6772CB2 /* Store.swift */; };
 		A1846984CECB3E63BC897A71 /* TaskBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65075AAA562F1DA08A803688 /* TaskBackup.swift */; };
 		C060B12BBB64F8A919EE9F6A /* EditorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 636B473D3098666901D8A8E1 /* EditorControls.swift */; };
@@ -116,6 +117,10 @@
 		785A153D859A9EB22DB55AD7 /* SyncFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7956C6146A75D2D437E745 /* SyncFields.swift */; };
 		5B8A237446346EE46B9CF013 /* AutomaticSyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FEE8043D3B6344347E9F7E5 /* AutomaticSyncChecks.swift */; };
 		F06F619CDF4920295A094162 /* SyncHistoryChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F53C3735A23674ECB3BCA69 /* SyncHistoryChecks.swift */; };
+		5E9ECA329AFA65A4B182A1FD /* PartialSyncMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3B426E92148EA9478DAF3A /* PartialSyncMerge.swift */; };
+		BEFCA4FFDA399FBA408D3AD0 /* SyncVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BADFBDB8EC6DC91C2207DDC /* SyncVersion.swift */; };
+		FFF6492C3F56EAF1EAFF340A /* PartialSyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29A3D7B3874FE2AF23D65FA3 /* PartialSyncChecks.swift */; };
+		9BC3556275051AF4431B5F6E /* CausalSyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6D29A941D6F2669A8CB63AD /* CausalSyncChecks.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -167,6 +172,7 @@
 		902B35E6CA42DC66801BFE9D /* BackupSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSettings.swift; sourceTree = "<group>"; };
 		EBFC656CEDD94E3B720F20C3 /* CloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSync.swift; sourceTree = "<group>"; };
 		C5F1D85FC27BE5FEC9B39282 /* SyncChanges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncChanges.swift; sourceTree = "<group>"; };
+		CD6853CC28E747ED8C3E6569 /* SyncHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncHistory.swift; sourceTree = "<group>"; };
 		1D237576A3A54719B6772CB2 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
 		65075AAA562F1DA08A803688 /* TaskBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBackup.swift; sourceTree = "<group>"; };
 		636B473D3098666901D8A8E1 /* EditorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorControls.swift; sourceTree = "<group>"; };
@@ -229,6 +235,10 @@
 		1B7956C6146A75D2D437E745 /* SyncFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncFields.swift; sourceTree = "<group>"; };
 		7FEE8043D3B6344347E9F7E5 /* AutomaticSyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomaticSyncChecks.swift; sourceTree = "<group>"; };
 		5F53C3735A23674ECB3BCA69 /* SyncHistoryChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncHistoryChecks.swift; sourceTree = "<group>"; };
+		4B3B426E92148EA9478DAF3A /* PartialSyncMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PartialSyncMerge.swift; sourceTree = "<group>"; };
+		2BADFBDB8EC6DC91C2207DDC /* SyncVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncVersion.swift; sourceTree = "<group>"; };
+		29A3D7B3874FE2AF23D65FA3 /* PartialSyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PartialSyncChecks.swift; sourceTree = "<group>"; };
+		F6D29A941D6F2669A8CB63AD /* CausalSyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CausalSyncChecks.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -374,6 +384,8 @@
 				AD9CF1800BC14F20AEDD0004 /* SyncConflictChecks.swift */,
 				7FEE8043D3B6344347E9F7E5 /* AutomaticSyncChecks.swift */,
 				5F53C3735A23674ECB3BCA69 /* SyncHistoryChecks.swift */,
+				F6D29A941D6F2669A8CB63AD /* CausalSyncChecks.swift */,
+				29A3D7B3874FE2AF23D65FA3 /* PartialSyncChecks.swift */,
 				80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */,
 			);
 			path = Validation;
@@ -463,6 +475,9 @@
 				EBFC656CEDD94E3B720F20C3 /* CloudSync.swift */,
 				F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */,
 				C5F1D85FC27BE5FEC9B39282 /* SyncChanges.swift */,
+				CD6853CC28E747ED8C3E6569 /* SyncHistory.swift */,
+				2BADFBDB8EC6DC91C2207DDC /* SyncVersion.swift */,
+				4B3B426E92148EA9478DAF3A /* PartialSyncMerge.swift */,
 				1B7956C6146A75D2D437E745 /* SyncFields.swift */,
 				DFD9DA9C49366DAF3658F9CB /* AutomaticSyncPolicy.swift */,
 			);
@@ -622,6 +637,9 @@
 				0928A07E7B503EA500C597E8 /* BackupSettings.swift in Sources */,
 				710078CBFCED3CAA25AB26DA /* CloudSync.swift in Sources */,
 				668C519EEC146D67434A57E8 /* SyncChanges.swift in Sources */,
+				13461953D7C6454897AE101E /* SyncHistory.swift in Sources */,
+				BEFCA4FFDA399FBA408D3AD0 /* SyncVersion.swift in Sources */,
+				5E9ECA329AFA65A4B182A1FD /* PartialSyncMerge.swift in Sources */,
 				785A153D859A9EB22DB55AD7 /* SyncFields.swift in Sources */,
 				3939300D0B230BF2A35BBA99 /* AutomaticSyncPolicy.swift in Sources */,
 				355B09372ECC745094625DD7 /* Store.swift in Sources */,
@@ -684,6 +702,8 @@
 				AD9CF1800BC14F20AEDD0003 /* SyncConflictChecks.swift in Sources */,
 				5B8A237446346EE46B9CF013 /* AutomaticSyncChecks.swift in Sources */,
 				F06F619CDF4920295A094162 /* SyncHistoryChecks.swift in Sources */,
+				9BC3556275051AF4431B5F6E /* CausalSyncChecks.swift in Sources */,
+				FFF6492C3F56EAF1EAFF340A /* PartialSyncChecks.swift in Sources */,
 				5EF967BA40959D15C918405F /* TaskLifecycleChecks.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -737,7 +757,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 78;
+				CURRENT_PROJECT_VERSION = 79;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -771,7 +791,7 @@
 				CODE_SIGN_ENTITLEMENTS = JianshiCloud.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 78;
+				CURRENT_PROJECT_VERSION = 79;
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;
 				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
@@ -883,7 +903,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = JianshiStore.entitlements;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 78;
+				CURRENT_PROJECT_VERSION = 79;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = JY659LHUCS;
 				ENABLE_APP_SANDBOX = YES;

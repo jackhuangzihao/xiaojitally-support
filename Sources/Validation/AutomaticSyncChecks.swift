@@ -139,8 +139,9 @@ extension CloudMerge {
                 try check(reviewed.finance?.entries[0].notes == cloud.finance?.entries[0].notes
                           && reviewed.finance?.entries[0].amount == chosen.finance?.entries[0].amount,
                           "choosing monetary fields keeps the automatically selected newer entry note")
-                try check(reviewed.syncChanges?[key]?.fields?["title"] == cloud.syncChanges?[key]?.fields?["title"],
-                          "manual review preserves the automatic title's original field revision")
+                let preserved = reviewed.syncChanges?[key]?.fields?["title"], source = cloud.syncChanges?[key]?.fields?["title"]
+                try check(preserved?.date == source?.date && preserved?.fingerprint == source?.fingerprint,
+                          "manual review preserves the automatic title's source date and contents while acknowledging both edits")
             }
             local = base; cloud = base
             local.tasks[0].scheduledAt = task.scheduledAt!.addingTimeInterval(86400)

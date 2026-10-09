@@ -40,7 +40,7 @@ extension CloudMerge {
         }
         let label = L("账单", "Entry") + "\n" + L("本机：", "Local: ") + describe(local) + "\n" +
             L("云端：", "Cloud: ") + describe(cloud)
-        if local == cloud || local == base || cloud == base || local.deletedAt != base.deletedAt || cloud.deletedAt != base.deletedAt {
+        if local == cloud || local.deletedAt != base.deletedAt || cloud.deletedAt != base.deletedAt {
             return try value(local, cloud, base, label: label, choice: choice, report: report, review: review, key: SyncChanges.key("entry", local.id))
         }
         var left = local, right = cloud
@@ -50,7 +50,7 @@ extension CloudMerge {
                              label: label, choice: choice, report: report, review: review, key: SyncChanges.key("entry", local.id), field: name)
         }
         let title = try field("title", \.title), notes = try field("notes", \.notes), tags = try field("tags", \.tags)
-        var result = try value(left, right, base, label: label, choice: choice, report: report, review: review, key: SyncChanges.key("entry", local.id))
+        var result = try value(left, right, base, label: label, choice: choice, report: report, review: review, key: SyncChanges.key("entry", local.id), field: "financial")
         result.title = title; result.notes = notes; result.tags = tags
         return result
     }
@@ -70,7 +70,7 @@ extension CloudMerge {
         var left = taskLifecycle(local, base: base), right = taskLifecycle(cloud, base: base)
         SyncFields.Timing(base).apply(to: &left); SyncFields.Timing(base).apply(to: &right)
         SyncFields.Completion(base).apply(to: &left); SyncFields.Completion(base).apply(to: &right)
-        var result = try value(left, right, base, label: label, choice: choice, report: report, review: review, key: key)
+        var result = try value(left, right, base, label: label, choice: choice, report: report, review: review, key: key, field: "structure")
         timing.apply(to: &result); completion.apply(to: &result)
         return result
     }
@@ -78,8 +78,10 @@ extension CloudMerge {
     static func subtaskFields(_ local: [Subtask], _ cloud: [Subtask], _ base: [Subtask], label: String, key: String,
                               choice: Choice?, report: @escaping (String) -> Void, review: ConflictReview?) throws -> [Subtask] {
         if local == cloud { return local }
-        if local == base { return cloud }
-        if cloud == base { return local }
+        let causality = review?.automatic?.revisions
+        if let selected = causality?.causalChoice(keys: [key], field: "subtasks") { return selected == .local ? local : cloud }
+        if local == base && (causality?.unchanged(.local, keys: [key], field: "subtasks") ?? true) { return cloud }
+        if cloud == base && (causality?.unchanged(.cloud, keys: [key], field: "subtasks") ?? true) { return local }
         let l = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
         let r = Dictionary(uniqueKeysWithValues: cloud.map { ($0.id, $0) })
         let b = Dictionary(uniqueKeysWithValues: base.map { ($0.id, $0) })
@@ -87,13 +89,14 @@ extension CloudMerge {
         for id in Set(l.keys).union(r.keys).union(b.keys).sorted(by: { $0.uuidString < $1.uuidString }) {
             if let left = l[id], let right = r[id], let original = b[id] {
                 var result = original
+                let field = "subtask:" + id.uuidString
                 result.title = try value(left.title, right.title, original.title, label: label, choice: choice,
-                                         report: report, review: review, key: key)
+                                         report: report, review: review, key: key, field: field + ":title")
                 result.isDone = try value(left.isDone, right.isDone, original.isDone, label: label, choice: choice,
-                                          report: report, review: review, key: key)
+                                          report: report, review: review, key: key, field: field + ":done")
                 merged[id] = result
             } else {
-                merged[id] = try value(l[id], r[id], b[id], label: label, choice: choice, report: report, review: review, key: key)
+                merged[id] = try value(l[id], r[id], b[id], label: label, choice: choice, report: report, review: review, key: key, field: "subtask:" + id.uuidString)
             }
         }
         let survivingBase = Set(b.keys).intersection(merged.keys)
@@ -108,7 +111,7 @@ extension CloudMerge {
         }
         // Keeping an edited row after deletion review must also keep its original position.
         let order = try value(retainedOrder(local), retainedOrder(cloud), baseOrder, label: label, choice: choice,
-                              report: report, review: review, key: key)
+                              report: report, review: review, key: key, field: "subtaskOrder")
         let added = Set(merged.keys).subtracting(order)
         let positions = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
         func insertionSlots(_ rows: [Subtask]) -> [UUID: Int] {
@@ -125,7 +128,7 @@ extension CloudMerge {
         var slots: [Int: Set<UUID>] = [:]
         for id in added.sorted(by: { $0.uuidString < $1.uuidString }) {
             let slot = try value(leftSlots[id], rightSlots[id], nil, label: label, choice: choice,
-                                 report: report, review: review, key: key) ?? order.count
+                                 report: report, review: review, key: key, field: "subtaskOrder") ?? order.count
             slots[slot, default: []].insert(id)
         }
         var result: [UUID] = []
@@ -133,7 +136,7 @@ extension CloudMerge {
             if let additions = slots[slot] {
                 let left = local.map(\.id).filter(additions.contains), right = cloud.map(\.id).filter(additions.contains)
                 result += try orderedSubtaskAdditions(additions, local: left, cloud: right) {
-                    try value(left, right, [], label: label, choice: choice, report: report, review: review, key: key)
+                    try value(left, right, [], label: label, choice: choice, report: report, review: review, key: key, field: "subtaskOrder")
                 }
             }
             if slot < order.count { result.append(order[slot]) }
@@ -147,7 +150,7 @@ extension CloudMerge {
             // Moving anchors can contradict the order of new steps. Review that order rather than silently reversing it.
             let preferred = try value(local.map(\.id).filter { merged[$0] != nil },
                                       cloud.map(\.id).filter { merged[$0] != nil }, baseOrder,
-                                      label: label, choice: choice, report: report, review: review, key: key)
+                                      label: label, choice: choice, report: report, review: review, key: key, field: "subtaskOrder")
             let selected = Set(preferred)
             result = preferred + result.filter { !selected.contains($0) }
         }
@@ -182,7 +185,7 @@ extension CloudMerge {
                 label: label, choice: choice, report: report, review: review, key: key, field: name)
         }
         try field("name", \.name); try field("colorHex", \.colorHex); try field("emoji", \.emoji)
-        try field("sortOrder", \.sortOrder); try field(nil, \.parentID); try field(nil, \.createdAt)
+        try field("sortOrder", \.sortOrder); try field("parentID", \.parentID); try field("createdAt", \.createdAt)
         return result
     }
 

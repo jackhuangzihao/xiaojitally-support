@@ -41,6 +41,7 @@ struct AutomaticSyncSummary: Equatable {
 @MainActor @Observable final class CloudSync {
     static let shared = CloudSync()
     static let containerID = "iCloud.local.jianshi.personal"
+    static let maximumSnapshotBytes = 50 * 1024 * 1024
     private(set) var enabled = false
     private(set) var running = false
     private(set) var detail = ""
@@ -60,6 +61,9 @@ struct AutomaticSyncSummary: Equatable {
     private var editors = 0
     private var conflictLocal: Data?
     private var conflictCloud: Data?
+    private var conflictBaseline: Data?
+    /// Keep legacy clock checks stable for the exact data the user reviewed.
+    private var conflictEvaluationDate: Date?
     private var observer: NSObjectProtocol?
     private var retryAfter: Date?
     /// Only cache a saved context revision. Recovery replaces the context; every save changes revision.
@@ -76,6 +80,14 @@ struct AutomaticSyncSummary: Equatable {
         }
     }
     @ObservationIgnored private var snapshotCache: SnapshotCache?
+    /// A partial baseline differs from the cloud copy. Reuse its verified payload on unchanged polls.
+    private struct RemoteCache {
+        let account: String
+        let digest: String
+        let snapshot: TaskBackup
+        let bytes: Data
+    }
+    @ObservationIgnored private var remoteCache: RemoteCache?
     private var context: ModelContext? { (Store.recovery.container ?? originalContainer)?.mainContext }
     var summary: String {
         if !enabled { return L("仅保存在本机", "Stored on this device") }
@@ -90,7 +102,7 @@ struct AutomaticSyncSummary: Equatable {
         else if editors == 0 { localSaved() }
     }
     func attach(_ container: ModelContainer) {
-        generation += 1; snapshotCache = nil; automaticSummary = nil
+        generation += 1; snapshotCache = nil; remoteCache = nil; automaticSummary = nil; clearReview()
         if let observer { NotificationCenter.default.removeObserver(observer) }
         originalContainer = container
         do {
@@ -102,7 +114,7 @@ struct AutomaticSyncSummary: Equatable {
         observer = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.generation += 1; self.snapshotCache = nil; self.automaticSummary = nil
+                self.generation += 1; self.snapshotCache = nil; self.remoteCache = nil; self.automaticSummary = nil; self.clearReview()
                 self.localSaved()
             }
         }
@@ -120,7 +132,7 @@ struct AutomaticSyncSummary: Equatable {
             let state = try state(context); state.enabled = value
             applying = true; defer { applying = false }
             try Store.save(context)
-            enabled = value; generation += 1; snapshotCache = nil; detail = ""; conflict = false
+            enabled = value; generation += 1; snapshotCache = nil; detail = ""; clearReview()
             debounce?.cancel()
             if value { Task { await sync() } }
         } catch { detail = error.localizedDescription }
@@ -128,7 +140,7 @@ struct AutomaticSyncSummary: Equatable {
     func localSaved() {
         guard enabled, !applying else { return }
         if conflict, let snapshotCache, snapshotCache.revision != Store.revision {
-            conflict = false; conflictLocal = nil; conflictCloud = nil
+            clearReview()
         }
         if running { pendingSave = true; return }
         debounce?.cancel()
@@ -138,8 +150,19 @@ struct AutomaticSyncSummary: Equatable {
             await sync()
         }
     }
+    private func clearReview() {
+        conflict = false; conflictLocal = nil; conflictCloud = nil; conflictBaseline = nil; conflictEvaluationDate = nil
+        conflictItems = []; conflictWarning = nil; conflictSelections = [:]
+    }
+    private func retainReview(_ error: CloudMerge.Conflict, local: Data, cloud: Data, baseline: Data?,
+                              evaluatedAt: Date, choices: [String: CloudMerge.Choice]) {
+        conflict = true; conflictLocal = local; conflictCloud = cloud; conflictBaseline = baseline; conflictEvaluationDate = evaluatedAt
+        conflictItems = error.items; conflictReviewID = UUID(); conflictWarning = error.warning
+        let keys = Set(error.items.map(\.id))
+        conflictSelections = choices.filter { keys.contains($0.key) }
+    }
     private func canContinue(_ ticket: Int, in context: ModelContext) -> Bool {
-        enabled && ticket == generation && editors == 0 && context === self.context &&
+        !Task.isCancelled && enabled && ticket == generation && editors == 0 && context === self.context &&
             Store.recovery.failure == nil && !context.hasChanges
     }
     func sync(choices: [String: CloudMerge.Choice] = [:], reviewID: UUID? = nil) async {
@@ -182,6 +205,9 @@ struct AutomaticSyncSummary: Equatable {
                 defer { applying = false }
                 try Store.save(context)
             }
+            // Join a running startup preparation before copying metadata; normal editing never waits for it.
+            try await SyncChanges.prepareHistory(in: context)
+            guard canContinue(ticket, in: context) else { return }
             let baseline = state.baseline
             let prepared: SnapshotCache
             if let cached = snapshotCache, cached.matches(context, baseline: baseline) {
@@ -215,11 +241,14 @@ struct AutomaticSyncSummary: Equatable {
                 if let base, let baselineDigest, record["digest"] as? String == baselineDigest {
                     remote = base // Do not download the asset again when nothing changed in the cloud.
                     unchangedRemoteBytes = baseline
+                } else if let cached = remoteCache, cached.account == account,
+                          record["digest"] as? String == cached.digest {
+                    remote = cached.snapshot; unchangedRemoteBytes = cached.bytes
                 } else {
                     record = try await database.record(for: recordID)
                     guard (record["formatVersion"] as? Int64) == 1, let url = (record["snapshot"] as? CKAsset)?.fileURL else { throw TaskBackup.invalid("Unsupported cloud snapshot") }
                     let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                    guard size <= 50 * 1024 * 1024 else { throw TaskBackup.invalid(L("云端数据超过当前同步上限（50 MB）。本地数据不受影响。", "Cloud data exceeds the current 50 MB sync limit. Local data is unaffected.")) }
+                    guard size <= Self.maximumSnapshotBytes else { throw TaskBackup.invalid(L("云端数据超过当前同步上限（50 MB）。本地数据不受影响。", "Cloud data exceeds the current 50 MB sync limit. Local data is unaffected.")) }
                     remote = try await Task.detached {
                         try TaskBackup.decode(Data(contentsOf: url), allowLargeFile: true)
                     }.value
@@ -235,59 +264,68 @@ struct AutomaticSyncSummary: Equatable {
             if let unchangedRemoteBytes { remoteBytes = unchangedRemoteBytes }
             else { remoteBytes = try await Task.detached { try CloudMerge.bytes(cloud) }.value }
             guard canContinue(ticket, in: context) else { return }
+            if unchangedRemoteBytes == nil {
+                let remoteDigest = await Task.detached { CloudMerge.digest(remoteBytes) }.value
+                if record["digest"] as? String == remoteDigest {
+                    remoteCache = RemoteCache(account: account, digest: remoteDigest, snapshot: cloud, bytes: remoteBytes)
+                }
+            }
+            guard canContinue(ticket, in: context) else { return }
             if localBytes == baseline && localBytes == remoteBytes && capturedRevision == Store.revision {
-                lastSync = Date(); detail = ""; conflict = false
+                lastSync = Date(); detail = ""; clearReview()
                 resolutionResult = "succeeded"
                 return
             }
             // A pending review must still observe another device's progress. Unchanged inputs keep the same sheet token.
-            if conflict && !resolvingConflict && conflictLocal == localBytes && conflictCloud == remoteBytes { return }
-            if resolvingConflict && (conflictLocal != localBytes || conflictCloud != remoteBytes) {
-                conflict = false; conflictLocal = nil; conflictCloud = nil
+            if conflict && !resolvingConflict && conflictLocal == localBytes && conflictCloud == remoteBytes && conflictBaseline == baseline { return }
+            if resolvingConflict && (conflictLocal != localBytes || conflictCloud != remoteBytes || conflictBaseline != baseline) {
+                clearReview()
                 throw TaskBackup.invalid(L("数据已变化，请重新同步后再处理冲突。", "Data changed. Sync again before resolving conflicts."))
             }
-            let merged: TaskBackup, mergedBytes: Data, automaticCount: Int
+            if conflictLocal != localBytes || conflictCloud != remoteBytes || conflictBaseline != baseline { conflictEvaluationDate = nil }
+            let evaluatedAt = conflictEvaluationDate ?? Date()
+            let plan: PartialSyncMerge.Result
+            let localResultBytes: Data, uploadBytes: Data, baselineBytes: Data
             do {
-                (merged, mergedBytes, automaticCount) = try await Task.detached {
-                    let result = try CloudMerge.mergeResult(local: local, cloud: cloud, base: base,
-                                                             cloudExists: existingCloud, choices: choices)
-                    return (result.snapshot, try CloudMerge.bytes(result.snapshot), result.automaticFieldCount)
+                (plan, localResultBytes, uploadBytes, baselineBytes) = try await Task.detached {
+                    let result = try PartialSyncMerge.prepare(local: local, cloud: cloud, base: base,
+                        cloudExists: existingCloud, choices: choices, now: evaluatedAt)
+                    let bytes = try CloudMerge.bytes(result.localSnapshot)
+                    if result.conflict == nil { return (result, bytes, bytes, bytes) }
+                    return (result, bytes, try CloudMerge.bytes(result.uploadSnapshot),
+                            try CloudMerge.bytes(result.baselineSnapshot))
                 }.value
-            }
-            catch let error as CloudMerge.Conflict {
+            } catch let error as CloudMerge.Conflict {
                 try await protect(localBytes, remoteBytes, recovery: [.manualConflict])
                 guard canContinue(ticket, in: context) else { return }
-                conflict = true; conflictLocal = localBytes; conflictCloud = remoteBytes
-                conflictItems = error.items; conflictReviewID = UUID(); conflictWarning = error.warning
-                let keys = Set(error.items.map(\.id))
-                conflictSelections = choices.filter { keys.contains($0.key) }
+                retainReview(error, local: localBytes, cloud: remoteBytes, baseline: baseline, evaluatedAt: evaluatedAt, choices: choices)
                 throw error
             } catch {
                 try await protect(localBytes, remoteBytes)
                 guard canContinue(ticket, in: context) else { return }
-                conflict = false
+                clearReview()
                 throw TaskBackup.invalid(L("两端的关联变化无法安全合并，未覆盖任何数据。请导出双方恢复副本，检查相关账户、退款或清单后重试。", "Related changes cannot be merged safely. No data was overwritten. Export both recovery copies and review the affected accounts, refunds or lists before retrying.") + "\n" + error.localizedDescription)
             }
-            guard mergedBytes.count <= 50 * 1024 * 1024 else { throw TaskBackup.invalid(L("数据超过当前同步上限（50 MB）。请继续使用本地备份。", "Data exceeds the current 50 MB sync limit. Continue using local backups.")) }
+            guard uploadBytes.count <= Self.maximumSnapshotBytes else { throw TaskBackup.invalid(L("数据超过当前同步上限（50 MB）。请继续使用本地备份。", "Data exceeds the current 50 MB sync limit. Continue using local backups.")) }
             // ponytail: one atomic asset keeps finance relationships consistent, bounded at 50 MB.
             // Use per-entity CloudKit records if measured personal ledgers outgrow snapshot uploads.
             // Always retain both sides before changing either, including before conflict resolution.
-            if state.baseline == nil || mergedBytes != localBytes || mergedBytes != remoteBytes || resolvingConflict {
-                try await protect(localBytes, remoteBytes, recovery: BackupFiles.SyncRecoveryKind.required(manualReview: resolvingConflict, automaticCount: automaticCount))
+            if state.baseline == nil || localResultBytes != localBytes || uploadBytes != remoteBytes || resolvingConflict || plan.conflict != nil {
+                try await protect(localBytes, remoteBytes, recovery: BackupFiles.SyncRecoveryKind.required(manualReview: resolvingConflict || plan.conflict != nil, automaticCount: plan.automaticFieldCount))
             }
             guard canContinue(ticket, in: context) else { return }
             if resolvingConflict && capturedRevision != Store.revision {
-                conflict = false; conflictLocal = nil; conflictCloud = nil; pendingSave = true
+                clearReview(); pendingSave = true
                 throw TaskBackup.invalid(L("处理冲突时数据又有变化，将重新检查。", "Data changed while resolving conflicts. Checking again."))
             }
-            if mergedBytes != remoteBytes || record.recordChangeTag == nil {
+            if uploadBytes != remoteBytes || record.recordChangeTag == nil {
                 // Recheck after awaits. Account changes invalidate every in-flight operation.
                 guard try await container.userRecordID().recordName == account, canContinue(ticket, in: context) else { return }
                 let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
                 defer { try? FileManager.default.removeItem(at: file) }
                 let digest = try await Task.detached {
-                    try mergedBytes.write(to: file, options: .atomic)
-                    return CloudMerge.digest(mergedBytes)
+                    try uploadBytes.write(to: file, options: .atomic)
+                    return CloudMerge.digest(uploadBytes)
                 }.value
                 guard canContinue(ticket, in: context) else { return }
                 record["snapshot"] = CKAsset(fileURL: file)
@@ -296,37 +334,45 @@ struct AutomaticSyncSummary: Equatable {
                 let result = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: false)
                 guard let saved = result.saveResults[recordID] else { throw TaskBackup.invalid("Missing CloudKit save result") }
                 _ = try saved.get()
+                remoteCache = RemoteCache(account: account, digest: digest, snapshot: plan.uploadSnapshot, bytes: uploadBytes)
             }
             guard canContinue(ticket, in: context) else { return }
             // Edits made while the upload was in flight are merged again, never overwritten by its old snapshot.
             let current = try TaskBackup.capture(context)
             let importRevision = Store.revision
             let (final, finalBytes, changed, rebaseCount) = try await Task.detached {
-                let result = try CloudMerge.mergeResult(local: current, cloud: merged, base: local)
+                let result = try CloudMerge.mergeResult(local: current, cloud: plan.localSnapshot, base: local, now: evaluatedAt)
                 let bytes = try CloudMerge.bytes(result.snapshot)
                 return (result.snapshot, bytes, try bytes != CloudMerge.bytes(current), result.automaticFieldCount)
             }.value
             if rebaseCount > 0 {
                 let currentBytes = try await Task.detached { try CloudMerge.bytes(current) }.value
-                try await protect(currentBytes, mergedBytes, recovery: [.automaticMerge])
+                try await protect(currentBytes, localResultBytes, recovery: [.automaticMerge])
             }
             guard canContinue(ticket, in: context) else { return }
             // A quick edit can save while the worker runs. Discard stale work and retry from fresh data.
             applying = true
             defer { applying = false }
-            guard try CloudMerge.commit(final, changed: changed, baseline: mergedBytes, state: state,
+            guard try CloudMerge.commit(final, changed: changed, baseline: baselineBytes, state: state,
                                         revision: importRevision, in: context) else { pendingSave = true; return }
             // A save may normalize list colors. Refill from the actual committed context on the next poll.
             snapshotCache = nil
-            lastSync = state.lastSync; detail = ""; conflict = false; conflictLocal = nil; conflictCloud = nil
-            let automaticTotal = automaticCount + rebaseCount
+            lastSync = state.lastSync; detail = ""; clearReview()
+            if let review = plan.conflict, finalBytes == localResultBytes {
+                retainReview(review, local: finalBytes, cloud: uploadBytes, baseline: baselineBytes, evaluatedAt: evaluatedAt, choices: choices)
+                detail = L("相关项目等待核对，其余修改已同步。", "Related items await review; other changes have synced.")
+            }
+            let automaticTotal = plan.automaticFieldCount + rebaseCount
             automaticSummary = AutomaticSyncSummary.record(count: automaticTotal, account: account)
             syncLog.notice("Sync committed; automatic field decisions: \(automaticTotal, privacy: .public)")
             resolutionResult = "succeeded"
-            if finalBytes != mergedBytes { pendingSave = true; detail = L("新修改等待上传。", "New edits are waiting to upload.") }
+            if finalBytes != localResultBytes { pendingSave = true; detail = L("新修改等待上传。", "New edits are waiting to upload.") }
+        } catch is CancellationError {
+            // Leaving the scene or replacing its store cancels work; it is not a sync failure.
+            resolutionResult = "cancelled"
         } catch {
             // Cloud errors never put the local store into read-only recovery.
-            if ticket == generation {
+            if ticket == generation && !Task.isCancelled {
                 resolutionResult = "failed"
                 retryAfter = Self.retryDate(error)
                 detail = Self.message(error)

@@ -3,7 +3,7 @@ import SwiftData
 
 extension SelfCheck {
     /// Repeatable release benchmark. Uses its own store; never reads the user's database.
-    static func performance() throws {
+    static func performance() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Jianshi-Performance-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -61,13 +61,21 @@ extension SelfCheck {
         try measure("edit one of 5000 money entries, cold sync-history cache") {
             try FinanceStore.update(context) { $0.entries[0].notes = "Cold cache edit" }
         }
+        try SyncChanges.stage([evictionKey: .init(date: day, fingerprint: try SyncChanges.fingerprint("Second cache eviction"))], in: evictionStore.mainContext)
+        try Store.save(evictionStore.mainContext, trackSyncChanges: false)
+        let preparationStart = ProcessInfo.processInfo.systemUptime
+        guard try await SyncChanges.prepareHistory(in: context) else { throw TaskBackup.invalid("Performance history preparation was not cold") }
+        print(String(format: "PERF background sync-history preparation, 5000 tasks/5000 entries: %.1f ms", (ProcessInfo.processInfo.systemUptime - preparationStart) * 1000))
+        try measure("first edit of 5000 money entries after background preparation") {
+            try FinanceStore.update(context) { $0.entries[0].notes = "Prepared cache edit" }
+        }
         try measure("lightweight backup capture with 5000 money entries") { _ = try TaskBackup.capture(context, includeFinance: false); _ = try FinanceStore.payload(context) }
         let money = try FinanceStore.read(context)!
         let history = try SyncChanges.read(context), editedKey = SyncChanges.key("entry", money.entries[0].id)
         guard money.entries.count == 5000, money.balance(account.id) == 50000,
               history?.count == historyCount,
               try history?[editedKey]?.fingerprint == SyncChanges.fingerprint(money.entries[0]),
-              try history?[editedKey]?.fields?["notes"]?.fingerprint == SyncChanges.fingerprint("Cold cache edit"),
+              try history?[editedKey]?.fields?["notes"]?.fingerprint == SyncChanges.fingerprint("Prepared cache edit"),
               history?[editedKey]?.fields?["notes"]?.date != nil else {
             throw TaskBackup.invalid("Performance edit changed ledger totals or lost sync history")
         }
@@ -125,6 +133,17 @@ extension CloudSync {
         let local = try TaskBackup.capture(context), baseline = try CloudMerge.bytes(local), digest = CloudMerge.digest(baseline)
         let cached = SnapshotCache(contextID: ObjectIdentifier(context), revision: Store.revision, baseline: baseline,
                                    local: local, localBytes: baseline, base: try TaskBackup.decode(baseline, allowLargeFile: true), baselineDigest: digest)
+        guard let historyBytes = try context.fetch(FetchDescriptor<CloudSyncState>()).first?.changeHistory else {
+            throw TaskBackup.invalid("Performance snapshot is missing persisted sync history")
+        }
+        let history = try JSONDecoder().decode(SyncChanges.Revisions.self, from: historyBytes)
+        print("PERF sync payload, \(local.tasks.count) tasks/\(local.finance?.entries.count ?? 0) entries: snapshot \(baseline.count) bytes; stored history \(historyBytes.count) bytes; upload limit \(maximumSnapshotBytes) bytes")
+        guard baseline.count <= maximumSnapshotBytes, history == local.syncChanges,
+              cached.base?.syncChanges == local.syncChanges,
+              try cached.base.map({ try CloudMerge.bytes($0) }) == baseline else {
+            throw TaskBackup.invalid("Performance snapshot exceeds the upload limit or changes metadata during serialization")
+        }
+        print("PERF sync metadata round-trip: \(history.count) records; stored and cloud metadata preserved")
         var uncached: [Double] = [], reused: [Double] = []
         for _ in 0..<3 {
             var start = ProcessInfo.processInfo.systemUptime

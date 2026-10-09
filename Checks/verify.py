@@ -37,7 +37,8 @@ def main():
         with log.open("w") as stream:
             result = subprocess.run(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, timeout=1200, env=child_env)
         text = log.read_text(errors="replace")
-        if result.returncode or (marker and marker not in text):
+        markers = (marker,) if isinstance(marker, str) else (marker or ())
+        if result.returncode or any(required not in text for required in markers):
             raise RuntimeError(f"{name} failed; see {log}")
         if build:
             warnings = [line for line in text.splitlines() if ": warning:" in line
@@ -88,7 +89,7 @@ def main():
         mac_app = products["mac"]
         info = plistlib.loads((mac_app / "Contents/Info.plist").read_bytes())
         executable = str(mac_app / "Contents/MacOS" / info["CFBundleExecutable"])
-        run("mac-self-check", [executable, "--self-check"], marker="checks — calendar")
+        run("mac-self-check", [executable, "--self-check"], marker=("checks — calendar", "BACKGROUND HISTORY PASS:"))
         run("frozen-migration", [sys.executable, str(ROOT / "Checks/check_migration.py"), executable], marker="FROZEN MIGRATION PASS:")
         run("account-currency", [sys.executable, str(ROOT / "Checks/check_finance_account_switch.py")], marker="PASS:")
         if args.performance:
@@ -99,7 +100,7 @@ def main():
         run("simulator-install", ["xcrun", "simctl", "install", args.simulator, str(products["simulator"])])
         installed = True
         run("simulator-self-check", ["xcrun", "simctl", "launch", "--console", "--terminate-running-process",
-                                     args.simulator, identity, "--self-check"], marker="checks — calendar")
+                                     args.simulator, identity, "--self-check"], marker=("checks — calendar", "BACKGROUND HISTORY PASS:"))
         if hashes() != source:
             raise RuntimeError("Source changed while checks were running; rerun the gate")
         passed = True

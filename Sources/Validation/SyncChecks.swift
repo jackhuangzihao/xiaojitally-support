@@ -5,7 +5,7 @@ import CloudKit
 
 extension CloudMerge {
     @MainActor static func check() throws -> Int {
-        var count = try CloudSyncSettings.checkViewFootprint() + checkConflictChoices() + checkAutomaticSync() + SyncHistoryChecks.run()
+        var count = try CloudSyncSettings.checkViewFootprint() + checkConflictChoices() + checkAutomaticSync() + SyncHistoryChecks.run() + PartialSyncChecks.run() + CausalSyncChecks.run()
         func check(_ condition: Bool, _ label: String) throws {
             guard condition else { throw TaskBackup.invalid("SYNC CHECK: " + label) }; count += 1
         }
@@ -430,9 +430,9 @@ extension CloudMerge {
                 let restored = try TaskBackup.capture(reopened.mainContext)
                 try check(keys.allSatisfy { restored.syncChanges?[$0] == incoming.syncChanges?[$0] && restored.syncChanges?[$0]?.fingerprint == nil },
                           "fresh-device restore preserves task and bill deletion history after reopening")
-                try requiresReview("first sync after a restored deletion cannot silently resurrect the cloud record") {
-                    _ = try merge(local: restored, cloud: oldCloud, base: nil)
-                }
+                let firstSync = try merge(local: restored, cloud: oldCloud, base: nil)
+                try check(firstSync.tasks.isEmpty && firstSync.finance?.entries.isEmpty == true,
+                          "a restored causal deletion covers the exact older cloud record without resurrection")
                 let resolved = try merge(local: restored, cloud: oldCloud, base: nil, choice: .local)
                 try check(resolved.tasks.isEmpty && resolved.finance?.entries.isEmpty == true,
                           "review can retain both restored task and bill deletions")
@@ -633,8 +633,13 @@ extension CloudMerge {
         for choice in [Choice.local, .cloud] {
             let resolved = try merge(local: left, cloud: right, base: repeatBase, choice: choice)
             let selected = choice == .local ? left : right
-            try check(try bytes(resolved) == bytes(selected), "recurrence choice keeps only the selected complete chain")
+            var resolvedValues = resolved, selectedValues = selected
+            resolvedValues.syncChanges = nil; selectedValues.syncChanges = nil
+            try check(try bytes(resolvedValues) == bytes(selectedValues), "recurrence choice keeps only the selected complete chain and records its confirmation")
             try check(resolved.tasks.filter { !$0.isDone && $0.deletedAt == nil }.count == 1, "resolved recurrence has one active successor")
+            let other = choice == .local ? right : left
+            try check(try bytes(merge(local: other, cloud: resolved, base: repeatBase)) == bytes(resolved),
+                      "confirmed sequence choice propagates without resurrecting an unselected successor")
             try check(try bytes(merge(local: resolved, cloud: resolved, base: repeatBase)) == bytes(resolved), "resolved recurrence retry is idempotent")
             let resultStore = try Store.make(url: directory.appendingPathComponent(UUID().uuidString + ".store"))
             try stage(resolved, in: resultStore.mainContext); try resultStore.mainContext.save()
@@ -651,7 +656,9 @@ extension CloudMerge {
         let keepLeft = try merge(local: left, cloud: longerRight, base: repeatBase, choice: .local)
         try check(keepLeft.tasks.count == left.tasks.count + 1 && keepLeft.tasks.contains { $0.id == independent.id }, "losing branch descendants removed, unrelated phone task retained")
         let keepRight = try merge(local: left, cloud: longerRight, base: repeatBase, choice: .cloud)
-        try check(try bytes(keepRight) == bytes(longerRight), "selected later branch retains edits and completed history")
+        var keptValues = keepRight, laterValues = longerRight
+        keptValues.syncChanges = nil; laterValues.syncChanges = nil
+        try check(try bytes(keptValues) == bytes(laterValues), "selected later branch retains edits and completed history")
         var deletedLeft = left; deletedLeft.tasks.removeAll()
         try rejects("deleting repeat history vs changed successor conflicts") { _ = try merge(local: deletedLeft, cloud: keepRight, base: left) }
         try check(try merge(local: deletedLeft, cloud: keepRight, base: left, choice: .local).tasks.map(\.id) == [independent.id], "base links preserve whole-chain deletion without orphan descendants")
@@ -682,7 +689,8 @@ extension CloudMerge {
         let raceStore = try Store.make(url: directory.appendingPathComponent("background-edit.store"))
         try stage(inFlightLocal, in: raceStore.mainContext)
         let raceState = CloudSyncState(); raceStore.mainContext.insert(raceState)
-        try Store.save(raceStore.mainContext)
+        // Seed the remote baseline exactly like CloudMerge.commit; it is not a new local creation.
+        try Store.save(raceStore.mainContext, trackSyncChanges: false)
         let workerRevision = Store.revision
         let liveTask = try raceStore.mainContext.fetch(FetchDescriptor<TaskItem>()).first!
         liveTask.notes = "Saved after worker captured its input"; try Store.save(raceStore.mainContext)

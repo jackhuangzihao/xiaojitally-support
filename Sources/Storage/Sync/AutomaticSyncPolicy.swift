@@ -1,23 +1,36 @@
 import Foundation
 
-/// Wall-clock ordering is used only for allowlisted fields with matching saved content and a shared base.
+/// Causality wins over wall clocks. Concurrent ordinary edits use a stable tie-break, with recovery copies.
 struct AutomaticSyncPolicy {
     let revisions: SyncChanges.Resolution
     let now: Date
 
     func choice(record: String, field: String) -> CloudMerge.Choice? {
-        guard revisions.baseValues[record] != nil,
-              let local = revisions.local[record], let cloud = revisions.cloud[record],
-              local.fingerprint == revisions.localValues[record],
-              cloud.fingerprint == revisions.cloudValues[record],
+        let ordinary: Set<String>
+        switch record.prefix(while: { $0 != ":" }) {
+        case "task": ordinary = ["title", "notes", "priority", "listID", "timing", "completion"]
+        case "list": ordinary = ["name", "colorHex", "emoji", "sortOrder"]
+        case "week": ordinary = ["title"]
+        case "entry": ordinary = ["title", "notes", "tags"]
+        default: ordinary = []
+        }
+        guard ordinary.contains(field), revisions.baseValues[record] != nil,
+              let leftSide = revisions.side(.local, key: record, field: field),
+              let rightSide = revisions.side(.cloud, key: record, field: field) else { return nil }
+        if leftSide.genuineVersion || rightSide.genuineVersion {
+            guard let left = leftSide.version, let right = rightSide.version else { return nil }
+            if left.dominates(right) { return .local }
+            if right.dominates(left) { return .cloud }
+            // Equal histories with different contents are inconsistent, not an ordinary concurrent edit.
+            guard left.clock != right.clock, left.winner != right.winner else { return nil }
+            return SyncVersion.precedes(left.winner, right.winner) ? .cloud : .local
+        }
+        // Old snapshots have no causal history. Keep the conservative legacy rule until a real edit or review.
+        guard let local = revisions.local[record], let cloud = revisions.cloud[record],
               let left = local.fields?[field], let right = cloud.fields?[field],
-              left.fingerprint == revisions.localFields[record]?[field],
-              right.fingerprint == revisions.cloudFields[record]?[field],
-              let leftDate = left.date, let rightDate = right.date,
-              leftDate != rightDate,
+              let leftDate = left.date, let rightDate = right.date, leftDate != rightDate,
               leftDate <= now.addingTimeInterval(300), rightDate <= now.addingTimeInterval(300),
               leftDate <= local.date, rightDate <= cloud.date else { return nil }
-        // Reject edits dated before an observed ancestor; arrival time is never a field's edit time.
         if let ancestor = revisions.baseRevisions[record]?.fields?[field],
            ancestor.fingerprint == revisions.baseFields[record]?[field], let date = ancestor.date,
            leftDate <= date || rightDate <= date { return nil }

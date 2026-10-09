@@ -11,6 +11,10 @@ extension CloudMerge {
         let choices: [String: Choice]
         let automatic: AutomaticSyncPolicy?
         private var automaticKeys = Set<String>()
+        private(set) var confirmations: [String: Set<String>] = [:]
+        func confirm(keys: [String], field: String?) {
+            for key in keys { confirmations[key, default: []].insert(field ?? "*") }
+        }
         var automaticCount: Int { automaticKeys.count }
         func recordAutomatic(key: String) { automaticKeys.insert(key) }
         private(set) var items: [ConflictItem] = []

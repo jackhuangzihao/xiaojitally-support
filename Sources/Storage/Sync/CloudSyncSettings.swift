@@ -39,7 +39,7 @@ struct CloudSyncSettings: View {
             Text(sync.summary).font(.callout)
                 .foregroundStyle(sync.conflict ? Color.orange : .primary)
             if sync.enabled && sync.conflict {
-                Text(L("这些变化涉及删除、重复任务、关联账目，或缺少可靠的修改时间。请核对要保留的版本；本机数据仍可使用。", "These changes involve deletions, repeating tasks, related financial records or uncertain edit times. Review which version to keep. Your local data remains available."))
+                Text(L("相关项目需要核对。可以安全分离的其他修改会继续同步，本机数据仍可使用。", "Related items need review. Other changes continue syncing when they can be separated safely. Your local data remains available."))
                     .font(.callout)
                 Button(L("核对并处理冲突…", "Review and resolve conflicts…")) { resolve = true }
                     .disabled(sync.running)
@@ -55,17 +55,17 @@ struct CloudSyncSettings: View {
                         .id(reviewID)
                     }
             }
-            Text(L("不同字段自动合并；普通字段冲突优先保留较新修改。删除、账目等重要冲突仍需核对。使用同一 Apple 账户，打开 App 后同步；离线仍可编辑。", "Separate fields merge automatically; ordinary field conflicts keep the newer edit. Deletions and important financial conflicts still need review. Sync uses the same Apple Account while the app is open. Offline editing remains available."))
+            Text(L("独立修改自动合并，已同步的处理结果会沿用。删除、金额等重要冲突仍需核对。使用同一 Apple 账户，打开 App 后同步；离线仍可编辑。", "Independent changes merge automatically, and synced decisions are retained. Deletions and important financial conflicts still need review. Use the same Apple Account with the app open; offline editing remains available."))
                 .font(.caption).foregroundStyle(.secondary)
             if let summary = sync.automaticSummary {
-                Text(L("最近一次自动采用较新的 \(summary.count) 处修改：", "Most recent automatic resolution kept \(summary.count) newer edits: ")
+                Text(L("最近一次自动处理了 \(summary.count) 处修改：", "Most recent automatic resolution: \(summary.count) edits, ")
                      + summary.date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale)))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if let date = sync.lastSync { Text(L("上次完成：", "Last completed: ") + date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))).font(.caption).foregroundStyle(.secondary) }
+            if let date = sync.lastSync { Text(L("最近同步：", "Last synced: ") + date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))).font(.caption).foregroundStyle(.secondary) }
             if !sync.detail.isEmpty && !sync.conflict { Text(sync.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             if sync.enabled {
-                Button(L("立即同步", "Sync now")) { Task { await sync.sync() } }.disabled(sync.running || sync.conflict)
+                Button(L("立即同步", "Sync now")) { Task { await sync.sync() } }.disabled(sync.running)
             }
             Menu(L("导出同步恢复副本", "Export sync recovery copy")) {
                 Button(L("上次冲突处理前的本机副本", "Local copy before last conflict resolution")) { exportConflictCopy(local: true) }

@@ -67,12 +67,18 @@ final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
         if CommandLine.arguments.contains("--performance-check") {
-            do { try SelfCheck.performance(); exit(0) }
-            catch { print("PERFORMANCE CHECK FAILED: \(error)"); exit(1) }
+            Task { @MainActor in
+                do { try await SelfCheck.performance(); exit(0) }
+                catch { print("PERFORMANCE CHECK FAILED: \(error)"); exit(1) }
+            }
+            RunLoop.main.run(); exit(1)
         }
         if CommandLine.arguments.contains("--self-check") {
-            do { try SelfCheck.run(); exit(0) }
-            catch { print("SELF-CHECK FAILED: \(error)"); exit(1) }
+            Task { @MainActor in
+                do { try SelfCheck.run(); _ = try await SyncHistoryChecks.backgroundPreparation(); exit(0) }
+                catch { print("SELF-CHECK FAILED: \(error)"); exit(1) }
+            }
+            RunLoop.main.run(); exit(1)
         }
         #if os(macOS)
         if CommandLine.arguments.contains("--reminder-audit") {
@@ -107,7 +113,6 @@ final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
         if case .success(let container) = storage {
-            AutomaticBackup.shared.save(container.mainContext)
             CloudSync.shared.attach(container)
         }
     }
@@ -169,6 +174,14 @@ private struct StoreWindow: View {
             .modelContainer(Store.recovery.container ?? container)
             .environment(drafts)
             .id(Store.recovery.generation)
+            .task(id: Store.recovery.generation) {
+                let context = (Store.recovery.container ?? container).mainContext
+                do { try await SyncChanges.prepareHistory(in: context) }
+                catch is CancellationError { return }
+                catch { /* Preparation is optional; the next save still validates stored history. */ }
+                guard !Task.isCancelled, context === (Store.recovery.container ?? container).mainContext else { return }
+                AutomaticBackup.shared.save(context)
+            }
             .task(id: phase) {
                 guard phase == .active else { return }
                 while !Task.isCancelled {
