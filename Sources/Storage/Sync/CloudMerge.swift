@@ -18,13 +18,12 @@ enum CloudMerge {
         }
     }
     static func value<T: Equatable>(_ local: T, _ cloud: T, _ base: T, label: @autoclosure () -> String,
-                                    choice: Choice?, latest: @autoclosure () -> SyncChanges.Decision? = nil,
+                                    choice: Choice?, decision: @autoclosure () -> SyncChanges.Decision? = nil,
                                     report: ((String) -> Void)? = nil) throws -> T {
         if local == cloud { return local }
-        // A timestamped tombstone can still be newer when this device has no shared baseline.
-        let decision = latest()
-        if let newest = decision?.choice { return (choice ?? newest) == .local ? local : cloud }
-        if decision?.needsReview != true {
+        // A first-sync deletion requires review even when both records carry timestamps.
+        let review = decision()
+        if review?.needsReview != true {
             if cloud == base { return local }
             if local == base { return cloud }
         }
@@ -38,15 +37,19 @@ enum CloudMerge {
     }
     static func rows<T: Equatable>(_ local: [T], _ cloud: [T], _ base: [T], id: (T) -> UUID, label: String,
                                    describe: (T) -> String, choice: Choice?, kind: String = "",
-                                   latest: (([String]) -> SyncChanges.Decision)? = nil, report: @escaping (String) -> Void) throws -> [T] {
+                                   decision: (([String]) -> SyncChanges.Decision)? = nil, mergeFields: ((T, T, T) throws -> T)? = nil, report: @escaping (String) -> Void) throws -> [T] {
         let l = Dictionary(uniqueKeysWithValues: local.map { (id($0), $0) })
         let r = Dictionary(uniqueKeysWithValues: cloud.map { (id($0), $0) })
         let b = Dictionary(uniqueKeysWithValues: base.map { (id($0), $0) })
         return try Set(l.keys).union(r.keys).union(b.keys).sorted { $0.uuidString < $1.uuidString }.compactMap {
-            try value(l[$0], r[$0], b[$0], label: label + "\n" +
+            if let left = l[$0], let right = r[$0], let original = b[$0],
+               left != right, left != original, right != original, let mergeFields {
+                return try mergeFields(left, right, original)
+            }
+            return try value(l[$0], r[$0], b[$0], label: label + "\n" +
                       L("本机：", "Local: ") + (l[$0].map(describe) ?? L("已删除", "Deleted")) + "\n" +
                       L("云端：", "Cloud: ") + (r[$0].map(describe) ?? L("已删除", "Deleted")), choice: choice,
-                      latest: latest?([SyncChanges.key(kind, $0)]), report: report)
+                      decision: decision?([SyncChanges.key(kind, $0)]), report: report)
         }
     }
 
@@ -78,10 +81,10 @@ enum CloudMerge {
             (fields.isEmpty ? "" : "\n" + L("差异：", "Differences: ") + fields.joined(separator: "、"))
     }
 
-    /// A repeat chain is one merge unit. Unioning its independently created successors forks the series.
+    /// Structural repeat edits stay atomic: unioning independently created successors forks the series.
     /// Include base links too, so deleting or unlinking a parent cannot orphan a competing branch.
     static func taskRows(_ local: [TaskBackup.TaskRecord], _ cloud: [TaskBackup.TaskRecord], _ base: [TaskBackup.TaskRecord],
-                         choice: Choice?, latest: (([String]) -> SyncChanges.Decision)? = nil,
+                         choice: Choice?, decision: (([String]) -> SyncChanges.Decision)? = nil,
                          report: @escaping (String) -> Void) throws -> [TaskBackup.TaskRecord] {
         let l = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
         let r = Dictionary(uniqueKeysWithValues: cloud.map { ($0.id, $0) })
@@ -102,10 +105,24 @@ enum CloudMerge {
             }
             component.sort { $0.uuidString < $1.uuidString }
             let left = component.compactMap { l[$0] }, right = component.compactMap { r[$0] }, original = component.compactMap { b[$0] }
+            // Only unchanged membership, links and deletion state permit merging individual occurrences.
+            if left != right, left != original, right != original,
+               taskStructureMatches(left, original), taskStructureMatches(right, original) {
+                let lifecycle = try value(zip(left, original).map { taskLifecycle($0, base: $1) },
+                                          zip(right, original).map { taskLifecycle($0, base: $1) }, original,
+                    label: L("任务时间、提醒与重复状态", "Task schedule, reminders and recurrence") + "\n" +
+                        component.filter { l[$0] != r[$0] }.map { taskDifference(l[$0], r[$0]) }.joined(separator: "\n\n"),
+                    choice: choice, report: report)
+                for index in original.indices {
+                    result.append(try taskFields(left[index], right[index], original[index], lifecycle: lifecycle[index],
+                                                 choice: choice, report: report))
+                }
+                continue
+            }
             result += try value(left, right, original, label:
                 (component.count > 1 ? L("重复任务（选择将用于整条序列，含后续任务）", "Repeating tasks (choice applies to the entire chain, including successors)") : L("任务", "Task")) + "\n" +
                 component.filter { l[$0] != r[$0] }.map { taskDifference(l[$0], r[$0]) }.joined(separator: "\n\n"), choice: choice,
-                latest: latest?(component.map { SyncChanges.key("task", $0) }), report: report)
+                decision: decision?(component.map { SyncChanges.key("task", $0) }), report: report)
         }
         return result
     }
@@ -115,7 +132,8 @@ enum CloudMerge {
         let referenced = Set(snapshot.tasks.compactMap(\.listID)).union(snapshot.lists.compactMap(\.parentID))
         let names = [["工作", "Work"], ["生活", "Personal"], ["学习", "Study"]]
         return Set(snapshot.lists.compactMap { list -> UUID? in
-            guard !referenced.contains(list.id), let index = names.indices.first(where: {
+            guard snapshot.syncChanges?[SyncChanges.key("list", list.id)] == nil,
+                !referenced.contains(list.id), let index = names.indices.first(where: {
                 list.id == TaskItem.syncIdentity("tally-default-list-\($0)")
             }), names[index].contains(list.name), list.createdAt == Date(timeIntervalSince1970: Double(index)),
                 list.parentID == nil, list.emoji == nil, (list.sortOrder ?? 0) == 0,
@@ -131,6 +149,13 @@ enum CloudMerge {
         finance.categories.sort { $0.id.uuidString < $1.id.uuidString }
         var expected = initial; expected.categories.sort { $0.id.uuidString < $1.id.uuidString }
         return finance == expected
+    }
+    static func isUntouchedInitialFinance(_ snapshot: TaskBackup) -> Bool {
+        // Returning to an empty ledger after deletion is still a user edit, not a fresh seed.
+        let financialKinds: Set<String> = ["account", "book", "category", "entry"]
+        return !(snapshot.syncChanges ?? [:]).keys.contains { key in
+            financialKinds.contains(String(key.prefix { $0 != ":" }))
+        } && isInitialFinance(snapshot.finance)
     }
 
     /// Manual quotes are user data; group both directions so a reset or inverse edit cannot resurrect one.
@@ -162,10 +187,10 @@ enum CloudMerge {
     }
 
     static func categoryRows(_ local: [MoneyCategory], _ cloud: [MoneyCategory], _ base: [MoneyCategory],
-                             choice: Choice?, latest: (([String]) -> SyncChanges.Decision)? = nil,
+                             choice: Choice?, decision: (([String]) -> SyncChanges.Decision)? = nil,
                              report: @escaping (String) -> Void) throws -> [MoneyCategory] {
         var result = try rows(local, cloud, base, id: { $0.id }, label: L("财务分类", "Finance category"), describe: { $0.label }, choice: choice,
-                              kind: "category", latest: latest, report: report)
+                              kind: "category", decision: decision, report: report)
         let parents = Dictionary(uniqueKeysWithValues: result.map { ($0.id, $0) })
         // A parent deleted on one device while the other adds a child is one explicit family conflict.
         let conflictingParents = Set(result.compactMap { child -> UUID? in
@@ -194,7 +219,7 @@ enum CloudMerge {
     /// Amounts and transfer fees are denominated by their accounts. Never merge a currency change
     /// separately from its postings; linked refunds and transfers must follow the same choice.
     static func accountPostingRows(_ local: FinanceData, _ cloud: FinanceData, _ base: FinanceData?,
-                                   choice: Choice?, latest: (([String]) -> SyncChanges.Decision)? = nil,
+                                   choice: Choice?, decision: (([String]) -> SyncChanges.Decision)? = nil,
                                    report: @escaping (String) -> Void) throws -> (accounts: [MoneyAccount], entries: [MoneyEntry]) {
         let cloudAccounts = Dictionary(uniqueKeysWithValues: cloud.accounts.map { ($0.id, $0) })
         let differing = Set(local.accounts.compactMap { account -> UUID? in
@@ -236,10 +261,11 @@ enum CloudMerge {
         }
         let accounts = try rows(local.accounts.filter { !handledAccounts.contains($0.id) }, cloud.accounts.filter { !handledAccounts.contains($0.id) },
                                 (base?.accounts ?? []).filter { !handledAccounts.contains($0.id) }, id: { $0.id }, label: L("记账账户", "Account"), describe: { $0.name }, choice: choice,
-                                kind: "account", latest: latest, report: report)
+                                kind: "account", decision: decision, report: report)
         let entries = try rows(local.entries.filter { !handledEntries.contains($0.id) }, cloud.entries.filter { !handledEntries.contains($0.id) },
                                (base?.entries ?? []).filter { !handledEntries.contains($0.id) }, id: { $0.id }, label: L("账单", "Entry"), describe: { $0.title + " · " + $0.currency + " " + NSDecimalNumber(decimal: $0.amount).stringValue }, choice: choice,
-                               kind: "entry", latest: latest, report: report)
+                               kind: "entry", decision: decision,
+                               mergeFields: { try entryFields($0, $1, $2, choice: choice, report: report) }, report: report)
         return ((accounts + chosenAccounts).sorted { $0.id.uuidString < $1.id.uuidString },
                 (entries + chosenEntries).sorted { $0.id.uuidString < $1.id.uuidString })
     }
@@ -254,22 +280,18 @@ enum CloudMerge {
             let remote = Dictionary(uniqueKeysWithValues: cloud.lists.map { ($0.id, $0) })
             local.lists = local.lists.compactMap { localDefaults.contains($0.id) ? remote[$0.id] : $0 }
             cloud.lists = cloud.lists.map { cloudDefaults.contains($0.id) && !localDefaults.contains($0.id) ? (originals[$0.id] ?? $0) : $0 }
-            if isInitialFinance(local.finance) { local.finance = cloud.finance }
-            else if isInitialFinance(cloud.finance), local.finance != nil { cloud.finance = local.finance }
+            if isUntouchedInitialFinance(local) { local.finance = cloud.finance }
+            else if isUntouchedInitialFinance(cloud), local.finance != nil { cloud.finance = local.finance }
         }
         var conflicts: [String] = []
-        let report: (String) -> Void = { conflicts.append($0) }
+        var reported = Set<String>()
+        let report: (String) -> Void = { if reported.insert($0).inserted { conflicts.append($0) } }
         let resolution = try SyncChanges.Resolution(local: local, cloud: cloud, base: base)
-        var automaticSelections = 0
-        let latest: ([String]) -> SyncChanges.Decision = { keys in
-            let decision = resolution.decision(keys)
-            if decision.choice != nil { automaticSelections += 1 }
-            return decision
-        }
+        let decision = resolution.decision
         var result = TaskBackup(lists: [], tasks: [])
-        result.lists = try rows(local.lists, cloud.lists, base?.lists ?? [], id: { $0.id }, label: L("清单（名称、颜色、顺序或层级存在差异）", "List (name, color, order or hierarchy differs)"), describe: { $0.name }, choice: choice, kind: "list", latest: latest, report: report)
-        result.tasks = try taskRows(local.tasks, cloud.tasks, base?.tasks ?? [], choice: choice, latest: latest, report: report)
-        result.weekTitles = try rows(local.weekTitles ?? [], cloud.weekTitles ?? [], base?.weekTitles ?? [], id: { $0.id }, label: L("周标题", "Week title"), describe: { $0.week + " · " + $0.title }, choice: choice, kind: "week", latest: latest, report: report)
+        result.lists = try rows(local.lists, cloud.lists, base?.lists ?? [], id: { $0.id }, label: L("清单（名称、颜色、顺序或层级存在差异）", "List (name, color, order or hierarchy differs)"), describe: { $0.name }, choice: choice, kind: "list", decision: decision, report: report)
+        result.tasks = try taskRows(local.tasks, cloud.tasks, base?.tasks ?? [], choice: choice, decision: decision, report: report)
+        result.weekTitles = try rows(local.weekTitles ?? [], cloud.weekTitles ?? [], base?.weekTitles ?? [], id: { $0.id }, label: L("周标题", "Week title"), describe: { $0.week + " · " + $0.title }, choice: choice, kind: "week", decision: decision, report: report)
         if let l = local.finance, let r = cloud.finance {
             let b = base?.finance
             // Changing base currency revalues every posting. A concurrent posting cannot be mixed into it.
@@ -278,9 +300,9 @@ enum CloudMerge {
             } else {
                 var finance = l
                 finance.baseCurrency = try value(l.baseCurrency, r.baseCurrency, b?.baseCurrency ?? "CNY", label: L("记账本位币", "Base currency"), choice: choice, report: report)
-                (finance.accounts, finance.entries) = try accountPostingRows(l, r, b, choice: choice, latest: latest, report: report)
-                finance.books = try rows(l.books, r.books, b?.books ?? [], id: { $0.id }, label: L("账本", "Book"), describe: { $0.name }, choice: choice, kind: "book", latest: latest, report: report)
-                finance.categories = try categoryRows(l.categories, r.categories, b?.categories ?? [], choice: choice, latest: latest, report: report)
+                (finance.accounts, finance.entries) = try accountPostingRows(l, r, b, choice: choice, decision: decision, report: report)
+                finance.books = try rows(l.books, r.books, b?.books ?? [], id: { $0.id }, label: L("账本", "Book"), describe: { $0.name }, choice: choice, kind: "book", decision: decision, report: report)
+                finance.categories = try categoryRows(l.categories, r.categories, b?.categories ?? [], choice: choice, decision: decision, report: report)
                 finance.rates = try rateRows(l.rates, r.rates, b?.rates ?? [], choice: choice, report: report)
                 result.finance = finance
             }
@@ -291,7 +313,7 @@ enum CloudMerge {
         result.syncChanges = try resolution.revisions(for: result)
         // Validate combined references; never silently discard a posting or its account.
         try result.validate()
-        if automaticSelections > 0 { syncLog.notice("Automatically resolved \(automaticSelections, privacy: .public) record groups by modification time") }
+        syncLog.debug("Validated sync merge; manual conflict choice: \(choice != nil, privacy: .public)")
         return result
     }
     static func bytes(_ snapshot: TaskBackup) throws -> Data {

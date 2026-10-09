@@ -10,7 +10,6 @@ enum SyncChanges {
     }
     typealias Revisions = [String: Revision]
     struct Decision {
-        var choice: CloudMerge.Choice?
         var needsReview: Bool
     }
     @MainActor private static var cached: (data: Data, value: Revisions)?
@@ -144,11 +143,10 @@ enum SyncChanges {
     }
 
     struct Resolution {
-        let local: Revisions, cloud: Revisions, base: Revisions
+        let local: Revisions, cloud: Revisions
         let localValues: [String: String], cloudValues: [String: String], baseValues: [String: String]
         init(local: TaskBackup, cloud: TaskBackup, base: TaskBackup?) throws {
             self.local = local.syncChanges ?? [:]; self.cloud = cloud.syncChanges ?? [:]
-            self.base = base?.syncChanges ?? [:]
             localValues = try SyncChanges.fingerprints(local); cloudValues = try SyncChanges.fingerprints(cloud)
             baseValues = try base.map(SyncChanges.fingerprints) ?? [:]
         }
@@ -159,22 +157,8 @@ enum SyncChanges {
                 let cloudDeleted = cloudValues[key] == nil && cloud[key] != nil && cloud[key]?.fingerprint == nil
                 return localDeleted && cloudValues[key] != nil || cloudDeleted && localValues[key] != nil
             }
-            return Decision(choice: newest(keys), needsReview: deletionWithoutBaseline)
-        }
-        func newest(_ keys: [String]) -> CloudMerge.Choice? {
-            func lastChange(_ revisions: Revisions, _ values: [String: String]) -> Date? {
-                let changed = keys.filter { values[$0] != baseValues[$0] || revisions[$0] != base[$0] }
-                guard !changed.isEmpty else { return nil }
-                var newest: Date?
-                for key in changed {
-                    guard let revision = revisions[key], revision.fingerprint == values[key],
-                          revision.date <= Date().addingTimeInterval(300) else { return nil }
-                    newest = max(newest ?? revision.date, revision.date)
-                }
-                return newest
-            }
-            guard let left = lastChange(local, localValues), let right = lastChange(cloud, cloudValues), left != right else { return nil }
-            return left > right ? .local : .cloud
+            // A device clock cannot establish causality between two offline edits.
+            return Decision(needsReview: deletionWithoutBaseline)
         }
         func revisions(for result: TaskBackup) throws -> Revisions? {
             let values = try SyncChanges.fingerprints(result)
@@ -182,6 +166,12 @@ enum SyncChanges {
             for key in Set(local.keys).union(cloud.keys) {
                 let candidates = [local[key], cloud[key]].compactMap { $0 }.filter { $0.fingerprint == values[key] }
                 if let revision = candidates.max(by: { $0.date < $1.date }) { revisions[key] = revision }
+                else if let fingerprint = values[key], baseValues[key] != nil,
+                        localValues[key] != nil, cloudValues[key] != nil,
+                        let date = [local[key]?.date, cloud[key]?.date].compactMap({ $0 }).max() {
+                    // A combined record needs its own fingerprint; retries and device order must agree.
+                    revisions[key] = Revision(date: date, fingerprint: fingerprint)
+                }
             }
             return revisions.isEmpty ? nil : revisions
         }

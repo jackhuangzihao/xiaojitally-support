@@ -13,6 +13,15 @@ extension CloudMerge {
             var failed = false; do { try action() } catch { failed = true }
             try check(failed, label)
         }
+        func requiresReview(_ label: String, _ action: () throws -> Void) throws {
+            do {
+                try action()
+            } catch is Conflict {
+                try check(true, label)
+                return
+            }
+            throw TaskBackup.invalid("SYNC CHECK: " + label)
+        }
         func tracked(_ snapshot: TaskBackup, from original: TaskBackup, at date: Date) throws -> TaskBackup {
             var snapshot = snapshot
             let old = try SyncChanges.fingerprints(original), new = try SyncChanges.fingerprints(snapshot)
@@ -24,45 +33,119 @@ extension CloudMerge {
             return snapshot
         }
         do {
-            let first = TaskBackup.TaskRecord(TaskItem(title: "First")), second = TaskBackup.TaskRecord(TaskItem(title: "Second"))
+            let first = TaskBackup.TaskRecord(TaskItem(title: "First", scheduledAt: Date(timeIntervalSince1970: 1_800_000_000)))
+            let second = TaskBackup.TaskRecord(TaskItem(title: "Second"))
             let original = TaskBackup(lists: [], tasks: [first, second])
             let early = Date(timeIntervalSince1970: 1000), late = early.addingTimeInterval(60)
             var left = original, right = original
-            left.tasks[0].title = "Recent Mac edit"; left = try tracked(left, from: original, at: late)
-            left.tasks[1].notes = "Older Mac note"; left = try tracked(left, from: original, at: early)
-            right.tasks[0].title = "Older phone edit"; right = try tracked(right, from: original, at: early)
-            right.tasks[1].notes = "Recent phone note"; right = try tracked(right, from: original, at: late)
+            left.tasks[0].title = "Mac title"; left.tasks[1].notes = "Mac note"
+            left = try tracked(left, from: original, at: late)
+            right.tasks[0].scheduledAt = first.scheduledAt!.addingTimeInterval(86400)
+            right.tasks[1].priority = 2
+            right = try tracked(right, from: original, at: early)
             let combined = try merge(local: left, cloud: right, base: original)
-            try check(combined.tasks.contains { $0.title == "Recent Mac edit" } && combined.tasks.contains { $0.notes == "Recent phone note" }, "latest changes are selected per record, never by newest whole snapshot")
-            try check(try bytes(merge(local: right, cloud: left, base: original)) == bytes(combined), "automatic merge converges regardless of device direction")
-            try check(try bytes(merge(local: combined, cloud: combined, base: original)) == bytes(combined), "automatic merge retry preserves records and modification metadata")
-            try check(try merge(local: left, cloud: right, base: original, choice: .cloud).tasks.contains { $0.title == "Older phone edit" }, "explicit review can retain an older chosen record")
+            let combinedFirst = combined.tasks.first { $0.id == first.id }!
+            let combinedSecond = combined.tasks.first { $0.id == second.id }!
+            try check(combinedFirst.title == "Mac title" && combinedFirst.scheduledAt == right.tasks[0].scheduledAt,
+                      "independent title and schedule changes survive on the same task")
+            try check(combinedSecond.notes == "Mac note" && combinedSecond.priority == 2,
+                      "independent note and priority changes survive on the same task")
+            try check(try bytes(merge(local: right, cloud: left, base: original)) == bytes(combined),
+                      "field merge and its modification metadata converge in both directions")
+            try check(try bytes(merge(local: combined, cloud: combined, base: original)) == bytes(combined),
+                      "field merge retry preserves records and modification metadata")
             let key = SyncChanges.key("task", first.id)
-            var tied = right; tied.syncChanges![key]!.date = left.syncChanges![key]!.date
-            try rejects("same-millisecond divergent edits require review") { _ = try merge(local: left, cloud: tied, base: original) }
-            var legacy = right; legacy.syncChanges = nil
-            try rejects("legacy edits without modification times are not guessed from task schedule") { _ = try merge(local: left, cloud: legacy, base: original) }
-            var stale = right; stale.tasks[0].notes = "Changed without updating its stamp"
-            try rejects("mismatched record fingerprint prevents a false latest winner") { _ = try merge(local: left, cloud: stale, base: original) }
-            var skewed = right; skewed.syncChanges![key]!.date = Date().addingTimeInterval(3600)
-            try rejects("a future device clock requires review") { _ = try merge(local: left, cloud: skewed, base: original) }
+            try check(try combined.syncChanges?[key]?.fingerprint == SyncChanges.fingerprint(combinedFirst)
+                      && combined.syncChanges?[key]?.date == late,
+                      "a composed task retains a matching fingerprint with a deterministic existing timestamp")
+            var untrackedLeft = left, untrackedRight = right
+            untrackedLeft.syncChanges = nil; untrackedRight.syncChanges = nil
+            try check(try merge(local: untrackedLeft, cloud: untrackedRight, base: original).syncChanges == nil,
+                      "legacy field merges do not manufacture wall-clock timestamps")
+
+            var competing = right
+            competing.tasks[0].title = "Phone title"; competing.tasks[0].notes = "Independent phone note"
+            competing = try tracked(competing, from: original, at: early)
+            for stamp in [early, late, Date(timeIntervalSince1970: -1000), Date().addingTimeInterval(3600)] {
+                var timed = competing; timed.syncChanges![key]!.date = stamp
+                for reverse in [false, true] {
+                    try requiresReview("same-field edits require review regardless of clock or merge direction") {
+                        _ = try merge(local: reverse ? timed : left, cloud: reverse ? left : timed, base: original)
+                    }
+                }
+            }
+            var legacy = competing; legacy.syncChanges = nil
+            try requiresReview("missing modification times never select a conflicting field") { _ = try merge(local: left, cloud: legacy, base: original) }
+            var stale = competing; stale.tasks[0].notes = "Changed without updating its stamp"
+            try requiresReview("stale modification fingerprints never select a conflicting field") { _ = try merge(local: left, cloud: stale, base: original) }
+            for choice in [Choice.local, .cloud] {
+                let resolved = try merge(local: left, cloud: competing, base: original, choice: choice)
+                let task = resolved.tasks.first { $0.id == first.id }!
+                try check(task.title == (choice == .local ? "Mac title" : "Phone title")
+                          && task.notes == "Independent phone note" && task.scheduledAt == competing.tasks[0].scheduledAt,
+                          "manual field choice retains the other device's independent changes")
+                try check(try resolved.syncChanges?[key]?.fingerprint == SyncChanges.fingerprint(task),
+                          "manual field resolution records the combined contents")
+            }
+            try requiresReview("independent-looking edits without a shared baseline still require review") {
+                _ = try merge(local: left, cloud: right, base: nil)
+            }
+            var rescheduled = original, reminderEdit = original
+            rescheduled.tasks[0].scheduledAt = first.scheduledAt!.addingTimeInterval(86400)
+            reminderEdit.tasks[0].reminderAt = first.scheduledAt!.addingTimeInterval(-600)
+            reminderEdit.tasks[0].reminderKind = ReminderPreset.tenMinutes.rawValue
+            try requiresReview("schedule and reminder changes remain one dependent group") {
+                _ = try merge(local: rescheduled, cloud: reminderEdit, base: original)
+            }
+            var subtasksLeft = original, subtasksRight = original
+            let step = Subtask(title: "Original step")
+            var subtasksBase = original; subtasksBase.tasks[0].subtasks = [step]
+            subtasksLeft = subtasksBase; subtasksRight = subtasksBase
+            subtasksLeft.tasks[0].subtasks[0].title = "Renamed step"
+            subtasksRight.tasks[0].subtasks[0].isDone = true
+            try requiresReview("concurrent subtask changes remain an explicit array-level conflict") {
+                _ = try merge(local: subtasksLeft, cloud: subtasksRight, base: subtasksBase)
+            }
             var removed = original; removed.tasks.removeFirst()
             removed = try tracked(removed, from: original, at: late.addingTimeInterval(60))
-            let deletion = try merge(local: left, cloud: removed, base: original)
-            try check(!deletion.tasks.contains { $0.id == first.id } && deletion.syncChanges?[key]?.fingerprint == nil, "newer permanent deletion retains its tombstone")
+            for reverse in [false, true] {
+                try requiresReview("permanent deletion versus an edited task requires review") {
+                    _ = try merge(local: reverse ? removed : left, cloud: reverse ? left : removed, base: original)
+                }
+            }
+            let deletion = try merge(local: original, cloud: removed, base: original)
+            try check(!deletion.tasks.contains { $0.id == first.id } && deletion.syncChanges?[key] != nil
+                      && deletion.syncChanges?[key]?.fingerprint == nil, "one-sided deletion retains its tombstone")
             let restored = try merge(local: left, cloud: removed, base: original, choice: .local)
-            try check(restored.syncChanges?[key]?.fingerprint == left.syncChanges?[key]?.fingerprint, "manual restoration carries the selected record's matching stamp")
+            try check(restored.syncChanges?[key]?.fingerprint == left.syncChanges?[key]?.fingerprint,
+                      "manual restoration carries the selected record's matching stamp")
+            var softDeleted = original; softDeleted.tasks[0].deletedAt = late
+            for reverse in [false, true] {
+                try requiresReview("moving to Recently deleted cannot silently hide the other device's edit") {
+                    _ = try merge(local: reverse ? softDeleted : left, cloud: reverse ? left : softDeleted, base: original)
+                }
+            }
+            let keepLive = try merge(local: left, cloud: softDeleted, base: original, choice: .local)
+            try check(try SyncChanges.fingerprint(keepLive.tasks.first { $0.id == first.id }!) == SyncChanges.fingerprint(left.tasks[0]),
+                      "manual deletion review retains the chosen whole task")
             var singleLeft = left, singleRemoved = removed
             singleLeft.tasks.removeAll { $0.id != first.id }; singleRemoved.tasks = []
-            try check(try merge(local: singleRemoved, cloud: singleLeft, base: nil).tasks.isEmpty, "a newer tombstone prevents resurrection even without a shared baseline")
-            try check(try merge(local: singleLeft, cloud: singleRemoved, base: nil).tasks.isEmpty, "first-sync deletion converges in either device direction")
+            for stamp in [early, late.addingTimeInterval(60)] {
+                var tombstone = singleRemoved; tombstone.syncChanges![key]!.date = stamp
+                for reverse in [false, true] {
+                    let a = reverse ? singleLeft : tombstone, b = reverse ? tombstone : singleLeft
+                    try requiresReview("first-sync deletion needs review even with two timestamps") { _ = try merge(local: a, cloud: b, base: nil) }
+                    let retained = try merge(local: a, cloud: b, base: nil, choice: reverse ? .local : .cloud)
+                    let deleted = try merge(local: a, cloud: b, base: nil, choice: reverse ? .cloud : .local)
+                    try check(try bytes(TaskBackup(lists: [], tasks: retained.tasks)) == bytes(TaskBackup(lists: [], tasks: singleLeft.tasks))
+                              && deleted.tasks.isEmpty, "explicit first-sync choice can retain either the live task or deletion")
+                }
+            }
             var untrackedRow = singleLeft; untrackedRow.syncChanges = nil
-            try rejects("a first-sync tombstone versus an untracked old row requires review") { _ = try merge(local: singleRemoved, cloud: untrackedRow, base: nil) }
-            try rejects("a cloud tombstone cannot silently resurrect an untracked local row") { _ = try merge(local: untrackedRow, cloud: singleRemoved, base: nil) }
-            var equalDeletion = singleRemoved; equalDeletion.syncChanges![key]!.date = singleLeft.syncChanges![key]!.date
-            try rejects("equal-time deletion and edit cannot be inferred from an empty baseline") { _ = try merge(local: singleLeft, cloud: equalDeletion, base: nil) }
+            try requiresReview("a first-sync tombstone versus an untracked old row requires review") { _ = try merge(local: singleRemoved, cloud: untrackedRow, base: nil) }
+            try requiresReview("a cloud tombstone cannot silently resurrect an untracked local row") { _ = try merge(local: untrackedRow, cloud: singleRemoved, base: nil) }
             var revisions = left.syncChanges!
-            SyncChanges.record([key: try SyncChanges.fingerprint(right.tasks[0])], in: &revisions, now: early)
+            SyncChanges.record([key: try SyncChanges.fingerprint(competing.tasks[0])], in: &revisions, now: early)
             try check(revisions[key]!.date > left.syncChanges![key]!.date, "a backwards local clock cannot make the next saved edit older")
         }
         let report = (1...500).map { "Task \($0)\nLocal: open\nCloud: complete" }.joined(separator: "\n\n——\n\n")
@@ -162,7 +245,31 @@ extension CloudMerge {
             left = try tracked(left, from: original, at: Date(timeIntervalSince1970: 1000))
             right = try tracked(right, from: original, at: Date(timeIntervalSince1970: 1100))
             let posted = try merge(local: left, cloud: right, base: original)
-            try check(posted.finance!.entries.count == 1 && posted.finance!.balance(account.id) == account.opening - 35, "latest posting updates one entry and its computed balance exactly once")
+            try check(posted.finance!.entries.count == 1 && posted.finance!.entries[0].title == "Earlier note"
+                      && posted.finance!.balance(account.id) == account.opening - 35,
+                      "independent entry text and amount both survive with one computed posting")
+            try check(try bytes(merge(local: right, cloud: left, base: original)) == bytes(posted),
+                      "entry field merge converges in both directions")
+            let entryKey = SyncChanges.key("entry", expense.id)
+            try check(try posted.syncChanges?[entryKey]?.fingerprint == SyncChanges.fingerprint(posted.finance!.entries[0]),
+                      "a composed entry retains a matching revision fingerprint")
+            var competingAmount = left
+            competingAmount.finance!.entries[0].amount = 30; competingAmount.finance!.entries[0].accountAmount = 30
+            competingAmount = try tracked(competingAmount, from: original, at: Date(timeIntervalSince1970: 1200))
+            try requiresReview("different concurrent amounts require review despite modification times") {
+                _ = try merge(local: competingAmount, cloud: right, base: original)
+            }
+            let selectedAmount = try merge(local: competingAmount, cloud: right, base: original, choice: .cloud)
+            try check(selectedAmount.finance!.entries[0].title == "Earlier note"
+                      && selectedAmount.finance!.balance(account.id) == account.opening - 35,
+                      "manual amount choice retains an independent entry title")
+            var deletedEntry = original
+            deletedEntry.finance!.entries[0].deletedAt = Date(timeIntervalSince1970: 1200)
+            for reverse in [false, true] {
+                try requiresReview("entry deletion versus text edit requires whole-entry review") {
+                    _ = try merge(local: reverse ? deletedEntry : left, cloud: reverse ? left : deletedEntry, base: original)
+                }
+            }
             var currencyEdit = original; currencyEdit.finance!.baseCurrency = "AUD"
             currencyEdit = try tracked(currencyEdit, from: original, at: Date(timeIntervalSince1970: 1200))
             try rejects("timestamps do not bypass atomic base-currency and posting review") { _ = try merge(local: left, cloud: currencyEdit, base: original) }
@@ -175,7 +282,11 @@ extension CloudMerge {
             right = try tracked(right, from: original, at: Date(timeIntervalSince1970: 1400))
             let confirmed = try merge(local: left, cloud: right, base: original)
             try check(confirmed.finance!.entries.count == 1 && confirmed.finance!.entries[0].id == pending.id && !confirmed.finance!.entries[0].isPending,
-                      "newer pending confirmation preserves one entry with the original ID")
+                      "pending confirmation preserves one entry with the original ID")
+            try check(confirmed.finance!.entries[0].notes == "Earlier pending edit",
+                      "pending confirmation retains the other device's independent note")
+            try check(try bytes(merge(local: right, cloud: left, base: original)) == bytes(confirmed),
+                      "pending confirmation and note merge converge in both directions")
             try check(confirmed.finance!.balance(account.id) == account.opening - expense.amount,
                       "pending confirmation enters the balance exactly once after sync")
             try check(try bytes(merge(local: confirmed, cloud: confirmed, base: original)) == bytes(confirmed),
@@ -360,6 +471,12 @@ extension CloudMerge {
         try check(try merge(local: fresh, cloud: customized, base: nil).lists[0].name == "My renamed work", "fresh device accepts a renamed cloud default")
         var english = fresh; english.lists[0].name = "Work"
         try check(try merge(local: english, cloud: fresh, base: nil).lists[0].name == "工作", "default list localization does not conflict")
+        let returnedToDefault = try tracked(fresh, from: customized, at: Date(timeIntervalSince1970: 2500))
+        for reverse in [false, true] {
+            try requiresReview("a tracked list restored to its default appearance is not an unused first-sync seed") {
+                _ = try merge(local: reverse ? customized : returnedToDefault, cloud: reverse ? returnedToDefault : customized, base: nil)
+            }
+        }
         try check(try merge(local: fresh, cloud: empty, base: nil).lists.isEmpty, "fresh device cannot resurrect deleted cloud defaults")
         try check(try merge(local: fresh, cloud: empty, base: nil, cloudExists: false).lists.count == 1, "first upload retains defaults when no cloud record exists")
         try check(try merge(local: customized, cloud: fresh, base: nil).lists[0].name == "My renamed work", "customized local default wins over unused remote seed")
@@ -386,6 +503,30 @@ extension CloudMerge {
         try check(try merge(local: initialLedger, cloud: empty, base: nil, cloudExists: false).finance != nil, "first cloud upload retains the initial ledger")
         var editedLedger = initialLedger; editedLedger.finance!.books[0].name = "Household"
         try check(try merge(local: initialLedger, cloud: editedLedger, base: nil).finance!.books[0].name == "Household", "fresh ledger accepts customized cloud book")
+        do {
+            var lastEntry = MoneyEntry()
+            lastEntry.title = "Last entry before deletion"; lastEntry.amount = 12; lastEntry.baseAmount = 12
+            lastEntry.bookID = initialLedger.finance!.books[0].id
+            var occupied = initialLedger; occupied.finance!.entries = [lastEntry]
+            let retained = try tracked(occupied, from: initialLedger, at: Date(timeIntervalSince1970: 2600))
+            let deleted = try tracked(initialLedger, from: retained, at: Date(timeIntervalSince1970: 2700))
+            let key = SyncChanges.key("entry", lastEntry.id)
+            try check(deleted.finance == initialLedger.finance && deleted.syncChanges?[key] != nil
+                      && deleted.syncChanges?[key]?.fingerprint == nil,
+                      "deleting the last entry leaves initial-shaped finance with an explicit tombstone")
+            for reverse in [false, true] {
+                let a = reverse ? retained : deleted, b = reverse ? deleted : retained
+                try requiresReview("initial-shaped finance must not bypass first-sync deletion review") {
+                    _ = try merge(local: a, cloud: b, base: nil)
+                }
+                let keepDeletion = try merge(local: a, cloud: b, base: nil, choice: reverse ? .cloud : .local)
+                let keepEntry = try merge(local: a, cloud: b, base: nil, choice: reverse ? .local : .cloud)
+                try check(keepDeletion.finance!.entries.isEmpty && keepDeletion.syncChanges?[key] != nil
+                          && keepDeletion.syncChanges?[key]?.fingerprint == nil
+                          && keepEntry.finance!.entries.count == 1 && keepEntry.finance!.entries[0].id == lastEntry.id,
+                          "manual first-sync choice keeps the selected deletion or sole entry without resurrecting it")
+            }
+        }
 
         // Reproduce real offline completion on separate temporary stores, with different completion days.
         let day = Dates.calendar.startOfDay(for: Date(timeIntervalSince1970: 1_790_553_600))
@@ -404,9 +545,48 @@ extension CloudMerge {
         try check(taskA.nextOccurrenceID != taskB.nextOccurrenceID, "fixture has divergent successors from actual offline completions")
         let trackedLeft = try tracked(left, from: repeatBase, at: Date(timeIntervalSince1970: 2000))
         let trackedRight = try tracked(right, from: repeatBase, at: Date(timeIntervalSince1970: 2100))
-        let newestChain = try merge(local: trackedLeft, cloud: trackedRight, base: repeatBase)
-        try check(try bytes(newestChain) == bytes(trackedRight), "newer offline repeat completion keeps its entire successor chain")
-        try check(newestChain.tasks.filter { !$0.isDone }.count == 1, "automatic repeat resolution never forks the series")
+        for reverse in [false, true] {
+            try requiresReview("timestamps cannot automatically choose a divergent successor chain") {
+                _ = try merge(local: reverse ? trackedRight : trackedLeft, cloud: reverse ? trackedLeft : trackedRight, base: repeatBase)
+            }
+        }
+        let manuallySelectedChain = try merge(local: trackedLeft, cloud: trackedRight, base: repeatBase, choice: .cloud)
+        try check(manuallySelectedChain.tasks == (try merge(local: right, cloud: right, base: repeatBase)).tasks
+                  && manuallySelectedChain.tasks.filter { !$0.isDone }.count == 1,
+                  "explicit recurrence choice keeps one complete successor chain")
+        do {
+            var occurrenceLeft = left, occurrenceRight = left
+            let parent = occurrenceLeft.tasks.firstIndex { $0.id == recurring.id }!
+            let successor = occurrenceRight.tasks.firstIndex { $0.id == taskA.nextOccurrenceID }!
+            occurrenceLeft.tasks[parent].title = "Edited previous occurrence"
+            occurrenceRight.tasks[successor].notes = "Edited next occurrence"
+            occurrenceLeft = try tracked(occurrenceLeft, from: left, at: Date(timeIntervalSince1970: 2200))
+            occurrenceRight = try tracked(occurrenceRight, from: left, at: Date(timeIntervalSince1970: 2300))
+            let sharedChain = try merge(local: occurrenceLeft, cloud: occurrenceRight, base: left)
+            try check(sharedChain.tasks.first { $0.id == recurring.id }?.title == "Edited previous occurrence"
+                      && sharedChain.tasks.first { $0.id == taskA.nextOccurrenceID }?.notes == "Edited next occurrence",
+                      "independent edits to existing occurrences survive within one unchanged chain")
+            try check(try bytes(merge(local: occurrenceRight, cloud: occurrenceLeft, base: left)) == bytes(sharedChain),
+                      "existing-occurrence merge converges in both directions")
+            try check(try bytes(merge(local: sharedChain, cloud: sharedChain, base: left)) == bytes(sharedChain),
+                      "existing-occurrence merge retry is idempotent")
+            var laterParent = left, earlierSuccessor = left
+            let parentDate = left.tasks[parent].scheduledAt!
+            let interval = left.tasks[successor].scheduledAt!.timeIntervalSince(parentDate)
+            laterParent.tasks[parent].scheduledAt = parentDate.addingTimeInterval(interval * 0.75)
+            earlierSuccessor.tasks[successor].scheduledAt = parentDate.addingTimeInterval(interval * 0.25)
+            for reverse in [false, true] {
+                try requiresReview("separate occurrence reschedules cannot compose a backwards repeat chain") {
+                    _ = try merge(local: reverse ? earlierSuccessor : laterParent,
+                                  cloud: reverse ? laterParent : earlierSuccessor, base: left)
+                }
+            }
+            var moved = occurrenceRight
+            moved.tasks[successor].nextOccurrenceID = UUID()
+            try requiresReview("chain topology changes are not mixed with independent occurrence edits") {
+                _ = try merge(local: occurrenceLeft, cloud: moved, base: left)
+            }
+        }
         try rejects("divergent recurrence requires whole-series choice") { _ = try merge(local: left, cloud: right, base: repeatBase) }
         for choice in [Choice.local, .cloud] {
             let resolved = try merge(local: left, cloud: right, base: repeatBase, choice: choice)
@@ -437,9 +617,12 @@ extension CloudMerge {
         var inFlightLocal = empty; inFlightLocal.tasks = [usedTask]
         inFlightLocal.lists = fresh.lists
         var cloudUpdate = inFlightLocal; cloudUpdate.tasks.append(independent)
+        cloudUpdate.tasks[0].title = "Remote title received during upload"
         var newerLocal = inFlightLocal; newerLocal.tasks[0].notes = "Typed while upload was running"
         let rebased = try merge(local: newerLocal, cloud: cloudUpdate, base: inFlightLocal)
-        try check(rebased.tasks.contains { $0.notes == "Typed while upload was running" } && rebased.tasks.contains { $0.id == independent.id }, "in-flight local edit and independent cloud addition both survive")
+        try check(rebased.tasks.contains { $0.id == usedTask.id && $0.notes == "Typed while upload was running"
+                      && $0.title == "Remote title received during upload" } && rebased.tasks.contains { $0.id == independent.id },
+                  "in-flight local note, remote title on the same task and independent addition all survive")
         var multiLeft = fresh, multiRight = fresh
         multiLeft.lists[0].name = "Mac list"; multiRight.lists[0].name = "Phone list"
         multiLeft.tasks = [.init(TaskItem(title: "Same task"))]; multiRight.tasks = multiLeft.tasks
@@ -476,7 +659,8 @@ extension CloudMerge {
         let refreshed = try merge(local: currentSnapshot, cloud: cloudUpdate, base: inFlightLocal)
         try check(try commit(refreshed, changed: true, baseline: workerBytes, state: raceState,
                              revision: Store.revision, in: raceStore.mainContext), "fresh rebase commits after retry")
-        try check(liveTask.notes == "Saved after worker captured its input" && raceState.baseline == workerBytes &&
+        try check(liveTask.notes == "Saved after worker captured its input" && liveTask.title == "Remote title received during upload"
+                  && raceState.baseline == workerBytes &&
                   (try raceStore.mainContext.fetchCount(FetchDescriptor<TaskItem>())) == 2, "successful retry preserves new local edit, remote task and uploaded baseline")
 
         print("SYNC PASS: \(count) merge and storage checks")

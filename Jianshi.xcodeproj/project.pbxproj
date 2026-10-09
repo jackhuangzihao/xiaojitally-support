@@ -100,6 +100,7 @@
 		32CCA85C74E9A02182448A14 /* FinanceStatisticsCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 278C9DF6A8E7D6BEA4D42C85 /* FinanceStatisticsCharts.swift */; };
 		A269E543FF2E6342B9EC07C2 /* FinanceStatisticsRanking.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3C335AA3657DAF6A938A395 /* FinanceStatisticsRanking.swift */; };
 		66380285BEC77DB4D1EFB516 /* CloudMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D764A9DF4389638A6F25F73C /* CloudMerge.swift */; };
+		FE315486890077061A20316B /* CloudRecordMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBA6024415EE8043E151D66B /* CloudRecordMerge.swift */; };
 		89D3B66B241D919F263D772B /* CloudSyncSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */; };
 		4AD3CCE31A4450FEFAC413C0 /* CalendarChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F152FB33F53E0AE69B6B588 /* CalendarChecks.swift */; };
 		14B146919FD9C6EE8B079F01 /* CalendarDragChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8725C0A890E6720183086FE3 /* CalendarDragChecks.swift */; };
@@ -206,6 +207,7 @@
 		278C9DF6A8E7D6BEA4D42C85 /* FinanceStatisticsCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceStatisticsCharts.swift"; sourceTree = "<group>"; };
 		E3C335AA3657DAF6A938A395 /* FinanceStatisticsRanking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceStatisticsRanking.swift"; sourceTree = "<group>"; };
 		D764A9DF4389638A6F25F73C /* CloudMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudMerge.swift"; sourceTree = "<group>"; };
+		FBA6024415EE8043E151D66B /* CloudRecordMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudRecordMerge.swift"; sourceTree = "<group>"; };
 		F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudSyncSettings.swift"; sourceTree = "<group>"; };
 		7F152FB33F53E0AE69B6B588 /* CalendarChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarChecks.swift"; sourceTree = "<group>"; };
 		8725C0A890E6720183086FE3 /* CalendarDragChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarDragChecks.swift"; sourceTree = "<group>"; };
@@ -441,6 +443,7 @@
 			isa = PBXGroup;
 			children = (
 				D764A9DF4389638A6F25F73C /* CloudMerge.swift */,
+				FBA6024415EE8043E151D66B /* CloudRecordMerge.swift */,
 				EBFC656CEDD94E3B720F20C3 /* CloudSync.swift */,
 				F57569A86B39D11D6A379632 /* CloudSyncSettings.swift */,
 				C5F1D85FC27BE5FEC9B39282 /* SyncChanges.swift */,
@@ -648,6 +651,7 @@
 				32CCA85C74E9A02182448A14 /* FinanceStatisticsCharts.swift in Sources */,
 				A269E543FF2E6342B9EC07C2 /* FinanceStatisticsRanking.swift in Sources */,
 				66380285BEC77DB4D1EFB516 /* CloudMerge.swift in Sources */,
+				FE315486890077061A20316B /* CloudRecordMerge.swift in Sources */,
 				89D3B66B241D919F263D772B /* CloudSyncSettings.swift in Sources */,
 				4AD3CCE31A4450FEFAC413C0 /* CalendarChecks.swift in Sources */,
 				14B146919FD9C6EE8B079F01 /* CalendarDragChecks.swift in Sources */,

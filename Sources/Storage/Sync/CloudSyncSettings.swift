@@ -38,7 +38,7 @@ struct CloudSyncSettings: View {
             Text(sync.summary).font(.callout)
                 .foregroundStyle(sync.conflict ? Color.orange : .primary)
             if sync.enabled && sync.conflict {
-                Text(L("这些修改缺少可靠的先后时间，或涉及关联账目，无法自动选择。请核对一次要保留的版本；本机数据仍可使用。", "These changes have no reliable modification order or affect related financial records. Review which version to keep. Your local data remains available."))
+                Text(L("两端修改了相同内容，或存在删除、重复任务及关联账目的冲突。请核对要保留的版本；本机数据仍可使用。", "Both devices changed the same content, or their changes conflict over deletions, repeating tasks or related financial records. Review which version to keep. Your local data remains available."))
                     .font(.callout)
                 Button(L("核对并处理冲突…", "Review and resolve conflicts…")) { resolve = true }
                     .disabled(sync.running)
@@ -52,7 +52,7 @@ struct CloudSyncSettings: View {
                         }, cancel: { resolve = false })
                     }
             }
-            Text(L("同一项目自动保留较新的修改，无法安全判断时请你核对。使用同一 Apple 账户，打开 App 后同步；离线仍可编辑。", "The latest change to each item is kept automatically; only uncertain changes need review. Sync uses the same Apple Account while the app is open. Offline editing remains available."))
+            Text(L("互不冲突的修改自动合并；可能覆盖内容时请你核对。使用同一 Apple 账户，打开 App 后同步；离线仍可编辑。", "Independent changes merge automatically; changes that could overwrite content need review. Sync uses the same Apple Account while the app is open. Offline editing remains available."))
                 .font(.caption).foregroundStyle(.secondary)
             if let date = sync.lastSync { Text(L("上次完成：", "Last completed: ") + date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))).font(.caption).foregroundStyle(.secondary) }
             if !sync.detail.isEmpty && !sync.conflict { Text(sync.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -108,7 +108,7 @@ private struct SyncConflictReview: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    Text(L("下面的选择适用于本次列出的所有冲突。重复任务按整条序列选择；账户币种与关联流水一起选择；本位币冲突按整本账目选择。其他项目继续合并。合并前已保存双方恢复副本。", "Your choice applies to all listed conflicts. Repeating tasks are kept as a whole chain; account currencies stay with their related postings; base-currency conflicts affect the entire ledger. Other items are merged. Recovery copies of both sides are saved first."))
+                    Text(L("下面的选择适用于本次列出的所有冲突。重复任务分叉或结构变化时按整条序列选择；账户币种与关联流水一起选择；本位币冲突按整本账目选择。其他独立修改继续合并。合并前已保存双方恢复副本。", "Your choice applies to all listed conflicts. When repeating tasks branch or change structure, the whole chain is selected; account currencies stay with their related postings; base-currency conflicts affect the entire ledger. Other independent changes are merged. Recovery copies of both sides are saved first."))
                         .font(.callout).foregroundStyle(.secondary)
                     Divider()
                     ForEach(Array(sections.enumerated()), id: \.offset) { _, paragraph in
