@@ -19,6 +19,9 @@ struct MacWorkspaceSidebar: View {
     let dropList: (UUID, (list: UUID?, placement: ListTree.Placement)) -> Void
     let configureDrag: () -> Void
 
+    /// The list whose right-click menu is open.
+    @State private var menuTarget: UUID?
+
     private var selectedListID: UUID? {
         if case .list(let id) = selection { return id }
         return nil
@@ -35,7 +38,7 @@ struct MacWorkspaceSidebar: View {
                 Section {
                         // One custom stack, not one native row per list: native sidebar rows clip anything moved
                         // outside their own bounds, so rows making way for a drag simply vanished.
-                        SidebarListTree(nodes: ListNode.roots(lists), expanded: $expandedLists, drag: listDrag, selected: selectedListID) { node in
+                        SidebarListTree(nodes: ListNode.roots(lists), expanded: $expandedLists, drag: listDrag, selected: selectedListID, menuTarget: menuTarget) { node in
                             AnyView(
                                 ColoredListLabel(name: node.list.name, id: node.id, colorHex: node.list.colorHex, emoji: node.list.emoji, isGroup: node.children != nil)
                                     .modifier(SidebarListRow(list: node.list, isGroup: node.children != nil, drag: listDrag, select: { selection = .list(node.id); sidebarFocus.wrappedValue = true },
@@ -48,7 +51,9 @@ struct MacWorkspaceSidebar: View {
                                         .init(title: L("新建子清单", "New child list")) { createList(node.id) },
                                         .init(title: L("编辑清单", "Edit list")) { editList(node.list) },
                                         .init(title: L("删除清单", "Delete list"), destructive: true) { deleteList(node.list) }
-                                    ]))
+                                    ], menuShown: { shown in
+                                        if shown { menuTarget = node.id } else if menuTarget == node.id { menuTarget = nil }
+                                    }))
                             )
                         }
                 } header: {

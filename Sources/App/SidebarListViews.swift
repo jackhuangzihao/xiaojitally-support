@@ -48,12 +48,15 @@ struct SidebarRowMenu: NSViewRepresentable {
         let action: () -> Void
     }
     let items: [Item]
+    /// Told when the menu opens (true) and closes (false), so the row can show it is the one being acted on.
+    var menuShown: (Bool) -> Void = { _ in }
 
     func makeNSView(context: Context) -> MenuView { MenuView() }
-    func updateNSView(_ view: MenuView, context: Context) { view.items = items }
+    func updateNSView(_ view: MenuView, context: Context) { view.items = items; view.menuShown = menuShown }
 
-    final class MenuView: NSView {
+    final class MenuView: NSView, NSMenuDelegate {
         var items: [Item] = []
+        var menuShown: (Bool) -> Void = { _ in }
 
         override func hitTest(_ point: NSPoint) -> NSView? {
             guard let event = NSApp.currentEvent else { return nil }
@@ -67,6 +70,7 @@ struct SidebarRowMenu: NSViewRepresentable {
         }
         private func showMenu(for event: NSEvent) {
             let menu = NSMenu()
+            menu.delegate = self
             for item in items {
                 let entry = NSMenuItem(title: item.title, action: #selector(MenuAction.run), keyEquivalent: "")
                 let target = MenuAction(item.action)
@@ -78,6 +82,9 @@ struct SidebarRowMenu: NSViewRepresentable {
             }
             NSMenu.popUpContextMenu(menu, with: event, for: self)
         }
+        func menuWillOpen(_ menu: NSMenu) { menuShown(true) }
+        // Runs before the chosen item's action, so an editor opening from it no longer sees the outline.
+        func menuDidClose(_ menu: NSMenu) { menuShown(false) }
     }
 
     final class MenuAction: NSObject {
@@ -98,6 +105,8 @@ struct SidebarListTree: View {
     @Binding var expanded: Set<UUID>
     let drag: ListDrag
     let selected: UUID?
+    /// The list whose right-click menu is open; outlined like Finder so it's clear which list the menu acts on.
+    var menuTarget: UUID? = nil
     let row: (ListNode) -> AnyView
     private var entries: [SidebarListEntry] {
         func flatten(_ nodes: [ListNode], depth: Int) -> [SidebarListEntry] {
@@ -128,8 +137,15 @@ struct SidebarListTree: View {
                 .foregroundStyle(isSelected ? Color.selectedInk : Color.primary)
                 // Drawn like the native sidebar selection, a little wider than the text.
                 .background {
-                    if isSelected { RoundedRectangle(cornerRadius: 6).fill(Color.accentColor).padding(.horizontal, -8) }
-                    else if drag.isTarget(entry.id, .inside) {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 6).fill(Color.accentColor)
+                            .overlay { if menuTarget == entry.id { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.selectedInk.opacity(0.7), lineWidth: 1.5) } }
+                            .padding(.horizontal, -8)
+                    } else if menuTarget == entry.id {
+                        RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.12))
+                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor, lineWidth: 1.5))
+                            .padding(.horizontal, -8)
+                    } else if drag.isTarget(entry.id, .inside) {
                         // The list being dropped into stays fully visible: the lifted row moves out of its way.
                         RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.18))
                             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor, lineWidth: 1.5))
