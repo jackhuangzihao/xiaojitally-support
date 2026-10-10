@@ -12,11 +12,13 @@ struct CalendarPriorityMark: View {
     var isDone = false
     var body: some View {
         if priority > 0 {
+            // The same light tag as elsewhere: red text for high, orange for medium.
+            let tint: Color = isDone ? .secondary : priority == 2 ? .red : .orange
             Text(priority == 2 ? L("高", "H") : L("中", "M"))
-                .font(.system(size: 10, weight: .semibold))
-                .padding(.horizontal, 3).frame(height: 14)
-                .foregroundStyle(isDone ? Color.secondary : (priority == 2 ? Color.white : Color.primary))
-                .background(isDone ? Color.secondary.opacity(0.10) : (priority == 2 ? Color.red : Color.orange.opacity(0.22)), in: RoundedRectangle(cornerRadius: 3))
+                .font(.system(size: 10, weight: .bold))
+                .padding(.horizontal, 4).frame(height: 14)
+                .foregroundStyle(tint)
+                .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 4))
                 .fixedSize()
                 .accessibilityLabel(priority == 2 ? L("高优先级", "High priority") : L("中优先级", "Medium priority"))
         }

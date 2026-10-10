@@ -45,15 +45,26 @@ struct ListEditor: View {
             Form {
                 TextField(L("清单名称", "List name"), text: $name).onSubmit(save)
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack {
+                    HStack(spacing: 8) {
                         Text(L("清单图标", "List icon"))
-                        TextField("", text: $emoji, prompt: Text("🙂")).frame(width: 50).focused($emojiFocused)
+                        // The icon the list will show: the default list symbol in its colour, or the chosen emoji.
+                        Group {
+                            if emoji.isEmpty {
+                                Image(systemName: "list.bullet.rectangle").foregroundStyle(ListColor.color(list?.id, hex: colorHex))
+                            } else { Text(emoji) }
+                        }
+                        .font(.title3).frame(width: 32, height: 32)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Design.Radius.small))
+                        .accessibilityLabel(emoji.isEmpty ? L("默认图标", "Default icon") : emoji)
+                        Button { emoji = "" } label: {
+                            Label(L("默认", "Default"), systemImage: emoji.isEmpty ? "checkmark.circle.fill" : "circle")
+                        }.buttonStyle(.borderless)
+                        TextField("", text: $emoji, prompt: Text(L("输入表情", "Type emoji"))).frame(width: 80).focused($emojiFocused)
                             .accessibilityLabel(L("清单 emoji", "List emoji"))
                             .onChange(of: emoji) { _, value in if value.count > 1 { emoji = String(value.last!) } }
                         #if os(macOS)
                         Button(L("更多表情…", "More emoji…")) { emojiFocused = true; DispatchQueue.main.async { NSApp.orderFrontCharacterPalette(nil) } }
                         #endif
-                        if !emoji.isEmpty { Button(L("默认", "Default")) { emoji = "" } }
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
                         ForEach(["💼", "📚", "🏠", "💪", "💡", "🌱", "🎯", "🎨"], id: \.self) { icon in

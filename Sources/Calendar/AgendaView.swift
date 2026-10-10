@@ -168,8 +168,17 @@ extension ContentView {
                     }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel(L("查看范围", "View range"))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    Text(searchingCalendar ? L("搜索结果", "Search results") : selection == .calendar ? Dates.label(selectedDate, pattern: wholeMonth ? "M月安排" : "M月d日 EEEE") : title)
-                        .font(.title3.weight(.medium)).frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 10) {
+                        Text(searchingCalendar ? L("搜索结果", "Search results") : selection == .calendar ? Dates.label(selectedDate, pattern: wholeMonth ? "M月安排" : "M月d日 EEEE") : title)
+                            .font(.title3.weight(.medium))
+                        #if os(macOS)
+                        // A visible way to edit the open list; the sidebar's right-click menu is easy to miss.
+                        if case .list(let id) = selection, !searchingCalendar, let list = lists.first(where: { $0.id == id }) {
+                            Button { listEditor = ListRequest(list: list) } label: { Label(L("编辑清单", "Edit list"), systemImage: "pencil") }
+                                .buttonStyle(CardButtonStyle()).font(.caption)
+                        }
+                        #endif
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 HStack {
                     if selection != .calendar { filterMenu }

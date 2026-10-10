@@ -227,8 +227,8 @@ struct WeekCalendarView: View {
         } label: {
             VStack(spacing: 2) {
                 Text(Dates.label(day, pattern: "E")).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                Text("\(Dates.calendar.component(.day, from: day))").font(.callout.monospacedDigit().weight(selected || today ? .semibold : .regular))
-                    .foregroundStyle(today ? Color.selectedInk : selected ? Color.accentColor : Color.primary)
+                Text("\(Dates.calendar.component(.day, from: day))").font(.callout.monospacedDigit().weight(selected || today ? .bold : .regular))
+                    .foregroundStyle(today ? Color.selectedInk : selected ? Color.accentColor : Dates.calendar.isDateInWeekend(day) ? Color.secondary : Color.primary)
                     .frame(width: 28, height: 28)
                     .background(today ? Color.accentColor : .clear, in: Circle())
                     .overlay { if selected && !today { Circle().stroke(Color.accentColor, lineWidth: 1) } }
@@ -299,16 +299,18 @@ struct WeekCalendarView: View {
                         Text(CalendarGridStyle.clockLabel(minute)).font(isPhone ? .system(size: 9).monospacedDigit() : .caption2.monospacedDigit()).foregroundStyle(.secondary)
                             .frame(width: planGutter - 6, alignment: .trailing)
                             .opacity(todayIndex != nil && abs(nowMinute - minute) < 20 ? 0 : 1)
-                        Rectangle().fill(Color.secondary.opacity(0.18)).frame(height: 1)
+                        Rectangle().fill(Color.secondary.opacity(0.11)).frame(height: 1)
                     }.frame(height: CGFloat(60 * layout.scale), alignment: .top).id(minute)
                 }
             }.frame(width: width, height: CGFloat(layout.height), alignment: .topLeading)
             }.frame(width: width, height: CGFloat(layout.height), alignment: .topLeading)
             ZStack(alignment: .topLeading) {
             ForEach(days.indices, id: \.self) { index in
-                Rectangle().fill(index == todayIndex ? Color.accentColor.opacity(0.05) : Color.clear)
+                // Today faintly tinted, weekends faintly shaded, so the week reads at a glance.
+                Rectangle().fill(index == todayIndex ? Color.accentColor.opacity(0.07)
+                                 : Dates.calendar.isDateInWeekend(days[index]) ? Color.primary.opacity(0.025) : Color.clear)
                     .frame(width: column, height: CGFloat(layout.height))
-                    .overlay(alignment: .leading) { Rectangle().fill(Color.secondary.opacity(0.12)).frame(width: 1) }
+                    .overlay(alignment: .leading) { Rectangle().fill(Color.secondary.opacity(0.09)).frame(width: 1) }
                     .offset(x: planGutter + CGFloat(index) * column)
                     .allowsHitTesting(false)
             }
@@ -406,8 +408,8 @@ struct WeekCalendarView: View {
                     let y = CGFloat(layout.y(Double(minute)))
                     Rectangle().fill(Color.red.opacity(0.3)).frame(width: max(0, width - planGutter), height: 1)
                         .offset(x: planGutter, y: y - 0.5).accessibilityHidden(true)
-                    Rectangle().fill(Color.red).frame(width: column, height: 2)
-                        .offset(x: planGutter + CGFloat(todayIndex) * column, y: y - 1).accessibilityHidden(true)
+                    Rectangle().fill(Color.red).frame(width: column, height: 2.5)
+                        .offset(x: planGutter + CGFloat(todayIndex) * column, y: y - 1.25).accessibilityHidden(true)
                     Circle().fill(Color.red).frame(width: 7, height: 7)
                         .offset(x: planGutter + CGFloat(todayIndex) * column - 3.5, y: y - 3.5).accessibilityHidden(true)
                     Text(Dates.label(clock.date, pattern: "HH:mm"))
@@ -451,7 +453,7 @@ struct WeekCalendarView: View {
             .accessibilityAction { presentation.showTask(key) }
             .help(help)
             .contextMenu { details.copyMenu(task) }
-            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
             .modifier(WeekDragSource(task: task, color: CalendarGridStyle.color(task), grabOffset: { start in
                 weekDrag.pickupOffset(for: task, on: day, at: start)
@@ -462,7 +464,7 @@ struct WeekCalendarView: View {
         return Button { presentation.showTask(key) } label: { card }.buttonStyle(.plain)
             .accessibilityLabel(help)
             .modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
-            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .help(help)
             .modifier(CalendarTaskPopover(presentation: presentation, key: key) { details.task(task, presentation) })
             .modifier(WeekDragSource(task: task, color: CalendarGridStyle.color(task),

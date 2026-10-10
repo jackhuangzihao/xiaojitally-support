@@ -174,9 +174,15 @@ struct PlanHint: View {
     @Environment(WeekDrag.self) private var drag
 
     var body: some View {
-        Label(text, systemImage: drag.isDragging ? "hand.draw" : "info.circle")
+        // At rest the hint is an info icon with its text on hover; while dragging it spells out what happens next.
+        Group {
+            if drag.isDragging {
+                Label(text, systemImage: "hand.draw").lineLimit(1).truncationMode(.tail)
+            } else {
+                Image(systemName: "info.circle").help(text).accessibilityLabel(text)
+            }
+        }
             .font(.caption).foregroundStyle(.secondary)
-            .lineLimit(1).truncationMode(.tail)
             .animation(.easeOut(duration: 0.12), value: text)
     }
 

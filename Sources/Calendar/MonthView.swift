@@ -134,7 +134,7 @@ struct MonthCalendarView: View {
         return VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text("\(Dates.calendar.component(.day, from: day))").font(.caption.monospacedDigit().weight(today ? .bold : .medium))
-                    .foregroundStyle(today ? Color.selectedInk : inMonth ? Color.primary : Color.secondary)
+                    .foregroundStyle(today ? Color.selectedInk : inMonth && !Dates.calendar.isDateInWeekend(day) ? Color.primary : Color.secondary)
                     .frame(minWidth: 20, minHeight: 20)
                     .background(today ? Color.accentColor : .clear, in: Circle())
                 Spacer(minLength: 0)
@@ -147,7 +147,7 @@ struct MonthCalendarView: View {
             Spacer(minLength: 0)
         }.padding(3)
             .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
-            .background(selected ? Color.accentColor.opacity(0.08) : .clear)
+            .background(selected ? Color.accentColor.opacity(0.1) : today ? Color.accentColor.opacity(0.06) : .clear)
             .overlay { if data.locatedTask != nil && items.contains(where: { $0.id == data.locatedTask }) { RoundedRectangle(cornerRadius: 4).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .overlay(alignment: .top) { Rectangle().fill(Color.secondary.opacity(0.18)).frame(height: 1) }
             .opacity(inMonth ? 1 : 0.55)
@@ -173,17 +173,17 @@ struct MonthCalendarView: View {
         let prefix = ""
         #endif
         let chip = HStack(spacing: 3) {
-            RoundedRectangle(cornerRadius: 1).fill(color).frame(width: 2)
+            RoundedRectangle(cornerRadius: 1.5).fill(color.opacity(task.isDone ? 0.4 : 1)).frame(width: 3).padding(.vertical, 1)
             Text(prefix + (task.previewSourceID == nil ? "" : "↻ ") + task.title).font(.caption2.weight(task.priority == 2 && !task.isDone ? .bold : .regular)).lineLimit(1).strikethrough(task.isDone)
             Spacer(minLength: 0)
             CalendarPriorityMark(priority: task.priority, isDone: task.isDone)
         }.frame(height: height).frame(maxWidth: .infinity, alignment: .leading)
-            .background(color.opacity(task.isDone ? 0.05 : 0.14), in: RoundedRectangle(cornerRadius: 3))
+            .background(color.opacity(task.isDone ? 0.05 : 0.18), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
             .foregroundStyle(task.isDone ? Color.secondary : Color.primary)
         #if os(macOS)
         let key = CalendarGridStyle.detailID(task, day: day, allDay: true)
         chip.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil)).contentShape(Rectangle())
-            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 3).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .help([task.title, task.calendarList.map { ListTree.path($0, lists: data.lists) } ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
             .onTapGesture { presentation.showTask(key) }
             .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton)
@@ -193,7 +193,7 @@ struct MonthCalendarView: View {
             .modifier(WeekDragSource(task: task, color: color, grabOffset: { _ in 0 }, month: selectedDate, drop: monthDrop))
         #else
         chip.modifier(RepeatPreviewStyle(isPreview: task.previewSourceID != nil))
-            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 3).strokeBorder(Color.accentColor, lineWidth: 2) } }
+            .overlay { if data.locatedTask == task.id { RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2) } }
             .contentShape(Rectangle())
             .modifier(WeekDragSource(task: task, color: color, grabOffset: { _ in 0 }, month: selectedDate, drop: monthDrop))
         #endif
