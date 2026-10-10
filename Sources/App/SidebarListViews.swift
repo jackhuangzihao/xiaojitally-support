@@ -38,6 +38,55 @@ struct SidebarKeyboardNavigation: NSViewRepresentable {
     }
 }
 
+/// A right-click menu for one list row. The whole list tree sits inside a single native List row, so a SwiftUI
+/// contextMenu there belongs to that row: right-clicking highlighted every list and acted on the first one.
+/// This view answers right-clicks and Control-clicks for its own row only; every other click passes through.
+struct SidebarRowMenu: NSViewRepresentable {
+    struct Item {
+        let title: String
+        var destructive = false
+        let action: () -> Void
+    }
+    let items: [Item]
+
+    func makeNSView(context: Context) -> MenuView { MenuView() }
+    func updateNSView(_ view: MenuView, context: Context) { view.items = items }
+
+    final class MenuView: NSView {
+        var items: [Item] = []
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let event = NSApp.currentEvent else { return nil }
+            let secondary = event.type == .rightMouseDown || event.type == .rightMouseUp
+                || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
+            return secondary ? super.hitTest(point) : nil
+        }
+        override func rightMouseDown(with event: NSEvent) { showMenu(for: event) }
+        override func mouseDown(with event: NSEvent) {
+            if event.modifierFlags.contains(.control) { showMenu(for: event) } else { super.mouseDown(with: event) }
+        }
+        private func showMenu(for event: NSEvent) {
+            let menu = NSMenu()
+            for item in items {
+                let entry = NSMenuItem(title: item.title, action: #selector(MenuAction.run), keyEquivalent: "")
+                let target = MenuAction(item.action)
+                entry.target = target; entry.representedObject = target // the menu item keeps its target alive
+                if item.destructive {
+                    entry.attributedTitle = NSAttributedString(string: item.title, attributes: [.foregroundColor: NSColor.systemRed])
+                }
+                menu.addItem(entry)
+            }
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        }
+    }
+
+    final class MenuAction: NSObject {
+        private let action: () -> Void
+        init(_ action: @escaping () -> Void) { self.action = action }
+        @objc func run() { action() }
+    }
+}
+
 /// Flatten only visible rows so each row, including its disclosure arrow, can move independently.
 private struct SidebarListEntry: Identifiable {
     let node: ListNode

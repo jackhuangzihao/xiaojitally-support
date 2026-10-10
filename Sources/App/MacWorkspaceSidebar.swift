@@ -44,11 +44,11 @@ struct MacWorkspaceSidebar: View {
                                     .modifier(TaskDropHighlight(tint: ListColor.color(node.id, hex: node.list.colorHex),
                                         accepts: { id in tasks.contains { $0.id == id && $0.deletedAt == nil && $0.list?.id != node.id } },
                                         perform: { moveTask($0, node.id) }))
-                                    .contextMenu {
-                                        Button(L("新建子清单", "New child list")) { createList(node.id) }
-                                        Button(L("编辑清单", "Edit list")) { editList(node.list) }
-                                        Button(L("删除清单", "Delete list"), role: .destructive) { deleteList(node.list) }
-                                    }
+                                    .overlay(SidebarRowMenu(items: [
+                                        .init(title: L("新建子清单", "New child list")) { createList(node.id) },
+                                        .init(title: L("编辑清单", "Edit list")) { editList(node.list) },
+                                        .init(title: L("删除清单", "Delete list"), destructive: true) { deleteList(node.list) }
+                                    ]))
                             )
                         }
                 } header: {
