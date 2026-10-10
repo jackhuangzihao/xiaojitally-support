@@ -112,3 +112,39 @@ extension View {
     func cardSurface() -> some View { modifier(CardSurface()) }
     func tagStyle(_ tint: Color, weight: Font.Weight = .semibold) -> some View { modifier(TagStyle(tint: tint, weight: weight)) }
 }
+
+/// Buttons inside a card: tinted for the main actions, quiet grey for the rest, red text for a destructive role.
+struct CardButtonStyle: ButtonStyle {
+    var prominent = false
+    var minHeight: CGFloat = 0
+
+    func makeBody(configuration: Configuration) -> some View {
+        let destructive = configuration.role == .destructive
+        let tint: Color = destructive ? .red : prominent ? .accentColor : .primary
+        configuration.label
+            .font(.callout.weight(prominent || destructive ? .semibold : .medium))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 11).padding(.vertical, 4)
+            .frame(minHeight: minHeight)
+            .background((prominent ? Color.accentColor : Color.primary).opacity((prominent ? 0.13 : 0.06) + (configuration.isPressed ? 0.08 : 0)),
+                        in: RoundedRectangle(cornerRadius: Design.Radius.medium - 2, style: .continuous))
+            .contentShape(Rectangle())
+    }
+}
+
+/// "时间待定  1": a section title with its count in a small capsule.
+struct SectionCountHeader: View {
+    let title: String
+    let count: Int
+    var muted = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(muted ? Color.secondary : .primary)
+            Text("\(count)").font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
+                .padding(.horizontal, 7).padding(.vertical, 1)
+                .background(Color.primary.opacity(0.07), in: Capsule())
+        }
+        .accessibilityElement(children: .combine)
+    }
+}

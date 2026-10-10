@@ -153,13 +153,17 @@ extension ContentView {
                             Text(L("整月安排", "Whole month")).tag(true)
                         }
                     } label: {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 6) {
                             Text(Dates.label(selectedDate, pattern: wholeMonth ? "M月安排" : "M月d日 EEEE"))
+                                .font(isPhone ? .headline : .title2.weight(.semibold))
                                 .fixedSize(horizontal: false, vertical: true)
-                            Image(systemName: "chevron.down").font(.caption2)
+                            if !wholeMonth && Dates.sameDay(selectedDate, currentDay) {
+                                Text(L("今天", "Today")).tagStyle(.accentColor)
+                            }
+                            Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                        }.font(isPhone ? .subheadline.weight(.semibold) : .title3.weight(.medium)).foregroundStyle(Color.primary).frame(minHeight: 44)
-                    }.menuIndicator(.hidden).accessibilityLabel(L("查看范围", "View range"))
+                        }.foregroundStyle(Color.primary).frame(minHeight: 44)
+                    }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel(L("查看范围", "View range"))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     Text(searchingCalendar ? L("搜索结果", "Search results") : selection == .calendar ? Dates.label(selectedDate, pattern: wholeMonth ? "M月安排" : "M月d日 EEEE") : title)

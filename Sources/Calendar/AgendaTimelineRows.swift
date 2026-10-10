@@ -40,8 +40,8 @@ struct DayAgendaRows<Row: View>: View {
                                              gap: showDayFreeTime ? gaps[task.id] : nil, overlap: overlaps[task.id]))
             }
             if !pending.isEmpty {
-                Text(L("时间待定 · \(pending.count)", "Time to be set · \(pending.count)"))
-                    .font(.caption).foregroundStyle(.secondary).padding(.top, timed.isEmpty ? 0 : 10)
+                SectionCountHeader(title: L("时间待定", "Time to be set"), count: pending.count)
+                    .padding(.top, timed.isEmpty ? 0 : 10)
                 ForEach(pending) { task in row(task, DayAgendaRowLayout(timed: false)) }
             }
             if active.isEmpty {
@@ -62,8 +62,8 @@ struct DayAgendaRows<Row: View>: View {
                 DisclosureGroup(isExpanded: $dayCompletedExpanded) {
                     ForEach(completed) { task in row(task, DayAgendaRowLayout(timed: task.clockDate != nil)) }
                 } label: {
-                    Label(L("已完成 · \(completed.count)", "Completed · \(completed.count)"), systemImage: "checkmark.circle")
-                        .font(.subheadline).foregroundStyle(.secondary).frame(minHeight: 44)
+                    SectionCountHeader(title: L("已完成", "Completed"), count: completed.count, muted: true)
+                        .frame(minHeight: 44)
                 }.padding(.top, 6)
             }
             if !isPhone {

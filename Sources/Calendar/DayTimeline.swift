@@ -45,10 +45,14 @@ struct DayTimelineCard: View {
                             .font(.title3)
                             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                             .foregroundStyle(task.isDone ? Color.accentColor : .secondary)
+                            // A small bounce when a task is completed; none with Reduce Motion.
+                            .contentTransition(.symbolEffect(.replace))
+                            .symbolEffect(.bounce, value: reduceMotion ? false : task.isDone)
                             .frame(width: controlSize, height: controlSize)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .sensoryFeedback(trigger: task.isDone) { _, done in done ? .success : nil }
                     .accessibilityLabel((task.isDone ? L("恢复为未完成", "Mark incomplete") : L("完成", "Complete")) + "：" + task.title)
                 }
 
@@ -65,7 +69,7 @@ struct DayTimelineCard: View {
                                 .lineLimit(expanded || dynamicTypeSize.isAccessibilitySize ? nil : 3)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            CalendarPriorityMark(priority: task.priority, isDone: task.isDone)
+                            priorityTag
                             Image(systemName: "chevron.down")
                                 .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                                 .rotationEffect(.degrees(expanded ? 180 : 0))
@@ -76,24 +80,10 @@ struct DayTimelineCard: View {
                             Text(task.timeLabel).font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        if dynamicTypeSize.isAccessibilitySize {
-                            VStack(alignment: .leading, spacing: 4) { category; duration }
-                        } else {
-                            ViewThatFits(in: .horizontal) {
-                                HStack(spacing: 10) { category; duration }
-                                VStack(alignment: .leading, spacing: 4) { category; duration }
-                            }
-                        }
-                        if hasNotes || !task.subtasks.isEmpty || money != nil {
-                            Group {
-                                if dynamicTypeSize.isAccessibilitySize {
-                                    VStack(alignment: .leading, spacing: 4) { detailSummary }
-                                } else {
-                                    ViewThatFits(in: .horizontal) {
-                                        HStack(spacing: 10) { detailSummary }
-                                        VStack(alignment: .leading, spacing: 4) { detailSummary }
-                                    }
-                                }
+                        // List, duration, notes, subtasks and linked money on one wrapping line.
+                        if task.calendarList != nil || task.duration != nil || hasNotes || !task.subtasks.isEmpty || money != nil {
+                            FlowLayout(spacing: 6) {
+                                category; duration; detailSummary
                             }
                             .font(.caption).foregroundStyle(.secondary)
                         }
@@ -114,6 +104,7 @@ struct DayTimelineCard: View {
             } else if task.dueAt != nil || (!task.isDone && task.reminderAt != nil) {
                 TimelineView(.everyMinute) { clock in metadata(now: clock.date) }
                     .padding(.leading, compact ? 4 : controlSize + 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             // Only the revealed height changes during the animation. Text and subtasks
@@ -136,27 +127,28 @@ struct DayTimelineCard: View {
             .accessibilityHidden(!expanded)
         }
         .padding(compact ? 10 : 12)
-        .background {
-            RoundedRectangle(cornerRadius: 12).fill(Color.appBackground)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12).fill(tint.opacity(task.isDone ? 0.04 : 0.1))
-                }
-        }
+        // Every card shares one surface; the list's colour stays on the bar and the list tag.
+        .cardSurface()
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2).fill(task.isDone ? Color.secondary.opacity(0.5) : tint)
                 .frame(width: 3).padding(.vertical, 10).allowsHitTesting(false)
         }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.1))
-                .allowsHitTesting(false)
+    }
+
+    /// High and medium priority as the same small tags used everywhere else.
+    @ViewBuilder private var priorityTag: some View {
+        if task.priority > 0 {
+            Text(task.priority == 2 ? L("高", "High") : L("中", "Medium"))
+                .tagStyle(task.isDone ? .secondary : task.priority == 2 ? .red : .orange)
+                .fixedSize()
+                .accessibilityLabel(task.priority == 2 ? L("高优先级", "High priority") : L("中优先级", "Medium priority"))
         }
     }
 
     @ViewBuilder private var category: some View {
         if let list = task.calendarList {
             ColoredListLabel(name: list.name, id: list.id, colorHex: list.colorHex, emoji: list.emoji)
-                .font(.caption).foregroundStyle(task.isDone ? Color.secondary : tint)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                .tagStyle(task.isDone ? .secondary : tint, weight: .medium)
         }
     }
 
@@ -172,40 +164,36 @@ struct DayTimelineCard: View {
     @ViewBuilder private var detailSummary: some View {
         if let money {
             // Orange while something still waits to be posted, like the pending list in Finance.
-            Text(money.label(baseCurrency: moneyCurrency, hidden: hideMoney))
-                .font(.caption.weight(.semibold)).monospacedDigit()
-                .foregroundStyle(money.pendingCount > 0 ? Color.orange : Color.accentColor)
-                .padding(.horizontal, 6).padding(.vertical, 1)
-                .background((money.pendingCount > 0 ? Color.orange : Color.accentColor).opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+            Text(money.label(baseCurrency: moneyCurrency, hidden: hideMoney)).monospacedDigit()
+                .tagStyle(money.pendingCount > 0 ? .orange : .accentColor)
                 .help(money.detail(hidden: hideMoney))
                 .accessibilityLabel(L("关联账单：", "Linked entries: ") + money.label(baseCurrency: moneyCurrency, hidden: hideMoney))
         }
         if hasNotes { Label(L("备注", "Notes"), systemImage: "text.alignleft") }
         if !task.subtasks.isEmpty {
-            Label("\(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)", systemImage: "checklist")
+            Label(L("子任务 ", "Subtasks ") + "\(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)", systemImage: "checklist")
                 .accessibilityLabel(L("子任务已完成 \(task.subtasks.filter(\.isDone).count)，共 \(task.subtasks.count) 项", "\(task.subtasks.filter(\.isDone).count) of \(task.subtasks.count) subtasks complete"))
         }
     }
 
+    /// Things that need attention are tags; a plain reminder time or past deadline stays quiet text.
     private func metadata(now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        FlowLayout(spacing: 6) {
             if let warning = task.reminderWarning {
-                Label(warning, systemImage: "bell.badge").foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+                Label(warning, systemImage: "bell.badge").tagStyle(.orange)
             } else if let reminder = task.reminderAt, !task.isDone {
                 Label(Dates.label(reminder, pattern: "M月d日 HH:mm"), systemImage: "bell")
             }
             if let due = task.dueAt {
                 if let countdown = task.deadlineCountdown(now: now) {
                     Label(countdown.text(due: due, timed: task.dueHasTime), systemImage: "hourglass")
-                        .foregroundStyle(countdown.color)
+                        .tagStyle(countdown.color)
                 } else {
                     Label(L("截止 ", "Due ") + Dates.label(due, pattern: task.dueHasTime ? "M月d日 HH:mm" : "M月d日"), systemImage: "hourglass")
                 }
             }
         }
         .font(.caption).foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var details: some View {
@@ -254,58 +242,53 @@ struct DayTimelineCard: View {
                     }
                 }
             }
-            if onRestore == nil, task.reminderWarning != nil {
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 0) { reminderActions }
-                } else {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 16) { reminderActions }
-                        VStack(alignment: .leading, spacing: 0) { reminderActions }
+            // One row of buttons: reminder fixes first, then edit and copy, the destructive one last.
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 6) { primaryActions; destructiveAction }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { primaryActions; Spacer(minLength: 8); destructiveAction }
+                    VStack(alignment: .leading, spacing: 6) {
+                        FlowLayout(spacing: 8) { primaryActions }
+                        destructiveAction
                     }
                 }
             }
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 4) { taskActions }
-            } else {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 16) { taskActions }
-                    VStack(alignment: .leading, spacing: 4) { taskActions }
-                }
-            }
         }
-        .font(.callout).buttonStyle(.borderless)
+        .font(.callout)
     }
 
-    @ViewBuilder private var taskActions: some View {
+    private var buttonHeight: CGFloat {
+        #if os(iOS)
+        44
+        #else
+        0
+        #endif
+    }
+
+    @ViewBuilder private var primaryActions: some View {
         if let onRestore {
-            Button(action: onRestore) {
-                Label(L("恢复任务", "Restore task"), systemImage: "arrow.uturn.backward")
-                    .frame(minWidth: controlSize, minHeight: controlSize)
-            }
-            Button(role: .destructive, action: onDelete) {
-                Label(L("彻底删除", "Delete permanently"), systemImage: "trash")
-                    .frame(minWidth: controlSize, minHeight: controlSize)
-            }
+            Button(action: onRestore) { Label(L("恢复任务", "Restore task"), systemImage: "arrow.uturn.backward") }
+                .buttonStyle(CardButtonStyle(prominent: true, minHeight: buttonHeight))
         } else {
-            Button(action: onEdit) {
-                Label(L("编辑", "Edit"), systemImage: "pencil").frame(minWidth: controlSize, minHeight: controlSize)
+            if task.reminderWarning != nil {
+                Button(L("现在提醒", "Remind now"), action: onRemindNow)
+                    .buttonStyle(CardButtonStyle(prominent: true, minHeight: buttonHeight))
+                Button(L("调整时间", "Adjust time"), action: onEdit)
+                    .buttonStyle(CardButtonStyle(prominent: true, minHeight: buttonHeight))
             }
-            Button(action: onCopy) {
-                Label(L("复制", "Copy"), systemImage: "doc.on.doc").frame(minWidth: controlSize, minHeight: controlSize)
-            }
-            Button(role: .destructive, action: onDelete) {
-                Label(L("删除", "Delete"), systemImage: "trash").frame(minWidth: controlSize, minHeight: controlSize)
-            }
+            Button(action: onEdit) { Label(L("编辑", "Edit"), systemImage: "pencil") }
+                .buttonStyle(CardButtonStyle(minHeight: buttonHeight))
+            Button(action: onCopy) { Label(L("复制", "Copy"), systemImage: "doc.on.doc") }
+                .buttonStyle(CardButtonStyle(minHeight: buttonHeight))
         }
     }
 
-    @ViewBuilder private var reminderActions: some View {
-        Button(action: onRemindNow) {
-            Text(L("现在提醒", "Remind now")).frame(minWidth: controlSize, minHeight: controlSize)
+    private var destructiveAction: some View {
+        Button(role: .destructive, action: onDelete) {
+            Label(onRestore == nil ? L("删除", "Delete") : L("彻底删除", "Delete permanently"), systemImage: "trash")
         }
-        Button(action: onEdit) {
-            Text(L("调整时间", "Adjust time")).frame(minWidth: controlSize, minHeight: controlSize)
-        }
+        .buttonStyle(CardButtonStyle(minHeight: buttonHeight))
     }
 }
 

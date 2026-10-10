@@ -68,16 +68,26 @@ extension ContentView {
 
     func overdueSection(_ items: [TaskItem]) -> some View {
         DisclosureGroup(isExpanded: isPhone ? $phoneOverdueExpanded : $overdueExpanded) {
+            // The overdue tasks sit together in one card, like the pending entries in Finance.
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(showAllEarlier ? items : Array(items.prefix(3))) { task in overdueRow(task) }
-                if items.count > 3 {
-                    Button(showAllEarlier ? L("收起", "Show less") : L("查看其余 \(items.count - 3) 项", "Show \(items.count - 3) more")) { showAllEarlier.toggle() }
-                        .buttonStyle(.borderless).frame(minHeight: 44)
+                let shown = showAllEarlier ? items : Array(items.prefix(3))
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, task in
+                    if index > 0 { Divider().padding(.leading, 50) }
+                    overdueRow(task)
                 }
-            }.padding(.top, 4)
+                if items.count > 3 {
+                    Divider()
+                    Button(showAllEarlier ? L("收起", "Show less") : L("查看其余 \(items.count - 3) 项", "Show \(items.count - 3) more")) { showAllEarlier.toggle() }
+                        .buttonStyle(.borderless).frame(minHeight: 44).padding(.horizontal, Design.Spacing.m)
+                }
+            }
+            .padding(.trailing, Design.Spacing.s)
+            .cardSurface().padding(.top, 6)
         } label: {
-            Label(L("此前未完成 · \(items.count) 项", "Earlier unfinished · \(items.count)"), systemImage: "exclamationmark.circle")
-                .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                SectionCountHeader(title: L("此前未完成", "Earlier unfinished"), count: items.count)
+            }
         }
         .padding(.top, 12)
     }
@@ -125,7 +135,7 @@ extension ContentView {
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 7).contentShape(Rectangle())
             }.buttonStyle(.plain)
             Button(L("移到今天", "Move to today")) { requestMove(task, to: currentDay, kind: .day) }
-                .buttonStyle(.borderless).font(.caption).padding(.top, 9)
+                .buttonStyle(CardButtonStyle(prominent: true)).font(.caption).padding(.top, 8).fixedSize()
             }
             .modifier(TaskDragSource(task: task))
     }
@@ -138,11 +148,11 @@ extension ContentView {
             parts.append(countdown.text(due: due, timed: task.dueHasTime))
             return Text(parts.joined(separator: " · ")).foregroundStyle(countdown.color)
         }
-        if let day = task.calendarDate {
-            let days = Dates.calendar.dateComponents([.day], from: Dates.calendar.startOfDay(for: day), to: Dates.calendar.startOfDay(for: currentDay)).day ?? 0
-            parts.append(L("逾期 \(days) 天", "\(days) \(days == 1 ? "day" : "days") overdue"))
-        }
-        return Text(parts.joined(separator: " · ")).foregroundStyle(.secondary)
+        guard let day = task.calendarDate else { return Text(parts.joined(separator: " · ")).foregroundStyle(.secondary) }
+        let days = Dates.calendar.dateComponents([.day], from: Dates.calendar.startOfDay(for: day), to: Dates.calendar.startOfDay(for: currentDay)).day ?? 0
+        // How late it is stands out from where it was planned.
+        return Text(parts.map { $0 + " · " }.joined()).foregroundStyle(.secondary)
+            + Text(L("逾期 \(days) 天", "\(days) \(days == 1 ? "day" : "days") overdue")).foregroundStyle(.orange)
     }
 
     // MARK: Day timeline
