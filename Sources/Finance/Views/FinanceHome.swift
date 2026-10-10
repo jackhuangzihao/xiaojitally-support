@@ -274,7 +274,7 @@ struct FinanceHome: View {
             #if os(macOS)
             ToolbarItem(placement: .primaryAction) {
                 Button(action: newEntry) { Label(L("记一笔", "New entry"), systemImage: "plus") }
-                    .labelStyle(.titleAndIcon)
+                    .labelStyle(.titleAndIcon).buttonStyle(.borderedProminent)
                     .keyboardShortcut("n", modifiers: .command).disabled(loadingError != nil)
             }
             #endif

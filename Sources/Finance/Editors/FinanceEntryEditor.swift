@@ -155,14 +155,20 @@ struct FinanceEntryEditor: View {
                     }
                     // Any new income or expense can be saved as pending; repeat options appear under it.
                     if expected == nil && !confirmingPending && (draft.kind == .expense || draft.kind == .income) {
-                        MoneyPostingChoice(entry: $draft)
-                    } else if draft.isPending {
-                        Label(confirmingPending
-                              ? L("核对金额和日期后确认入账。", "Review the amount and date, then confirm the entry.")
-                              : L("待入账 · 尚未计入余额和统计", "Pending · Excluded from balances and totals"), systemImage: "clock")
-                            .font(.callout).foregroundStyle(.secondary)
+                        // The pending switch and the repeat choices it reveals share one card.
+                        VStack(alignment: .leading, spacing: 12) {
+                            MoneyPostingChoice(entry: $draft).toggleStyle(.switch)
+                            if canRepeat { Divider(); repeatSection }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(14).cardSurface()
+                    } else {
+                        if draft.isPending {
+                            Label(confirmingPending
+                                  ? L("核对金额和日期后确认入账。", "Review the amount and date, then confirm the entry.")
+                                  : L("待入账 · 尚未计入余额和统计", "Pending · Excluded from balances and totals"), systemImage: "clock")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        if canRepeat { repeatSection }
                     }
-                    if canRepeat { repeatSection }
                     if showMore { moreFields }
                     if let kindChangeBlock, expected?.kind == .expense {
                         Text(kindChangeBlock).font(.caption).foregroundStyle(.secondary)
@@ -462,7 +468,13 @@ struct FinanceEntryEditor: View {
                 }.buttonStyle(.borderless).frame(minWidth: 44, minHeight: 44)
                 #endif
                 if expected == nil && occurrence == nil && simpleKind && !compact && !repeating {
-                    Button(L("保存并继续", "Save + new")) { save(again: true) }
+                    Button { save(again: true) } label: {
+                        HStack(spacing: 6) {
+                            Text(L("保存并继续", "Save + new"))
+                            Text("⌘↩").foregroundStyle(.tertiary)
+                        }
+                    }
+                        .buttonStyle(CardButtonStyle())
                         .keyboardShortcut(.return, modifiers: .command)
                         .help(L("保存并继续下一笔（⌘↩）", "Save and start another (⌘↩)"))
                         .disabled(!loaded || gettingRates || draft.deletedAt != nil)
@@ -536,7 +548,7 @@ struct FinanceEntryEditor: View {
             } label: {
                 entryChipLabel(L("账户", "Account"), value: account?.name ?? L("不计入账户", "No account"), symbol: account?.iconSymbol ?? "wallet.pass", emoji: account?.emoji)
             }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: !compact, vertical: false)
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize(horizontal: !compact, vertical: false)
                 .help(L("从哪个账户扣款或入账", "Which account this uses"))
         }
     }
@@ -550,7 +562,7 @@ struct FinanceEntryEditor: View {
         } label: {
             entryChipLabel(L("账本", "Book"), value: ledger.book(draft.bookID)?.name ?? L("选择账本", "Choose a book"), symbol: ledger.book(draft.bookID)?.iconSymbol ?? "book.closed", emoji: ledger.book(draft.bookID)?.emoji)
         }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: !compact, vertical: false)
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize(horizontal: !compact, vertical: false)
             .disabled(draft.kind == .refund)
     }
     private var moreChip: some View {

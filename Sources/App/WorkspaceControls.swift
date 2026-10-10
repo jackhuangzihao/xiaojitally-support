@@ -10,10 +10,35 @@ struct AppSectionPicker: View {
     @AppStorage("appLanguage") private var language = "system"
     @Binding var finance: Bool
     var body: some View {
-        Picker(L("功能", "Workspace"), selection: $finance) {
-            Text(L("待办", "Tasks")).tag(false)
-            Text(L("财务", "Finance")).tag(true)
-        }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 14)
+        // A full-width switch with icons, so it reads as the top-level choice it is. The system segmented
+        // control keeps its own width and drops icons on macOS, so the two halves are drawn here.
+        HStack(spacing: 2) {
+            segment(L("待办", "Tasks"), symbol: "checklist", value: false)
+            segment(L("财务", "Finance"), symbol: "wallet.pass", value: true)
+        }
+        .padding(3)
+        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: Design.Radius.medium, style: .continuous))
+        .padding(.horizontal, 12)
+        .accessibilityElement(children: .contain).accessibilityLabel(L("功能", "Workspace"))
+    }
+
+    private func segment(_ title: String, symbol: String, value: Bool) -> some View {
+        let selected = finance == value
+        return Button { finance = value } label: {
+            Label(title, systemImage: symbol)
+                .font(.callout.weight(selected ? .semibold : .regular))
+                .foregroundStyle(selected ? Color.primary : .secondary)
+                .frame(maxWidth: .infinity, minHeight: 26)
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: Design.Radius.medium - 3, style: .continuous).fill(Color.cardBackground)
+                            .shadow(color: .black.opacity(0.12), radius: 1.5, y: 1)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
 

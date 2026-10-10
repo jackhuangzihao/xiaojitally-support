@@ -114,7 +114,9 @@ extension ContentView {
                 Button { showingSettings = true } label: { Label(L("设置", "Settings"), systemImage: "gearshape") }
             }
             ToolbarItem(placement: .primaryAction) {
-                Button(action: addTask) { Label(L("新建任务", "New task"), systemImage: "plus") }.keyboardShortcut("n", modifiers: .command)
+                Button(action: addTask) { Label(L("新建任务", "New task"), systemImage: "plus") }
+                    .labelStyle(.titleAndIcon).buttonStyle(.borderedProminent)
+                    .keyboardShortcut("n", modifiers: .command)
             }
             #endif
         }

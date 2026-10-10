@@ -24,17 +24,23 @@ struct FinanceEntryAmount<Focus: Hashable>: View {
     var choose: (MoneyEntrySuggestion) -> Void = { _ in }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(L("金额", "Amount")).foregroundStyle(.secondary)
+        // The amount leads the editor; the name shares its card, under a hairline.
+        VStack(alignment: .leading, spacing: 0) {
+            Text(kind.label + L("金额", " amount")).font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 10) {
                 Menu {
                     CurrencyChoices { currency = $0 }
-                } label: { Text(Money.symbol(currency)) }
-                    .menuStyle(.borderlessButton).fixedSize()
+                } label: {
+                    Text(Money.symbol(currency)).font(.headline)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: Design.Radius.medium - 2, style: .continuous))
+                }
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                     .disabled(kind == .refund || kind == .adjustment || kind == .transfer)
                     .help(L("币种", "Currency"))
                 TextField("0.00", text: $expression)
-                    .font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .font(.system(size: compact ? 34 : 40, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(kind == .income ? Color.green : .primary)
                     .textFieldStyle(.plain).focused(focus, equals: amountFocus)
                     .accessibilityLabel(L("金额，可输入加减算式", "Amount, addition and subtraction supported"))
                     #if os(iOS)
@@ -45,41 +51,42 @@ struct FinanceEntryAmount<Focus: Hashable>: View {
                 }
                 Spacer(minLength: 0)
                 Button(action: toggleCalculator) {
-                    Label(L("计算器", "Calculator"), systemImage: "plus.forwardslash.minus").font(.callout)
+                    Label(L("计算器", "Calculator"), systemImage: "plus.forwardslash.minus")
                 }
-                .buttonStyle(.bordered).tint(calculatorOn ? .accentColor : nil)
-                .frame(minHeight: compact ? 44 : nil)
+                .buttonStyle(CardButtonStyle(prominent: calculatorOn, minHeight: compact ? 44 : 0))
                 .accessibilityAddTraits(calculatorOn ? [.isSelected] : [])
                 .help(L("打开计算器键盘，可以输入加减算式", "Open the calculator keypad for addition and subtraction"))
             }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(L("名称", "Name")).font(.caption).foregroundStyle(.secondary)
-                TextField(nameHint ? L("输入名称，可套用以前记过的分类和账户", "Type a name to reuse an earlier category and account")
-                                   : L("可不填", "Optional"), text: $title)
-                    .textFieldStyle(.plain).focused(focus, equals: titleFocus).frame(minHeight: compact ? 44 : nil)
+            Divider().padding(.vertical, 10)
+            HStack(spacing: 8) {
+                Image(systemName: "pencil").foregroundStyle(.tertiary).accessibilityHidden(true)
+                TextField(nameHint ? L("名称：输入后可套用以前记过的分类和账户", "Name: type to reuse an earlier category and account")
+                                   : L("名称（可不填）", "Name (optional)"), text: $title)
+                    .textFieldStyle(.plain).focused(focus, equals: titleFocus).frame(minHeight: compact ? 44 : 22)
                     .accessibilityLabel(L("名称", "Name"))
-                if !suggestions.isEmpty {
-                    FlowLayout(spacing: 6) {
-                        ForEach(suggestions) { suggestion in
-                            let exact = MoneyTitleIndex.isExact(suggestion, title)
-                            Button { choose(suggestion) } label: {
-                                HStack(spacing: 4) {
-                                    Text(suggestion.title).lineLimit(1)
-                                    let extra = detail(suggestion)
-                                    if !extra.isEmpty { Text(extra).foregroundStyle(.secondary).lineLimit(1) }
-                                }
-                                .font(.caption).padding(.horizontal, 8).padding(.vertical, 4)
-                                .frame(minHeight: compact ? 44 : nil)
-                                .background(exact ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06), in: Capsule())
-                                .contentShape(Capsule())
-                            }.buttonStyle(.plain)
-                                .accessibilityLabel(L("用以前的“", "Use earlier “") + suggestion.title + L("”", "”"))
-                                .accessibilityHint(L("同时选上次用的分类和账户", "Also picks the category and account used last time"))
-                        }
-                    }.accessibilityIdentifier("finance.titleSuggestions")
-                }
+            }
+            if !suggestions.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(suggestions) { suggestion in
+                        let exact = MoneyTitleIndex.isExact(suggestion, title)
+                        Button { choose(suggestion) } label: {
+                            HStack(spacing: 4) {
+                                Text(suggestion.title).lineLimit(1)
+                                let extra = detail(suggestion)
+                                if !extra.isEmpty { Text(extra).foregroundStyle(.secondary).lineLimit(1) }
+                            }
+                            .font(.caption).padding(.horizontal, 8).padding(.vertical, 4)
+                            .frame(minHeight: compact ? 44 : nil)
+                            .background(exact ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06), in: Capsule())
+                            .contentShape(Capsule())
+                        }.buttonStyle(.plain)
+                            .accessibilityLabel(L("用以前的“", "Use earlier “") + suggestion.title + L("”", "”"))
+                            .accessibilityHint(L("同时选上次用的分类和账户", "Also picks the category and account used last time"))
+                    }
+                }.padding(.top, 8).accessibilityIdentifier("finance.titleSuggestions")
             }
         }
+        .padding(14).cardSurface()
     }
 }
 
@@ -98,7 +105,7 @@ struct FinanceEntryDetails<Focus: Hashable>: View {
             TextField(L("可不填", "Optional"), text: $notes, axis: .vertical).focused(focus, equals: notesFocus).lineLimit(2...5).textFieldStyle(.roundedBorder)
             fieldTitle(L("关联任务", "Linked task"), L("这笔钱对应待办里的哪件事，可在任务里看到相关花费。", "Which task this money belongs to; the task shows its entries."))
             TaskLinkPicker(tasks: tasks, taskID: $taskID)
-        }.padding(12).background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
+        }.padding(14).cardSurface()
     }
 
     private func fieldTitle(_ title: String, _ hint: String) -> some View {
@@ -222,23 +229,24 @@ struct FinanceEntryCategories: View {
     let addCategory: (UUID?) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(L("分类", "Category")).font(.subheadline.weight(.medium))
+        // Main categories and subcategories each in their own card, titles above them.
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L("分类", "Category")).font(.subheadline.weight(.semibold)).padding(.horizontal, 2)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: compact ? (dynamicTypeSize.isAccessibilitySize ? 2 : 4) : 6), spacing: 8) {
                 ForEach(roots) { category in categoryButton(category, selected: category.id == selectedRoot) }
                 addCategoryButton(parentID: nil)
-            }
+            }.padding(8).cardSurface()
             if let parent, !children.isEmpty {
-                Divider()
                 HStack {
                     Text(parent.label + L(" · 子分类", " · subcategories")).font(.subheadline.weight(.semibold))
                     Spacer()
-                    Button(L("不细分", "No subcategory")) { categoryID = parent.id }.font(.caption).frame(minHeight: 44)
-                }
+                    Button(L("不细分", "No subcategory")) { categoryID = parent.id }
+                        .buttonStyle(CardButtonStyle()).font(.caption).frame(minHeight: 44)
+                }.padding(.horizontal, 2).padding(.top, 4)
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: compact ? (dynamicTypeSize.isAccessibilitySize ? 2 : 4) : 6), spacing: 8) {
                     ForEach(children) { category in categoryButton(category, selected: category.id == categoryID) }
                     if !parent.archived { addCategoryButton(parentID: parent.id) }
-                }
+                }.padding(8).cardSurface()
             } else if let parent, !parent.archived {
                 Button { addCategory(parent.id) } label: {
                     Label(L("为“\(parent.label)”添加子分类", "Add a subcategory to \(parent.label)"), systemImage: "plus")
@@ -256,7 +264,7 @@ struct FinanceEntryCategories: View {
                     .background(Circle().fill(selected ? tint : .clear))
                 Text(category.label).font(.caption).lineLimit(2).foregroundStyle(selected ? .primary : .secondary)
             }.frame(maxWidth: .infinity, minHeight: 60).padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 10).fill(selected ? tint.opacity(0.1) : .clear)).contentShape(Rectangle())
+                .background(RoundedRectangle(cornerRadius: Design.Radius.medium, style: .continuous).fill(selected ? tint.opacity(0.14) : .clear)).contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel(categoryPath(category.id)).accessibilityAddTraits(selected ? [.isSelected] : [])
     }
     private func addCategoryButton(parentID: UUID?) -> some View {

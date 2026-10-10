@@ -159,7 +159,8 @@ struct MoneyChip: ViewModifier {
     func body(content: Content) -> some View {
         content.font(.callout).padding(.horizontal, 10).padding(.vertical, expanded ? 8 : 5)
             .frame(maxWidth: expanded ? .infinity : nil, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: expanded ? 12 : 24).fill(Color.primary.opacity(0.07)))
+            .background(RoundedRectangle(cornerRadius: expanded ? Design.Radius.large : Design.Radius.medium, style: .continuous).fill(Color.primary.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: expanded ? Design.Radius.large : Design.Radius.medium, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
             #if os(iOS)
             .frame(minHeight: 44).contentShape(Rectangle())
             #endif
