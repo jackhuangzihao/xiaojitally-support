@@ -103,7 +103,7 @@ struct TaskEditor: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 8) {
                         TextField("", text: $title, prompt: Text(L("要做什么？", "What needs doing?")), axis: .vertical)
                             .font(.title2.weight(.semibold)).lineLimit(1...4).textFieldStyle(.plain)
@@ -122,8 +122,9 @@ struct TaskEditor: View {
                             .focused($focus, equals: .notes)
                             .accessibilityLabel(L("任务备注，多行输入", "Task notes, multiple lines"))
                     }
+                    .editorCard(vertical: 14)
 
-                    scheduleRows
+                    scheduleRows.editorCard()
                     ForEach(warnings, id: \.self) { text in
                         Label(text, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
                     }
@@ -132,10 +133,9 @@ struct TaskEditor: View {
                               systemImage: "bell.slash").font(.caption).foregroundStyle(.secondary)
                     }
 
-                    Divider()
                     VStack(spacing: 12) {
                         HStack {
-                            Label(L("清单", "List"), systemImage: "folder").foregroundStyle(.secondary)
+                            HStack(spacing: 10) { EditorRowIcon(systemImage: "folder"); Text(L("清单", "List")) }
                             Spacer()
                             Picker(L("清单", "List"), selection: $listID) {
                                 Text(L("未分类", "No list")).tag(nil as UUID?)
@@ -146,21 +146,21 @@ struct TaskEditor: View {
                             }.labelsHidden().pickerStyle(.menu).frame(maxWidth: 220)
                         }
                         (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())) {
-                            Label(L("优先级", "Priority"), systemImage: "flag").foregroundStyle(.secondary)
+                            HStack(spacing: 10) { EditorRowIcon(systemImage: "flag"); Text(L("优先级", "Priority")) }
                             if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                             FlowLayout(spacing: 6) {
                             ForEach([(0, L("普通", "Normal")), (1, L("中", "Medium")), (2, L("高", "High"))], id: \.0) { value, name in
-                                SelectPill(title: name, selected: priority == value) { priority = value }
+                                SelectPill(title: name, selected: priority == value, tint: Self.priorityTint(value)) { priority = value }
                             }
                             }
                         }
                     }
+                    .editorCard(vertical: 12)
 
-                    if original == nil { Divider(); newTaskFinance }
+                    if original == nil { newTaskFinance.editorCard(vertical: linkedFinance == nil ? 2 : 12) }
 
-                    Divider()
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(L("子任务", "Subtasks")).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        SectionCountHeader(title: L("子任务", "Subtasks"), count: subtasks.count).padding(.top, 8)
                         ForEach($subtasks) { $subtask in
                             HStack(spacing: 8) {
                                 Button { subtask.isDone.toggle() } label: {
@@ -180,14 +180,15 @@ struct TaskEditor: View {
                                 .submitLabel(.next)
                         }
                     }
+                    .editorCard()
 
-                    if let task = request.task, task.deletedAt == nil { Divider(); TaskMoneySection(task: task) }
+                    if let task = request.task, task.deletedAt == nil { TaskMoneySection(task: task).editorCard(vertical: 12) }
 
                     if original?.deletedAt != nil {
                         Text(L("保存时会将这项任务从最近删除中恢复。", "Saving will restore this task from Recently deleted.")).font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .padding(20)
+                .padding(16)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: openPanel)
                 #if os(macOS)
                 // macOS gives the first text field focus and selects its text; park focus here instead for existing tasks.
@@ -261,5 +262,23 @@ struct TaskEditor: View {
         #endif
     }
 
+    /// Medium priority is orange and high is red, matching the tags in lists and calendars; normal keeps the accent.
+    static func priorityTint(_ priority: Int) -> Color? {
+        switch priority {
+        case 1: .orange
+        case 2: .red
+        default: nil
+        }
+    }
 
+}
+
+private extension View {
+    /// One group of the editor on its own card. Type-erased so the editor's body stays within the
+    /// self-check's per-component stack budget; there are only a handful of cards, so the cost is negligible.
+    func editorCard(vertical: CGFloat = 4) -> AnyView {
+        AnyView(padding(.horizontal, 14).padding(.vertical, vertical)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardSurface())
+    }
 }

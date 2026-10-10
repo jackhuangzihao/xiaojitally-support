@@ -6,7 +6,7 @@ extension TaskEditor {
         VStack(spacing: 0) {
             SettingRow(systemImage: "calendar", title: L("日期", "Date"),
                        value: hasDate ? Dates.label(date, pattern: "M月d日 EEEE") : L("无日期", "No date"),
-                       isSet: hasDate, isOpen: openPanel == .date, action: { toggle(.date) },
+                       isSet: hasDate, isOpen: openPanel == .date, showsDivider: false, action: { toggle(.date) },
                        clear: { hasDate = false; hasTime = false; hasEnd = false; close(.date, .time) })
             if openPanel == .date { panel(.date) }
             SettingRow(systemImage: "clock", title: L("时间", "Time"), value: timeText,

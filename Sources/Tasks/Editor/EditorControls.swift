@@ -9,6 +9,8 @@ struct SettingRow: View {
     let isSet: Bool
     let isOpen: Bool
     var tint: Color = .accentColor
+    /// The first row of a card has no line above it.
+    var showsDivider = true
     let action: () -> Void
     let clear: () -> Void
 
@@ -22,7 +24,7 @@ struct SettingRow: View {
         HStack(spacing: 6) {
             Button(action: action) {
                 HStack(spacing: 10) {
-                    Image(systemName: systemImage).foregroundStyle(isOpen ? tint : Color.secondary).frame(width: 22)
+                    EditorRowIcon(systemImage: systemImage, tint: isSet || isOpen ? tint : .secondary)
                     (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout())) {
                     Text(title).foregroundStyle(Color.primary)
                     if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
@@ -41,26 +43,51 @@ struct SettingRow: View {
                 Color.clear.frame(width: 44, height: 1) // keeps every row's value lined up
             }
         }
-        .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 0.5) }
+        .overlay(alignment: .top) {
+            // Starts under the text, past the icon, like grouped rows elsewhere.
+            if showsDivider { Rectangle().fill(.separator).frame(height: 0.5).padding(.leading, 34) }
+        }
+    }
+}
+
+/// The small tinted square in front of each editor row.
+struct EditorRowIcon: View {
+    let systemImage: String
+    var tint: Color = .secondary
+
+    var body: some View {
+        Image(systemName: systemImage).font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .frame(width: 24, height: 24)
+            .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: Design.Radius.small + 1, style: .continuous))
+            .accessibilityHidden(true)
     }
 }
 
 struct SelectPill: View {
     let title: String
     let selected: Bool
+    /// When set, the selected pill is a soft tag in this colour (e.g. orange for medium priority) instead of solid accent.
+    var tint: Color? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title).font(.callout).lineLimit(2).multilineTextAlignment(.center)
                 .padding(.horizontal, 12).padding(.vertical, 6)
-                .foregroundStyle(selected ? Color.selectedInk : Color.primary)
-                .background(selected ? Color.accentColor : Color.secondary.opacity(0.12), in: Capsule())
+                .fontWeight(selected && tint != nil ? .semibold : nil)
+                .foregroundStyle(selected ? (tint ?? Color.selectedInk) : Color.primary)
+                .background(selectedFill, in: Capsule())
                 .contentShape(Capsule())
                 #if os(iOS)
                 .frame(minHeight: 44)
                 #endif
         }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var selectedFill: Color {
+        guard selected else { return Color.secondary.opacity(0.12) }
+        return tint.map { $0.opacity(0.2) } ?? Color.accentColor
     }
 }
 

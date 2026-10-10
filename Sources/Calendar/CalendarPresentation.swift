@@ -87,10 +87,18 @@ struct CalendarDayPopover<Detail: View>: ViewModifier {
                 .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
         #else
-        content.popover(isPresented: Binding(get: { showing }, set: { if !$0 { presentation.dismissDay(day) } })) {
+        content.popover(isPresented: Binding(get: { showing }, set: { if !$0 { presentation.dismissDay(day) } }),
+                        arrowEdge: Self.arrowEdge(for: day)) {
             CalendarPopoverContent(build: detail)
         }
         #endif
+    }
+
+    /// Days in the right half of the week open their card to the left, so it isn't pushed past the window's edge;
+    /// the left half opens to the right. AppKit still flips it if the screen has no room on that side.
+    static func arrowEdge(for day: Date, calendar: Calendar = Dates.calendar) -> Edge {
+        let column = (calendar.component(.weekday, from: day) - calendar.firstWeekday + 7) % 7
+        return column >= 4 ? .leading : .trailing
     }
 }
 

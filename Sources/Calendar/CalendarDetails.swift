@@ -103,10 +103,15 @@ extension ContentView {
                             .frame(width: 44, height: 44)
                     }.buttonStyle(.plain)
                         .accessibilityLabel(task.isDone ? L("恢复为未完成", "Mark incomplete") : L("标记为已完成", "Mark complete"))
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(task.title).font(.headline).strikethrough(task.isDone)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(task.title).font(.headline).strikethrough(task.isDone)
+                                .foregroundStyle(task.isDone ? .secondary : .primary)
+                            Spacer(minLength: 0)
+                            PriorityTag(priority: task.priority, isDone: task.isDone)
+                        }
                         taskMetadata(task)
-                    }
+                    }.padding(.top, 11)
                 }
                 if !note.isEmpty {
                     Text(note).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
@@ -114,6 +119,9 @@ extension ContentView {
                 }
                 if !task.subtasks.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
+                        Label(L("子任务 \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)",
+                                "Subtasks \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)"), systemImage: "checklist")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         ForEach(task.subtasks) { subtask in
                             Button { toggleSubtask(task, subtask.id) } label: {
                                 HStack(alignment: .top, spacing: 8) {
@@ -127,13 +135,7 @@ extension ContentView {
                     }
                 }
                 Divider()
-                if !(selection == .calendar && planningView == "month") {
-                    Button { afterDetail(presentation) { copyTask(task) } } label: {
-                        Label(L("复制", "Copy"), systemImage: "doc.on.doc")
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    }.buttonStyle(.borderless)
-                }
-                HStack(spacing: 16) {
+                HStack(spacing: 8) {
                     if presentation.inlineDelete == task.id {
                         Text(L("删除这项任务？", "Delete this task?")).font(.callout.weight(.medium))
                         Spacer()
@@ -142,15 +144,19 @@ extension ContentView {
                             .keyboardShortcut(.defaultAction)
                     } else {
                         Button(L("编辑", "Edit")) { afterDetail(presentation) { editor = EditorRequest(task: task) } }
-                            .frame(minHeight: 44)
+                            .buttonStyle(CardButtonStyle(prominent: true, minHeight: Self.detailButtonHeight))
+                        // Copying places the task on a week day, so the month view leaves it out.
+                        if !(selection == .calendar && planningView == "month") {
+                            Button { afterDetail(presentation) { copyTask(task) } } label: { Label(L("复制", "Copy"), systemImage: "doc.on.doc") }
+                        }
                         Spacer()
                         #if os(iOS)
-                        Button(L("删除", "Delete"), role: .destructive) { afterDetail(presentation) { confirmingDelete = task.id } }.frame(minHeight: 44)
+                        Button(L("删除", "Delete"), role: .destructive) { afterDetail(presentation) { confirmingDelete = task.id } }
                         #else
                         Button(L("删除", "Delete"), role: .destructive) { presentation.inlineDelete = task.id }
                         #endif
                     }
-                }.buttonStyle(.borderless)
+                }.buttonStyle(CardButtonStyle(minHeight: Self.detailButtonHeight))
                 .onDisappear { if presentation.inlineDelete == task.id { presentation.inlineDelete = nil } }
             }.padding(16)
         }
@@ -179,8 +185,11 @@ extension ContentView {
                     HStack(alignment: .top) {
                         RoundedRectangle(cornerRadius: 1).fill(planColor(task)).frame(width: 3, height: 18).padding(.top, 2)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(task.title).strikethrough(task.isDone).foregroundStyle(task.isDone ? .secondary : .primary)
-                                .multilineTextAlignment(.leading)
+                            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                                Text(task.title).strikethrough(task.isDone).foregroundStyle(task.isDone ? .secondary : .primary)
+                                    .multilineTextAlignment(.leading)
+                                PriorityTag(priority: task.priority, isDone: task.isDone)
+                            }
                             let meta = [task.timeLabel, task.subtasks.isEmpty ? "" : L("子任务 \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)", "Subtasks \(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)"), note.isEmpty ? "" : L("有备注", "Note")].filter { !$0.isEmpty }
                             if !meta.isEmpty { Text(meta.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
                         }
@@ -190,6 +199,8 @@ extension ContentView {
                 }.buttonStyle(.plain)
                     .accessibilityHint(expanded ? L("收起详情", "Hide details") : L("展开备注和子任务", "Show note and subtasks"))
             }
+            // Finished tasks step back so the open ones read first.
+            .opacity(task.isDone && !expanded ? 0.6 : 1)
             if expanded {
                 VStack(alignment: .leading, spacing: 6) {
                     if !note.isEmpty {
@@ -206,12 +217,13 @@ extension ContentView {
                             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
-                    Button(L("编辑", "Edit")) { presentation.day = nil; afterDetail(presentation) { editor = EditorRequest(task: task) } }
-                        .buttonStyle(.borderless)
-                    if planningView != "month" {
-                        Button { afterDetail(presentation) { copyTask(task) } } label: {
-                            Label(L("复制", "Copy"), systemImage: "doc.on.doc").frame(minHeight: 44)
-                        }.buttonStyle(.borderless)
+                    HStack(spacing: 8) {
+                        Button(L("编辑", "Edit")) { presentation.day = nil; afterDetail(presentation) { editor = EditorRequest(task: task) } }
+                            .buttonStyle(CardButtonStyle(prominent: true, minHeight: Self.detailButtonHeight))
+                        if planningView != "month" {
+                            Button { afterDetail(presentation) { copyTask(task) } } label: { Label(L("复制", "Copy"), systemImage: "doc.on.doc") }
+                                .buttonStyle(CardButtonStyle(minHeight: Self.detailButtonHeight))
+                        }
                     }
                 }.padding(.leading, 42).padding(.bottom, 8)
             }
@@ -219,6 +231,27 @@ extension ContentView {
     }
 
     /// Mac chips open the task card; on a phone the whole cell opens that week instead.
+
+    /// Buttons in the calendar cards: a comfortable mouse target on Mac, a full touch target on a phone.
+    #if os(iOS)
+    static let detailButtonHeight: CGFloat = 44
+    #else
+    static let detailButtonHeight: CGFloat = 28
+    #endif
+}
+
+/// "高" / "中" beside a title in the calendar cards; nothing for normal priority or finished tasks.
+private struct PriorityTag: View {
+    let priority: Int
+    let isDone: Bool
+
+    var body: some View {
+        if priority > 0, !isDone {
+            Text(priority == 2 ? L("高", "High") : L("中", "Medium"))
+                .tagStyle(priority == 2 ? .red : .orange)
+                .accessibilityLabel(priority == 2 ? L("高优先级", "High priority") : L("中优先级", "Medium priority"))
+        }
+    }
 }
 
 struct RepeatPreviewStyle: ViewModifier {
@@ -238,8 +271,12 @@ extension ContentView {
         let matching = all.filter { $0.overlaps(range) }
         let items = TaskItem.ordered(matching, incompleteFirst: planningView == "month")
         return VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(spacing: 6) {
                 Text(Dates.label(day)).font(.headline)
+                if Dates.sameDay(day, currentDay) { Text(L("今天", "Today")).tagStyle(.accentColor) }
+                Text(L("\(items.count) 项", "\(items.count)")).font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
+                    .padding(.horizontal, 7).padding(.vertical, 1)
+                    .background(Color.primary.opacity(0.07), in: Capsule())
                 Spacer()
                 Button { presentation.day = nil } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
                     .buttonStyle(.borderless).accessibilityLabel(L("关闭", "Close"))
@@ -248,8 +285,8 @@ extension ContentView {
                 if planningView != "week" {
                     Button(L("查看这一周", "Open this week")) { openPlan(day, presentation: presentation, view: "week") }.frame(minHeight: 44)
                 }
-                Button(L("在列表中查看", "Open in list")) { openPlan(day, presentation: presentation, view: "list") }.frame(minHeight: 44)
-            }.buttonStyle(.bordered).controlSize(.small)
+                Button(L("在列表中查看", "Open in list")) { openPlan(day, presentation: presentation, view: "list") }
+            }.buttonStyle(CardButtonStyle(minHeight: Self.detailButtonHeight))
             // A scroll view keeps whatever height it first got, so unfolding a row used to leave the note and
             // subtasks hidden below the edge. It now takes the rows' own height, up to 360, and scrolls beyond that.
             ScrollView {
@@ -268,8 +305,8 @@ extension ContentView {
             .frame(maxHeight: .infinity, alignment: .top)
             #endif
             Button { presentation.day = nil; afterDetail(presentation) { editor = EditorRequest(date: day) } } label: {
-                Label(L("添加任务", "Add task"), systemImage: "plus").frame(minHeight: 44)
-            }.buttonStyle(.borderless)
+                Label(L("添加任务", "Add task"), systemImage: "plus").font(.callout.weight(.semibold)).frame(minHeight: 44)
+            }.buttonStyle(.borderless).foregroundStyle(Color.accentColor)
         }.padding(16)
         #if os(macOS)
         .frame(width: 320)
@@ -284,7 +321,7 @@ extension ContentView {
         ForEach(items) { task in
             VStack(spacing: 0) {
                 dayTaskRow(task, presentation: presentation)
-                Divider()
+                Divider().padding(.leading, 50)
             }
         }
     }
