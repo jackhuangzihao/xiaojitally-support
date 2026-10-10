@@ -16,14 +16,23 @@ struct FinanceEntryRow<Actions: View>: View {
     var accountID: UUID? = nil
     var balanceAfter: Decimal? = nil
     var restore: (() -> Void)?
+    /// The task this entry belongs to, shown after its details; tapping it opens the task.
+    var task: TaskLink? = nil
+    var openTask: (() -> Void)? = nil
     let open: () -> Void
     @ViewBuilder let actions: () -> Actions
     @State var hovering = false
     var body: some View {
         HStack(spacing: 0) {
             if restore == nil {
-                Button(action: open) { entryContent }
-                    .buttonStyle(.plain)
+                // A tap gesture rather than a button, so the task name inside stays its own button.
+                entryContent
+                    .onTapGesture(perform: open)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction(.default, open)
+                    .accessibilityActions {
+                        if let openTask, task?.deleted == false { Button(L("打开关联任务", "Open linked task"), action: openTask) }
+                    }
             } else { entryContent }
             if let restore {
                 Button(L("恢复", "Restore"), action: restore).controlSize(.small)
@@ -48,7 +57,11 @@ struct FinanceEntryRow<Actions: View>: View {
             MoneyIcon(symbol: icon.symbol, emoji: icon.emoji, tint: icon.tint, size: 34)
             VStack(alignment: .leading, spacing: 3) {
                 Text(entry.title).lineLimit(1)
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    taskChip
+                }
+                if let note { Text(note).font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
             }
             Spacer(minLength: 12)
             VStack(alignment: .trailing, spacing: 3) {
@@ -65,6 +78,30 @@ struct FinanceEntryRow<Actions: View>: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
+    /// The linked task: a button while it exists, grey while it is in Recently deleted.
+    @ViewBuilder private var taskChip: some View {
+        if let task {
+            let label = Label(task.title + (task.deleted ? L("（已删除）", " (deleted)") : ""), systemImage: task.deleted ? "trash" : "checklist")
+                .font(.caption).lineLimit(1)
+                .padding(.horizontal, 6).padding(.vertical, 1)
+            if let openTask, !task.deleted {
+                Button(action: openTask) {
+                    label.foregroundStyle(Color.accentColor)
+                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.borderless).layoutPriority(1)
+                .help(L("打开任务", "Open task"))
+                .accessibilityLabel(L("关联任务：", "Linked task: ") + task.title)
+            } else {
+                label.foregroundStyle(.secondary)
+                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+                    .layoutPriority(1)
+                    .help(L("任务在最近删除中", "The task is in Recently deleted"))
+            }
+        }
+    }
+    /// The first line of the entry's notes, so they are visible without opening it.
+    var note: String? { MoneyNote.firstLine(entry.notes) }
     var detail: String {
         var parts = [Dates.label(entry.date, pattern: "HH:mm")]
         if entry.isPending { parts.append(L("待入账", "Pending")) }
@@ -115,5 +152,13 @@ struct FinanceEntryRow<Actions: View>: View {
         if entry.fee > 0 { return L("手续费 ", "Fee ") + Money.format(entry.fee, account?.currency ?? entry.currency) }
         if entry.currency != data.baseCurrency, let base = entry.baseAmount { return "≈ " + Money.format(base, data.baseCurrency) }
         return nil
+    }
+}
+
+/// Notes are shown as their first line under an entry or bill name, so a long note never grows a row.
+enum MoneyNote {
+    static func firstLine(_ notes: String) -> String? {
+        let line = notes.split(whereSeparator: \.isNewline).first.map { $0.trimmingCharacters(in: .whitespaces) }
+        return line?.isEmpty == false ? line : nil
     }
 }

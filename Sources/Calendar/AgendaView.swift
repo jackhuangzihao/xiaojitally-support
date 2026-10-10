@@ -350,7 +350,8 @@ extension ContentView {
                                         updated[index].isDone.toggle(); task.subtasks = updated
                                     }
                                 }
-                            })
+                            },
+                            money: taskMoney.summary(for: task.id), moneyCurrency: taskMoney.baseCurrency)
         }
         .id(task.id)
         .contextMenu { taskMenu(task) }

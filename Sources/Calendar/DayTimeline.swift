@@ -12,7 +12,11 @@ struct DayTimelineCard: View {
     let onDelete: () -> Void
     let onRemindNow: () -> Void
     let onToggleSubtask: (UUID) -> Void
+    /// Entries linked to this task, if any, and the currency their total is in.
+    var money: TaskMoneySummary? = nil
+    var moneyCurrency = "CNY"
 
+    @AppStorage("hideMoney") private var hideMoney = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.locale) private var locale
@@ -80,7 +84,7 @@ struct DayTimelineCard: View {
                                 VStack(alignment: .leading, spacing: 4) { category; duration }
                             }
                         }
-                        if hasNotes || !task.subtasks.isEmpty {
+                        if hasNotes || !task.subtasks.isEmpty || money != nil {
                             Group {
                                 if dynamicTypeSize.isAccessibilitySize {
                                     VStack(alignment: .leading, spacing: 4) { detailSummary }
@@ -166,6 +170,16 @@ struct DayTimelineCard: View {
     }
 
     @ViewBuilder private var detailSummary: some View {
+        if let money {
+            // Orange while something still waits to be posted, like the pending list in Finance.
+            Text(money.label(baseCurrency: moneyCurrency, hidden: hideMoney))
+                .font(.caption.weight(.semibold)).monospacedDigit()
+                .foregroundStyle(money.pendingCount > 0 ? Color.orange : Color.accentColor)
+                .padding(.horizontal, 6).padding(.vertical, 1)
+                .background((money.pendingCount > 0 ? Color.orange : Color.accentColor).opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+                .help(money.detail(hidden: hideMoney))
+                .accessibilityLabel(L("关联账单：", "Linked entries: ") + money.label(baseCurrency: moneyCurrency, hidden: hideMoney))
+        }
         if hasNotes { Label(L("备注", "Notes"), systemImage: "text.alignleft") }
         if !task.subtasks.isEmpty {
             Label("\(task.subtasks.filter(\.isDone).count)/\(task.subtasks.count)", systemImage: "checklist")
@@ -204,6 +218,20 @@ struct DayTimelineCard: View {
             if task.repeatRule != "none" {
                 Label(Dates.repeatLabel(task.repeatRule), systemImage: "repeat")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            if let money {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(money.lines.prefix(10).enumerated()), id: \.offset) { _, line in
+                        HStack(spacing: 8) {
+                            Text(line.title).lineLimit(1)
+                            Text(line.pending ? L("待入账", "Pending") : L("已入账", "Posted"))
+                                .foregroundStyle(line.pending ? Color.orange : .secondary)
+                            Spacer(minLength: 8)
+                            Text(Money.display(line.amount, line.currency, hidden: hideMoney)).monospacedDigit()
+                        }
+                    }
+                    if money.count > 10 { Text(L("另有 \(money.count - 10) 笔，在任务编辑里查看", "\(money.count - 10) more in the task editor")).foregroundStyle(.secondary) }
+                }.font(.caption)
             }
             if !task.subtasks.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {

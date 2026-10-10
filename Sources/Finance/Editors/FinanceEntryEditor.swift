@@ -13,6 +13,8 @@ struct EntryRequest: Identifiable {
     var entry: MoneyEntry
     var expected: MoneyEntry?
     var confirmingPending = false
+    /// Set when confirming a recurring bill's occurrence, which is not stored until it is confirmed.
+    var occurrence: RecurringOccurrence? = nil
     var id: UUID { entry.id }
 }
 
@@ -24,6 +26,8 @@ struct FinanceDraft {
     var balance: Decimal
     var expression: String? = nil
     var confirmingPending = false
+    var repeatRule = "none"
+    var repeatUntil: Date? = nil
 }
 
 /// Native amount editing, with an optional calculator and contextual advanced fields.
@@ -36,11 +40,12 @@ struct FinanceEntryEditor: View {
     #endif
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private enum Field: Hashable { case amount, title, actual, received, fee, converted, convertedFee, notes, tags }
+    private enum Field: Hashable { case amount, title, actual, received, fee, converted, convertedFee, notes }
     @AppStorage("appLanguage") private var language = "system"
     @AppStorage("hideMoney") private var hidden = false
     let expected: MoneyEntry?
     let confirmingPending: Bool
+    let occurrence: RecurringOccurrence?
     @Environment(EditorDrafts.self) private var drafts
     @State private var generation = Store.recovery.generation
     @Environment(\.modelContext) private var context
@@ -73,9 +78,15 @@ struct FinanceEntryEditor: View {
     @State private var confirmDiscard = false
     @State private var initialFingerprint = ""
     @State private var restoringDraft = false
+    @State private var repeatRule = "none"
+    @State private var repeatUntil: Date?
+    @State private var titleIndex = MoneyTitleIndex()
+    /// Fields the user chose in this editor; a typed name never overrides them.
+    @State private var chosenByUser: Set<SuggestedField> = []
+    private enum SuggestedField { case category, account }
     @FocusState private var focus: Field?
-    init(entry: MoneyEntry, expected: MoneyEntry?, confirmingPending: Bool = false) {
-        self.confirmingPending = confirmingPending
+    init(entry: MoneyEntry, expected: MoneyEntry?, confirmingPending: Bool = false, occurrence: RecurringOccurrence? = nil) {
+        self.confirmingPending = confirmingPending; self.occurrence = occurrence
         self.expected = expected; _draft = State(initialValue: entry)
         let text = entry.amount == 0 ? "" : Money.text(entry.amount)
         _amount = State(initialValue: text)
@@ -85,11 +96,22 @@ struct FinanceEntryEditor: View {
         _fee = State(initialValue: entry.fee == 0 ? "" : Money.text(entry.fee))
         _converted = State(initialValue: entry.baseAmount.map(Money.text) ?? "")
         _convertedFee = State(initialValue: entry.baseFee.map(Money.text) ?? "")
-        _showMore = State(initialValue: !entry.notes.isEmpty || !entry.tags.isEmpty || entry.taskID != nil)
+        _showMore = State(initialValue: !entry.notes.isEmpty || entry.taskID != nil)
     }
     private var account: MoneyAccount? { ledger.accounts.first { $0.id == draft.accountID } }
     private var destination: MoneyAccount? { ledger.accounts.first { $0.id == draft.destinationID } }
-    private var fingerprint: String { String(describing: draft) + [expression, amount, actual, received, fee, converted, convertedFee].joined(separator: "|") }
+    private var fingerprint: String { String(describing: draft) + [expression, amount, actual, received, fee, converted, convertedFee, repeatRule, String(describing: repeatUntil)].joined(separator: "|") }
+    /// Repeat sits under "pending": only a new, ordinary income or expense saved as pending can start a recurring bill.
+    private var canRepeat: Bool {
+        expected == nil && !confirmingPending && (draft.kind == .expense || draft.kind == .income) && draft.taskID == nil
+            && draft.refundOf == nil && draft.isPending
+    }
+    private var repeating: Bool { canRepeat && repeatRule != "none" }
+    /// Only a new income or expense learns from earlier names.
+    private var suggestsFromHistory: Bool { expected == nil && !confirmingPending && (draft.kind == .expense || draft.kind == .income) }
+    private var titleSuggestions: [MoneyEntrySuggestion] {
+        suggestsFromHistory && focus == .title ? titleIndex.matches(draft.title, kind: draft.kind) : []
+    }
     private var dirty: Bool { loaded && fingerprint != initialFingerprint }
     private var rateQuery: String { "\(loaded)-\(automaticRates)-\(draft.currency)-\(draft.accountID?.uuidString ?? "")-\(draft.destinationID?.uuidString ?? "")-\(Dates.calendar.startOfDay(for: draft.date).timeIntervalSince1970)" }
     private static let postingLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tally", category: "FinancePosting")
@@ -105,12 +127,17 @@ struct FinanceEntryEditor: View {
     private var simpleKind: Bool { draft.kind == .expense || draft.kind == .income || draft.kind == .transfer }
     private var kindChangeBlock: String? { expected.flatMap { ledger.entryKindChangeBlock($0) } }
     private var signedAmount: Bool { draft.kind == .adjustment }
+    /// A bill's occurrence is not stored yet, but confirming it is not a fresh entry either.
+    private var heading: String {
+        occurrence != nil ? L("确认周期账单", "Confirm recurring bill")
+            : expected == nil ? L("新增账单", "New entry") : L("编辑已有账单", "Edit existing entry")
+    }
     private var activeAccounts: [MoneyAccount] { ledger.accounts.filter { ledger.allowsAccount($0.id, for: draft, replacing: expected) } }
 
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            if compact { Text(expected == nil ? L("新增账单", "New entry") : L("编辑已有账单", "Edit existing entry")).font(.caption).foregroundStyle(.secondary) }
+            if compact { Text(heading).font(.caption).foregroundStyle(.secondary) }
             if !compact {
                 amountRow.padding(.horizontal, 18).padding(.vertical, 12)
                 chips.padding(.horizontal, 18).padding(.bottom, 8)
@@ -119,13 +146,15 @@ struct FinanceEntryEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if compact { amountRow; chips; Divider() }
+                    if expected != nil || occurrence != nil, let bill = ledger.recurringBill(draft.recurringID) { RecurringOriginBanner(bill: bill, ledger: ledger) }
                     if draft.accountID == nil && (draft.kind == .expense || draft.kind == .income) {
                         Text(draft.isPending
                              ? L("未选择账户：确认后只计入收支，不改变资产余额。", "No account selected: after confirmation, this counts in totals without changing an account balance.")
                              : L("未选择账户：这笔只计入收支，不改变资产余额。点“账户”可选择或添加账户。", "No account selected: this entry counts in totals but won't change an account balance. Use Account to choose or add one."))
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if expected == nil && (draft.kind == .expense || draft.kind == .income) && (draft.taskID != nil || draft.isPending) {
+                    // Any new income or expense can be saved as pending; repeat options appear under it.
+                    if expected == nil && !confirmingPending && (draft.kind == .expense || draft.kind == .income) {
                         MoneyPostingChoice(entry: $draft)
                     } else if draft.isPending {
                         Label(confirmingPending
@@ -133,6 +162,7 @@ struct FinanceEntryEditor: View {
                               : L("待入账 · 尚未计入余额和统计", "Pending · Excluded from balances and totals"), systemImage: "clock")
                             .font(.callout).foregroundStyle(.secondary)
                     }
+                    if canRepeat { repeatSection }
                     if showMore { moreFields }
                     if let kindChangeBlock, expected?.kind == .expense {
                         Text(kindChangeBlock).font(.caption).foregroundStyle(.secondary)
@@ -151,7 +181,8 @@ struct FinanceEntryEditor: View {
             bottomPanel
         }
         #if os(macOS)
-        .frame(minWidth: 520, idealWidth: 540, minHeight: showCalculator ? 730 : 540, idealHeight: showCalculator ? 750 : 560)
+        // A fixed height: the keypad takes room from the scrolling fields instead of resizing the window, which jumps on macOS.
+        .frame(minWidth: 520, idealWidth: 540, minHeight: 620, idealHeight: 700)
         #endif
         .background(Color.appBackground)
         #if os(macOS)
@@ -171,6 +202,7 @@ struct FinanceEntryEditor: View {
                 if let kept = drafts.finance, kept.entry.id == draft.id {
                     restoringDraft = true
                     draft = kept.entry; amount = kept.amount; actual = kept.actual; received = kept.received
+                    repeatRule = kept.repeatRule; repeatUntil = kept.repeatUntil
                     fee = kept.fee; converted = kept.converted; convertedFee = kept.convertedFee; initialBalance = kept.balance
                     expression = kept.expression ?? kept.amount.replacingOccurrences(of: "-", with: "−")
                 } else {
@@ -191,7 +223,7 @@ struct FinanceEntryEditor: View {
         #if os(iOS)
         .onChange(of: focus) { _, focusedField in
             // The system keyboard and the calculator must not consume the sheet together.
-            if focusedField != nil && showCalculator { showCalculator = false }
+            if focusedField != nil && showCalculator { withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { showCalculator = false } }
         }
         #endif
         .onChange(of: expression) { _, value in
@@ -227,6 +259,7 @@ struct FinanceEntryEditor: View {
             focus = desiredAmountFocus
         }
         .onChange(of: draft.destinationID) { _, _ in received = "" }
+        .modifier(EntryDraftObservers(canRepeat: canRepeat, title: draft.title, repeatAllowed: repeatAllowedChanged, titleChanged: titleChanged))
         .onChange(of: draft.currency) { _, _ in
             actual = ""; received = ""; converted = ""; convertedFee = ""; rates = []; filledValues = [:]; draft.rateNote = ""
             amount = Money.evaluate(expression, currency: draft.currency, signed: signedAmount).map(Money.text) ?? ""
@@ -263,7 +296,7 @@ struct FinanceEntryEditor: View {
                 }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 230).disabled(kindChangeBlock != nil)
             } else { Text(draft.kind.label).font(.headline) }
             Spacer()
-            if !compact { Text(expected == nil ? L("新增账单", "New entry") : L("编辑已有账单", "Edit existing entry")).font(.subheadline).foregroundStyle(.secondary) }
+            if !compact { Text(heading).font(.subheadline).foregroundStyle(.secondary) }
             Button { if dirty { confirmDiscard = true } else { dismiss() } } label: {
                 Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary)
                     .frame(width: compact ? 44 : 26, height: compact ? 44 : 26).background(Circle().fill(Color.primary.opacity(0.07)))
@@ -280,6 +313,7 @@ struct FinanceEntryEditor: View {
                                       selectedRoot: selectedRoot, categoryID: $draft.categoryID,
                                       categoryPath: ledger.categoryPath) { id in
             withAnimation(reduceMotion ? nil : .snappy(duration: 0.15)) { draft.categoryID = id }
+            chosenByUser.insert(.category)
             focus = desiredAmountFocus
         } addCategory: { parentID in
             entity = EntityRequest(kind: .category, income: income, parentID: parentID)
@@ -398,37 +432,27 @@ struct FinanceEntryEditor: View {
             }
         }
     }
+    private var repeatSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(L("重复", "Repeat"), systemImage: "repeat").font(.callout.weight(.medium))
+            RecurringScheduleControls(rule: $repeatRule, until: $repeatUntil, start: draft.date)
+            Text(repeating
+                 ? L("保存为周期账单：上面的日期是第一期。每一期到日期后出现在待入账里，确认后才计入余额和统计。",
+                     "Saved as a recurring bill with the date above as its first occurrence. Each one appears in Pending when due and counts after you confirm it.")
+                 : L("不重复：一次性的待入账，到日期确认后计入。", "Once: a single pending entry, counted after you confirm it on or after its date."))
+                .font(.caption).foregroundStyle(.secondary)
+        }.accessibilityIdentifier("finance.repeat")
+    }
     private var moreFields: some View {
-        FinanceEntryDetails(compact: compact, recent: recentTags, tasks: tasks,
-                            notes: $draft.notes, tags: $draft.tags, taskID: $draft.taskID,
-                            focus: $focus, notesFocus: Field.notes, tagsFocus: Field.tags, addTag: addTag)
+        FinanceEntryDetails(compact: compact, tasks: tasks, notes: $draft.notes, taskID: $draft.taskID,
+                            focus: $focus, notesFocus: Field.notes)
     }
 
-    private static func splitTags(_ text: String) -> [String] {
-        text.split(whereSeparator: { ",，、".contains($0) }).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-    }
-    /// The tags used most, not already on this entry.
-    private var recentTags: [String] {
-        let current = Set(Self.splitTags(draft.tags))
-        let counts = ledger.entries.filter { $0.deletedAt == nil }.flatMap { Self.splitTags($0.tags) }.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
-        return counts.filter { !current.contains($0.key) }.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(6).map(\.key)
-    }
-    private func addTag(_ tag: String) {
-        draft.tags = (Self.splitTags(draft.tags) + [tag]).joined(separator: L("，", ", "))
-    }
     private var bottomPanel: some View {
         VStack(spacing: 10) {
             statusLine
-            if showCalculator { keypad }
+            if showCalculator { keypad.transition(.move(edge: .bottom).combined(with: .opacity)) }
             HStack(spacing: 12) {
-                Button {
-                    showCalculator.toggle()
-                    focus = desiredAmountFocus
-                } label: {
-                    Label(L("计算器", "Calculator"), systemImage: "plus.forwardslash.minus")
-                }.buttonStyle(.borderless).foregroundStyle(showCalculator ? Color.accentColor : .secondary)
-                    .labelStyle(.iconOnly).frame(minWidth: compact ? 44 : nil, minHeight: compact ? 44 : nil)
-                    .accessibilityAddTraits(showCalculator ? [.isSelected] : [])
                 Spacer()
                 #if os(iOS)
                 Button {
@@ -437,24 +461,43 @@ struct FinanceEntryEditor: View {
                     Label(L("收起键盘", "Dismiss keyboard"), systemImage: "keyboard.chevron.compact.down").labelStyle(.iconOnly)
                 }.buttonStyle(.borderless).frame(minWidth: 44, minHeight: 44)
                 #endif
-                if expected == nil && simpleKind && !compact {
+                if expected == nil && occurrence == nil && simpleKind && !compact && !repeating {
                     Button(L("保存并继续", "Save + new")) { save(again: true) }
                         .keyboardShortcut(.return, modifiers: .command)
                         .help(L("保存并继续下一笔（⌘↩）", "Save and start another (⌘↩)"))
                         .disabled(!loaded || gettingRates || draft.deletedAt != nil)
                 }
-                Button(confirmingPending ? L("确认入账", "Confirm entry") : draft.isPending ? L("保存待入账", "Save pending") : compact ? L("保存", "Save") : expected == nil ? L("保存新账单", "Save new entry") : L("保存修改", "Save changes")) { save() }.buttonStyle(.borderedProminent)
+                Button(confirmingPending ? L("确认入账", "Confirm entry") : repeating ? L("保存周期账单", "Save recurring bill") : draft.isPending ? L("保存待入账", "Save pending") : compact ? L("保存", "Save") : expected == nil ? L("保存新账单", "Save new entry") : L("保存修改", "Save changes")) { save() }.buttonStyle(.borderedProminent)
                     .controlSize(compact ? .large : .regular)
                     .frame(maxWidth: compact ? .infinity : nil, minHeight: compact ? 44 : nil)
                     .keyboardShortcut(.defaultAction).disabled(!loaded || gettingRates || draft.deletedAt != nil)
             }
         }.padding(.horizontal, 18).padding(.vertical, 14)
+        .overlay(alignment: .top) { noticeBar.offset(y: -48) }
     }
     private var amountRow: some View {
         let value = Money.evaluate(expression, currency: draft.currency, signed: signedAmount)
         return FinanceEntryAmount(compact: compact, kind: draft.kind, signedAmount: signedAmount, value: value,
                                   currency: $draft.currency, expression: $expression, title: $draft.title,
-                                  focus: $focus, amountFocus: Field.amount, titleFocus: Field.title)
+                                  focus: $focus, amountFocus: Field.amount, titleFocus: Field.title,
+                                  calculatorOn: showCalculator,
+                                  toggleCalculator: {
+                                      withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { showCalculator.toggle() }
+                                      focus = desiredAmountFocus
+                                  },
+                                  nameHint: suggestsFromHistory,
+                                  suggestions: titleSuggestions,
+                                  detail: { [ledger] suggestion in
+                                      "· " + [ledger.category(suggestion.categoryID)?.label,
+                                              ledger.account(suggestion.accountID)?.name ?? L("不计入账户", "No account")]
+                                          .compactMap { $0 }.joined(separator: " · ")
+                                  }) { suggestion in
+            // Choosing a name is an explicit request for its category and account.
+            chosenByUser = []
+            draft.title = suggestion.title
+            applySuggestion(suggestion)
+            focus = desiredAmountFocus
+        }
     }
     private var chips: some View {
         // Every required choice stays visible on a phone. Large text uses one column.
@@ -484,7 +527,7 @@ struct FinanceEntryEditor: View {
     @ViewBuilder private var accountChip: some View {
         if draft.kind == .expense || draft.kind == .income || draft.kind == .refund {
             Menu {
-                Picker(L("账户", "Account"), selection: $draft.accountID) {
+                Picker(L("账户", "Account"), selection: Binding(get: { draft.accountID }, set: { draft.accountID = $0; chosenByUser.insert(.account) })) {
                     Text(L("不计入账户（只记收支）", "No account (totals only)")).tag(nil as UUID?)
                     ForEach(activeAccounts) { a in Text(a.name + " · " + Money.display(accountBalances[a.id, default: 0], a.currency, hidden: hidden)).tag(Optional(a.id)) }
                 }.pickerStyle(.inline).labelsHidden()
@@ -512,8 +555,8 @@ struct FinanceEntryEditor: View {
     }
     private var moreChip: some View {
         Button { withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { showMore.toggle() } } label: {
-            entryChipLabel(showMore ? L("收起", "Less") : L("更多", "More"), value: L("标签与关联任务", "Tags & linked task"), symbol: showMore ? "chevron.up" : "ellipsis", desktopTitle: showMore ? L("收起", "Less") : L("更多", "More"))
-        }.buttonStyle(.plain).fixedSize(horizontal: !compact, vertical: false).help(L("补充说明、标签、关联任务", "Notes, tags and linked task"))
+            entryChipLabel(showMore ? L("收起", "Less") : L("更多", "More"), value: L("备注与关联任务", "Notes & linked task"), symbol: showMore ? "chevron.up" : "ellipsis", desktopTitle: showMore ? L("收起", "Less") : L("更多", "More"))
+        }.buttonStyle(.plain).fixedSize(horizontal: !compact, vertical: false).help(L("备注、关联任务", "Notes and linked task"))
     }
     @ViewBuilder private func entryChipLabel(_ title: String, value: String, symbol: String, emoji: String? = nil, desktopTitle: String? = nil) -> some View {
         // Padding and the full touch shape belong to the native control's label.
@@ -547,11 +590,27 @@ struct FinanceEntryEditor: View {
         if Dates.calendar.isDateInYesterday(draft.date) { return L("昨天 ", "Yesterday ") + time }
         return Dates.label(draft.date, pattern: "M月d日 HH:mm")
     }
+    /// Confirmations float above the buttons like the to-do notices and fade after a moment; errors stay in place.
+    @ViewBuilder private var noticeBar: some View {
+        if let notice {
+            Label(notice, systemImage: "checkmark.circle").font(.caption).lineLimit(2)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.16)))
+                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                .padding(.horizontal, 18)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .task(id: notice) {
+                    try? await Task.sleep(for: .seconds(2.5))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { self.notice = nil }
+                }
+                .accessibilityAddTraits(.updatesFrequently)
+        }
+    }
     @ViewBuilder private var statusLine: some View {
         if let error {
             Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-        } else if let notice {
-            Label(notice, systemImage: "checkmark.circle").font(.caption).foregroundStyle(.green).frame(maxWidth: .infinity, alignment: .leading)
         } else if draft.kind == .adjustment && expected == nil {
             Text(L("输入核对后的实际余额", "Enter the checked balance")).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -614,6 +673,7 @@ struct FinanceEntryEditor: View {
             if loaded || restoringDraft { try current.requireEntryCurrencies(draft, from: ledger) }
             ledger = current
             accountBalances = current.accountBalances()
+            if expected == nil { titleIndex = MoneyTitleIndex(current) }
         } catch { self.error = error.localizedDescription }
     }
     private func fillRates() {
@@ -686,8 +746,37 @@ struct FinanceEntryEditor: View {
             fill("fee", &convertedFee, conversion(value, ledger.baseCurrency))
         }
     }
+    // Observers live in a small modifier so the long body stays within the type checker's budget.
+    private func repeatAllowedChanged(_ allowed: Bool) {
+        if !allowed { repeatRule = "none"; repeatUntil = nil }
+    }
+    private func titleChanged(_ title: String) {
+        if suggestsFromHistory, let match = titleIndex.exact(title, kind: draft.kind) { applySuggestion(match) }
+    }
+    /// Takes the category and account an earlier entry with this name used, except where the user already chose.
+    /// An account in another currency is skipped once an amount is typed, so the amount never changes meaning.
+    private func applySuggestion(_ suggestion: MoneyEntrySuggestion) {
+        var applied: [String] = []
+        if !chosenByUser.contains(.category), let id = suggestion.categoryID, id != draft.categoryID,
+           let category = ledger.category(id), !category.archived, category.isIncome == (draft.kind == .income) {
+            draft.categoryID = id; applied.append(L("分类", "category"))
+        }
+        if !chosenByUser.contains(.account), let id = suggestion.accountID, id != draft.accountID,
+           let account = activeAccounts.first(where: { $0.id == id && !$0.archived }),
+           expression.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || account.currency == draft.currency {
+            draft.accountID = id; applied.append(L("账户", "account"))
+        }
+        error = nil
+        if !applied.isEmpty {
+            notice = L("已按上次“\(suggestion.title)”选好", "Picked the ") + applied.joined(separator: L("和", " and ")) + L("", " used last time for “\(suggestion.title)”")
+        } else if draft.categoryID == suggestion.categoryID && (suggestion.accountID == nil || draft.accountID == suggestion.accountID) {
+            // Without this, a match that changes nothing looks as if it was ignored.
+            notice = L("分类和账户与上次“\(suggestion.title)”相同", "Category and account already match “\(suggestion.title)”")
+        }
+    }
     private func keepDraft() {
-        drafts.finance = FinanceDraft(ledger: ledger, entry: draft, expected: expected, amount: amount, actual: actual, received: received, fee: fee, converted: converted, convertedFee: convertedFee, balance: initialBalance, expression: expression, confirmingPending: confirmingPending)
+        drafts.finance = FinanceDraft(ledger: ledger, entry: draft, expected: expected, amount: amount, actual: actual, received: received, fee: fee, converted: converted, convertedFee: convertedFee, balance: initialBalance, expression: expression, confirmingPending: confirmingPending,
+                                     repeatRule: repeatRule, repeatUntil: repeatUntil)
     }
     private func preparedEntry() throws -> MoneyEntry {
         guard !amount.isEmpty, (try? Money.parse(amount, currency: draft.currency, signed: signedAmount)).map({ $0 != 0 || draft.kind == .adjustment }) == true else {
@@ -723,12 +812,31 @@ struct FinanceEntryEditor: View {
         do {
             keepDraft()
             let e = try preparedEntry()
-            try FinanceStore.update(context) { value in
-                try value.requireEntryCurrencies(e, from: ledger)
-                try value.updateEntry(e, expected: expected, baseCurrency: ledger.baseCurrency, referenceRates: rates)
-                if confirmingPending { try value.confirmPending(e) }
+            try TaskLinkRule.check(newTaskID: e.taskID, previousTaskID: expected?.taskID) { id in
+                tasks.contains { $0.id == id && $0.deletedAt == nil }
             }
-            Self.postingLog.info("Entry save completed; pending=\(e.isPending && !confirmingPending), confirmation=\(confirmingPending)")
+            if repeating {
+                // Only the rule is saved; its first occurrence (this date) appears in Pending as a preview.
+                let bill = MoneyRecurring(repeating: e, rule: repeatRule, until: repeatUntil, in: ledger)
+                try FinanceStore.update(context) { value in
+                    try value.requireEntryCurrencies(e, from: ledger)
+                    try value.addRecurring(bill)
+                }
+                Self.postingLog.info("Recurring bill created; rule=\(bill.rule, privacy: .public)")
+            } else if let occurrence {
+                try FinanceStore.update(context) { value in
+                    try value.requireEntryCurrencies(e, from: ledger)
+                    try value.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, entry: e)
+                }
+                Self.postingLog.info("Recurring occurrence confirmed with changes")
+            } else {
+                try FinanceStore.update(context) { value in
+                    try value.requireEntryCurrencies(e, from: ledger)
+                    try value.updateEntry(e, expected: expected, baseCurrency: ledger.baseCurrency, referenceRates: rates)
+                    if confirmingPending { try value.confirmPending(e) }
+                }
+                Self.postingLog.info("Entry save completed; pending=\(e.isPending && !confirmingPending), confirmation=\(confirmingPending)")
+            }
             if let id = e.bookID { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyBook") }
             if e.kind == .expense || e.kind == .income { UserDefaults.standard.set(e.accountID?.uuidString ?? "none", forKey: "lastMoneyAccount") }
             if let id = e.categoryID, e.kind == .expense || e.kind == .income { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyCategory." + (e.kind == .income ? "income" : "expense")) }
@@ -744,6 +852,7 @@ struct FinanceEntryEditor: View {
         next.kind = saved.kind; next.categoryID = saved.categoryID; next.accountID = saved.accountID; next.destinationID = saved.destinationID
         next.bookID = saved.bookID; next.currency = saved.currency; next.date = saved.date; next.pending = saved.pending
         draft = next
+        chosenByUser = []
         expression = ""; amount = ""; actual = ""; received = ""; fee = ""; converted = ""; convertedFee = ""; filledValues = [:]
         reload()
         initialFingerprint = fingerprint
@@ -754,3 +863,16 @@ struct FinanceEntryEditor: View {
 }
 
 // Association is a UUID on the entry, so deleting a task never cascades into financial records.
+
+/// Change observers for repeat and name suggestions, kept out of the editor's long modifier chain.
+private struct EntryDraftObservers: ViewModifier {
+    let canRepeat: Bool
+    let title: String
+    let repeatAllowed: (Bool) -> Void
+    let titleChanged: (String) -> Void
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: canRepeat) { _, allowed in repeatAllowed(allowed) }
+            .onChange(of: title) { _, value in titleChanged(value) }
+    }
+}

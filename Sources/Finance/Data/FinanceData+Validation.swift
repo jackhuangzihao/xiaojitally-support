@@ -51,6 +51,8 @@ extension FinanceData {
         var refunded: [UUID: Decimal] = [:]
         for e in entries where e.kind == .refund && e.deletedAt == nil { refunded[e.refundOf!, default: 0] += e.amount }
         try check(refunded.allSatisfy { id, amount in amount <= entryMap[id]!.amount }, "累计退款不能超过原消费金额。", "Total refunds cannot exceed the original expense.")
+        try check(recurring.map { !$0.isEmpty && $0.count <= MoneyRecurring.maximumCount && unique($0) } ?? true, "周期账单数据无效。", "Invalid recurring bills.")
+        for bill in recurringBills { try bill.validate(in: self) }
         try check(rates.count <= 500 && Set(rates.map { $0.base + $0.quote }).count == rates.count && rates.allSatisfy { Money.currencies.contains($0.base) && Money.currencies.contains($0.quote) && MoneyRate.valid($0.rate) && $0.date.count == 10 && $0.fetchedAt.timeIntervalSince1970.isFinite && $0.source.count <= 80 }, "汇率数据无效。", "Invalid exchange rate data.")
     }
     func merging(_ incoming: Self) throws -> Self {
@@ -66,6 +68,8 @@ extension FinanceData {
         result.version = max(version, incoming.version)
         result.accounts = try merge(accounts, incoming.accounts); result.books = try merge(books, incoming.books)
         result.categories = try merge(categories, incoming.categories); result.entries = try merge(entries, incoming.entries)
+        let bills = try merge(recurringBills, incoming.recurringBills)
+        result.recurring = bills.isEmpty ? nil : bills
         for rate in incoming.rates where !result.rates.contains(where: { $0.base == rate.base && $0.quote == rate.quote }) { result.rates.append(rate) }
         try result.validate(); return result
     }

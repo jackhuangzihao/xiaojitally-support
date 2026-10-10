@@ -189,10 +189,7 @@ enum CloudMerge {
     }
     static func isUntouchedInitialFinance(_ snapshot: TaskBackup) -> Bool {
         // Returning to an empty ledger after deletion is still a user edit, not a fresh seed.
-        let financialKinds: Set<String> = ["account", "book", "category", "entry", "setting", "rate"]
-        return !(snapshot.syncChanges ?? [:]).keys.contains { key in
-            financialKinds.contains(String(key.prefix { $0 != ":" }))
-        } && isInitialFinance(snapshot.finance)
+        !(snapshot.syncChanges ?? [:]).keys.contains(where: SyncChanges.isFinanceKey) && isInitialFinance(snapshot.finance)
     }
 
     /// Manual quotes are user data; group both directions so a reset or inverse edit cannot resurrect one.
@@ -358,6 +355,16 @@ enum CloudMerge {
                 finance.books = try rows(l.books, r.books, b?.books ?? [], id: { $0.id }, label: L("账本", "Book"), describe: { $0.name }, choice: choice, kind: "book", decision: decision, report: report, review: review)
                 finance.categories = try categoryRows(l.categories, r.categories, b?.categories ?? [], choice: choice, decision: decision, report: report, review: review)
                 finance.rates = try rateRows(l.rates, r.rates, b?.rates ?? [], choice: choice, report: report, review: review)
+                // A bill is reviewed as a whole: its amount, account and schedule decide future postings together.
+                let bills = try rows(l.recurringBills, r.recurringBills, b?.recurringBills ?? [], id: { $0.id }, label: L("周期账单", "Recurring bill"),
+                                     describe: { $0.title + " · " + $0.currency + " " + NSDecimalNumber(decimal: $0.amount).stringValue + " · " + $0.scheduleLabel },
+                                     choice: choice, kind: "recurring", decision: decision,
+                                     mergeFields: { try recurringFields($0, $1, $2, choice: choice, report: report, review: review) },
+                                     report: report, review: review)
+                // Merged end and next dates can leave a bill past its end; it has ended, as after its last occurrence.
+                let running = bills.filter { !$0.hasEnded }
+                if running.count < bills.count { syncLog.notice("Removed \(bills.count - running.count, privacy: .public) recurring bills that ended in a merge") }
+                finance.recurring = running.isEmpty ? nil : running
                 result.finance = finance
             }
         } else {
@@ -381,7 +388,7 @@ enum CloudMerge {
     }
     static func bytes(_ snapshot: TaskBackup) throws -> Data {
         var stable = snapshot
-        stable.version = 10
+        stable.version = 13
         stable.finance?.version = 2
         stable.createdAt = Date(timeIntervalSince1970: 0)
         stable.lists.sort { $0.id.uuidString < $1.id.uuidString }
@@ -393,6 +400,8 @@ enum CloudMerge {
             stable.finance!.categories.sort { $0.id.uuidString < $1.id.uuidString }
             stable.finance!.entries.sort { $0.id.uuidString < $1.id.uuidString }
             stable.finance!.rates.sort { $0.base + $0.quote < $1.base + $1.quote }
+            stable.finance!.recurring = stable.finance!.recurring?.sorted { $0.id.uuidString < $1.id.uuidString }
+            if stable.finance!.recurring?.isEmpty == true { stable.finance!.recurring = nil }
         }
         try stable.validate()
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]

@@ -133,7 +133,7 @@ import SwiftData
         lightweight.finance = try FinanceStore.payload(context).map { try JSONDecoder().decode(FinanceData.self, from: $0) }
         try require(try TaskBackup.decode(lightweight.encoded()).finance == value, "background-decoded ledger joins the full portable backup")
         let before = try TaskBackup.capture(context)
-        try require(before.version == 10 && before.finance == value, "full backup contains finance")
+        try require(before.version == 13 && before.finance == value, "full backup contains finance")
         let backup = try TaskBackup.decode(before.encoded())
         try require(backup.finance == value, "portable backup exact round trip")
         let fresh = try Store.make(url: directory.appendingPathComponent("Restored.store"))
@@ -240,6 +240,8 @@ import SwiftData
         try FinanceDataChecks.sampleCleanup(require: require)
         try FinanceConversionChecks.historicalStatistics(require: require)
         try FinancePostingChecks.deletionBatches(directory: directory, require: require)
+        try FinanceRecurringChecks.run(require: require, rejects: rejects)
+        try FinanceSuggestionChecks.run(require: require)
         try FinanceConversionChecks.partialRateCoverage(require: require)
         try FinanceDataChecks.bankLabelsAndCategories(oldJSON: oldJSON, require: require, rejects: rejects)
         try FinanceDataChecks.entryDefaults(require: require)

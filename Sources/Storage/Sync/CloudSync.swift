@@ -41,7 +41,8 @@ struct AutomaticSyncSummary: Equatable {
 @MainActor @Observable final class CloudSync {
     static let shared = CloudSync()
     static let containerID = "iCloud.local.jianshi.personal"
-    static let maximumSnapshotBytes = 50 * 1024 * 1024
+    /// The old single-snapshot limit; still bounds the one-time legacy download and the performance check.
+    nonisolated static let maximumSnapshotBytes = 50 * 1024 * 1024
     private(set) var enabled = false
     private(set) var running = false
     private(set) var detail = ""
@@ -53,6 +54,8 @@ struct AutomaticSyncSummary: Equatable {
     private(set) var conflictWarning: String?
     private(set) var conflictSelections: [String: CloudMerge.Choice] = [:]
     private(set) var accountChanged = false
+    /// The cloud copy this device synced with is gone (e.g. deleted in iCloud settings). Sync waits for the user.
+    private(set) var cloudRemoved = false
     private var originalContainer: ModelContainer?
     private var debounce: Task<Void, Never>?
     private var generation = 0
@@ -74,20 +77,21 @@ struct AutomaticSyncSummary: Equatable {
         let local: TaskBackup
         let localBytes: Data
         let base: TaskBackup?
-        let baselineDigest: String?
         @MainActor func matches(_ context: ModelContext, baseline: Data?) -> Bool {
             contextID == ObjectIdentifier(context) && revision == Store.revision && self.baseline == baseline && !context.hasChanges
         }
     }
     @ObservationIgnored private var snapshotCache: SnapshotCache?
-    /// A partial baseline differs from the cloud copy. Reuse its verified payload on unchanged polls.
+    /// The assembled cloud snapshot for one fetched state. Unchanged polls skip rebuilding and re-encoding it.
     private struct RemoteCache {
         let account: String
-        let digest: String
+        let generation: Int
         let snapshot: TaskBackup
         let bytes: Data
     }
     @ObservationIgnored private var remoteCache: RemoteCache?
+    /// One transport per iCloud account; its mirror file is keyed by a hash of the account.
+    @ObservationIgnored private var transport: (account: String, value: any CloudRecordTransport)?
     private var context: ModelContext? { (Store.recovery.container ?? originalContainer)?.mainContext }
     var summary: String {
         if !enabled { return L("仅保存在本机", "Stored on this device") }
@@ -132,7 +136,7 @@ struct AutomaticSyncSummary: Equatable {
             let state = try state(context); state.enabled = value
             applying = true; defer { applying = false }
             try Store.save(context)
-            enabled = value; generation += 1; snapshotCache = nil; detail = ""; clearReview()
+            enabled = value; generation += 1; snapshotCache = nil; detail = ""; cloudRemoved = false; clearReview()
             debounce?.cancel()
             if value { Task { await sync() } }
         } catch { detail = error.localizedDescription }
@@ -214,64 +218,52 @@ struct AutomaticSyncSummary: Equatable {
                 prepared = cached
             } else {
                 let local = try TaskBackup.capture(context), revision = Store.revision
-                let (base, localBytes, baselineDigest) = try await Task.detached {
-                    (try baseline.map { try TaskBackup.decode($0, allowLargeFile: true) },
-                     try CloudMerge.bytes(local), baseline.map(CloudMerge.digest))
+                let (base, localBytes) = try await Task.detached {
+                    (try baseline.map { try TaskBackup.decode($0, allowLargeFile: true) }, try CloudMerge.bytes(local))
                 }.value
                 guard canContinue(ticket, in: context) else { return }
                 prepared = SnapshotCache(contextID: ObjectIdentifier(context), revision: revision, baseline: baseline,
-                                         local: local, localBytes: localBytes, base: base, baselineDigest: baselineDigest)
+                                         local: local, localBytes: localBytes, base: base)
                 if prepared.matches(context, baseline: state.baseline) { snapshotCache = prepared }
             }
             let local = prepared.local, localBytes = prepared.localBytes, base = prepared.base
-            let capturedRevision = prepared.revision, baselineDigest = prepared.baselineDigest
-            let database = container.privateCloudDatabase
-            let recordID = CKRecord.ID(recordName: "tally-personal-v1")
-            var record: CKRecord
-            var remote: TaskBackup
-            var unchangedRemoteBytes: Data?
+            let capturedRevision = prepared.revision
+            let transport = try recordTransport(in: container, account: account)
+            let cloudState = try await transport.fetch()
+            guard canContinue(ticket, in: context) else { return }
+            if let head = cloudState.head, head.format > CloudRecordCodec.format { throw CloudRecordError.unsupportedFormat(head.format) }
+            // Merging rows of an unfinished round would read rows still to come as missing. This device completes
+            // its own interrupted round, or another device's once abandoned, merging against the last finished state.
+            let resuming = cloudState.hasUnfinishedRound
+            if resuming {
+                guard cloudState.canResume(as: CloudWriter.current, now: Date()) else {
+                    syncLog.notice("Waiting for another device to finish its upload")
+                    throw CloudRecordError.unfinishedRound
+                }
+                syncLog.notice("Completing an unfinished upload round; finished state known: \(cloudState.finishedItems != nil, privacy: .public)")
+            }
+            let remote: TaskBackup, remoteBytes: Data
             var cloudExists = true
-            do {
-                let headers = try await database.records(for: [recordID], desiredKeys: ["formatVersion", "digest"])
-                guard let header = headers[recordID] else { throw TaskBackup.invalid("Missing CloudKit fetch result") }
-                record = try header.get()
-                guard (record["formatVersion"] as? Int64) == 1 else {
-                    throw TaskBackup.invalid(L("云端格式暂不支持，请更新小记。", "Update Tally to read this cloud format."))
+            var legacyRecord: CKRecord?
+            if cloudState.head != nil {
+                (remote, remoteBytes) = try await cloudSnapshot(cloudState, account: account, resuming: resuming)
+            } else if let legacy = try await LegacySnapshotRecord.fetch(from: container.privateCloudDatabase) {
+                syncLog.notice("Migrating the single-snapshot cloud copy to per-record sync")
+                remote = legacy.snapshot; legacyRecord = legacy.record
+                remoteBytes = try await Task.detached { try CloudMerge.bytes(legacy.snapshot) }.value
+            } else {
+                guard base == nil else {
+                    cloudRemoved = true
+                    throw TaskBackup.invalid(L("iCloud 中的小记数据已被删除，同步已暂停，未自动重新上传。确认后可在下方用本机数据重新上传。", "Tally’s data was deleted from iCloud. Sync paused without re-uploading. You can re-upload this device’s data below."))
                 }
-                if let base, let baselineDigest, record["digest"] as? String == baselineDigest {
-                    remote = base // Do not download the asset again when nothing changed in the cloud.
-                    unchangedRemoteBytes = baseline
-                } else if let cached = remoteCache, cached.account == account,
-                          record["digest"] as? String == cached.digest {
-                    remote = cached.snapshot; unchangedRemoteBytes = cached.bytes
-                } else {
-                    record = try await database.record(for: recordID)
-                    guard (record["formatVersion"] as? Int64) == 1, let url = (record["snapshot"] as? CKAsset)?.fileURL else { throw TaskBackup.invalid("Unsupported cloud snapshot") }
-                    let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                    guard size <= Self.maximumSnapshotBytes else { throw TaskBackup.invalid(L("云端数据超过当前同步上限（50 MB）。本地数据不受影响。", "Cloud data exceeds the current 50 MB sync limit. Local data is unaffected.")) }
-                    remote = try await Task.detached {
-                        try TaskBackup.decode(Data(contentsOf: url), allowLargeFile: true)
-                    }.value
-                }
-            } catch let error as CKError where error.code == .unknownItem {
-                guard base == nil else { throw TaskBackup.invalid(L("云端副本已被移除，同步已暂停，未自动重新上传。请先导出本地备份并联系支持。", "The cloud copy was removed. Sync paused without re-uploading it. Export a local backup and contact support.")) }
-                record = CKRecord(recordType: "TallySnapshot", recordID: recordID)
                 remote = TaskBackup(lists: [], tasks: [])
+                remoteBytes = try await Task.detached { try CloudMerge.bytes(TaskBackup(lists: [], tasks: [])) }.value
                 cloudExists = false
             }
             let cloud = remote, existingCloud = cloudExists
-            let remoteBytes: Data
-            if let unchangedRemoteBytes { remoteBytes = unchangedRemoteBytes }
-            else { remoteBytes = try await Task.detached { try CloudMerge.bytes(cloud) }.value }
             guard canContinue(ticket, in: context) else { return }
-            if unchangedRemoteBytes == nil {
-                let remoteDigest = await Task.detached { CloudMerge.digest(remoteBytes) }.value
-                if record["digest"] as? String == remoteDigest {
-                    remoteCache = RemoteCache(account: account, digest: remoteDigest, snapshot: cloud, bytes: remoteBytes)
-                }
-            }
-            guard canContinue(ticket, in: context) else { return }
-            if localBytes == baseline && localBytes == remoteBytes && capturedRevision == Store.revision {
+            // A legacy copy always continues to the upload below, which writes the first per-record round.
+            if cloudState.head != nil && !resuming && localBytes == baseline && localBytes == remoteBytes && capturedRevision == Store.revision {
                 lastSync = Date(); detail = ""; clearReview()
                 resolutionResult = "succeeded"
                 return
@@ -306,9 +298,6 @@ struct AutomaticSyncSummary: Equatable {
                 clearReview()
                 throw TaskBackup.invalid(L("两端的关联变化无法安全合并，未覆盖任何数据。请导出双方恢复副本，检查相关账户、退款或清单后重试。", "Related changes cannot be merged safely. No data was overwritten. Export both recovery copies and review the affected accounts, refunds or lists before retrying.") + "\n" + error.localizedDescription)
             }
-            guard uploadBytes.count <= Self.maximumSnapshotBytes else { throw TaskBackup.invalid(L("数据超过当前同步上限（50 MB）。请继续使用本地备份。", "Data exceeds the current 50 MB sync limit. Continue using local backups.")) }
-            // ponytail: one atomic asset keeps finance relationships consistent, bounded at 50 MB.
-            // Use per-entity CloudKit records if measured personal ledgers outgrow snapshot uploads.
             // Always retain both sides before changing either, including before conflict resolution.
             if state.baseline == nil || localResultBytes != localBytes || uploadBytes != remoteBytes || resolvingConflict || plan.conflict != nil {
                 try await protect(localBytes, remoteBytes, recovery: BackupFiles.SyncRecoveryKind.required(manualReview: resolvingConflict || plan.conflict != nil, automaticCount: plan.automaticFieldCount))
@@ -318,23 +307,21 @@ struct AutomaticSyncSummary: Equatable {
                 clearReview(); pendingSave = true
                 throw TaskBackup.invalid(L("处理冲突时数据又有变化，将重新检查。", "Data changed while resolving conflicts. Checking again."))
             }
-            if uploadBytes != remoteBytes || record.recordChangeTag == nil {
+            // Only rows that differ from the cloud are sent; an empty cloud also needs its first head.
+            let changes = try await Task.detached {
+                CloudRecordCodec.changes(from: cloudState.items, to: try CloudRecordCodec.items(plan.uploadSnapshot))
+            }.value
+            if !changes.isEmpty || cloudState.head == nil || resuming {
                 // Recheck after awaits. Account changes invalidate every in-flight operation.
                 guard try await container.userRecordID().recordName == account, canContinue(ticket, in: context) else { return }
-                let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
-                defer { try? FileManager.default.removeItem(at: file) }
-                let digest = try await Task.detached {
-                    try uploadBytes.write(to: file, options: .atomic)
-                    return CloudMerge.digest(uploadBytes)
-                }.value
-                guard canContinue(ticket, in: context) else { return }
-                record["snapshot"] = CKAsset(fileURL: file)
-                record["formatVersion"] = Int64(1)
-                record["digest"] = digest
-                let result = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: false)
-                guard let saved = result.saveResults[recordID] else { throw TaskBackup.invalid("Missing CloudKit save result") }
-                _ = try saved.get()
-                remoteCache = RemoteCache(account: account, digest: digest, snapshot: plan.uploadSnapshot, bytes: uploadBytes)
+                _ = try await transport.save(changes, round: (cloudState.head?.round ?? 0) + 1)
+                remoteCache = nil
+            }
+            if let legacyRecord {
+                // The rows are safely in the zone now. If marking fails, the zone's head already prevents a re-read.
+                do { try await LegacySnapshotRecord.markSuperseded(legacyRecord, in: container.privateCloudDatabase) }
+                catch { syncLog.error("Could not mark the legacy snapshot as superseded: \(error.localizedDescription, privacy: .public)") }
+                syncLog.notice("Migrated to per-record sync")
             }
             guard canContinue(ticket, in: context) else { return }
             // Edits made while the upload was in flight are merged again, never overwritten by its old snapshot.
@@ -357,7 +344,7 @@ struct AutomaticSyncSummary: Equatable {
                                         revision: importRevision, in: context) else { pendingSave = true; return }
             // A save may normalize list colors. Refill from the actual committed context on the next poll.
             snapshotCache = nil
-            lastSync = state.lastSync; detail = ""; clearReview()
+            lastSync = state.lastSync; detail = ""; cloudRemoved = false; clearReview()
             if let review = plan.conflict, finalBytes == localResultBytes {
                 retainReview(review, local: finalBytes, cloud: uploadBytes, baseline: baselineBytes, evaluatedAt: evaluatedAt, choices: choices)
                 detail = L("相关项目等待核对，其余修改已同步。", "Related items await review; other changes have synced.")
@@ -376,6 +363,8 @@ struct AutomaticSyncSummary: Equatable {
                 resolutionResult = "failed"
                 retryAfter = Self.retryDate(error)
                 detail = Self.message(error)
+                // Another device saved first: merge its changes again soon instead of waiting for the next poll.
+                if error as? CloudRecordError == .changedElsewhere { pendingSave = true }
                 if let retryAfter { detail += "\n" + L("Apple 要求暂缓请求，将在 ", "Apple requested a pause. Retrying after ") + retryAfter.formatted(date: .omitted, time: .standard) }
             }
         }
@@ -384,6 +373,55 @@ struct AutomaticSyncSummary: Equatable {
         guard let seconds = (error as NSError).userInfo[CKErrorRetryAfterKey] as? NSNumber,
               seconds.doubleValue.isFinite, seconds.doubleValue > 0 else { return nil }
         return now.addingTimeInterval(seconds.doubleValue)
+    }
+    private func recordTransport(in container: CKContainer, account: String) throws -> any CloudRecordTransport {
+        if let transport, transport.account == account { return transport.value }
+        let value = try CloudKitRecordTransport(database: container.privateCloudDatabase, account: account)
+        transport = (account, value); remoteCache = nil
+        return value
+    }
+    /// Builds the cloud snapshot off the main actor and caches it until the fetched state changes. When completing
+    /// an unfinished round it uses the last finished state if known, else the rows as they are.
+    private func cloudSnapshot(_ state: CloudState, account: String, resuming: Bool) async throws -> (TaskBackup, Data) {
+        if !resuming, let remoteCache, remoteCache.account == account, remoteCache.generation == state.generation {
+            return (remoteCache.snapshot, remoteCache.bytes)
+        }
+        let items = resuming ? state.finishedItems ?? state.items : state.items
+        let (snapshot, bytes): (TaskBackup, Data)
+        do {
+            (snapshot, bytes) = try await Task.detached {
+                let snapshot = try CloudRecordCodec.snapshot(items)
+                return (snapshot, try CloudMerge.bytes(snapshot))
+            }.value
+        } catch {
+            syncLog.error("Cloud rows do not form a valid snapshot: \(error.localizedDescription, privacy: .public)")
+            throw CloudRecordError.inconsistentCloud(error.localizedDescription)
+        }
+        if !resuming { remoteCache = RemoteCache(account: account, generation: state.generation, snapshot: snapshot, bytes: bytes) }
+        return (snapshot, bytes)
+    }
+    /// After the cloud copy was deleted: keeps a recovery copy of this device's data, forgets the old merge base,
+    /// and uploads this device's data as the new cloud copy. Other devices then merge into it as usual.
+    func reuploadLocalData() async {
+        guard enabled, cloudRemoved, !running, let context else { return }
+        do {
+            try Store.recovery.requireWritable(context)
+            let local = try TaskBackup.capture(context)
+            let localBytes = try await Task.detached { try CloudMerge.bytes(local) }.value
+            let emptyBytes = try await Task.detached { try CloudMerge.bytes(TaskBackup(lists: [], tasks: [])) }.value
+            try await protect(localBytes, emptyBytes)
+            let state = try state(context)
+            state.baseline = nil
+            applying = true
+            defer { applying = false }
+            try Store.save(context)
+            cloudRemoved = false; detail = ""; snapshotCache = nil; remoteCache = nil; retryAfter = nil
+            syncLog.notice("Re-uploading local data after the cloud copy was removed")
+        } catch {
+            detail = error.localizedDescription
+            return
+        }
+        await sync()
     }
     static func recoveryDirectory() throws -> URL {
         try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)

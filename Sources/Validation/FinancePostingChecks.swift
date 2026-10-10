@@ -467,7 +467,7 @@ import SwiftData
             try FinanceStore.stage(original, in: pendingStore.mainContext); try Store.save(pendingStore.mainContext)
             let pendingBackup = try TaskBackup.capture(pendingStore.mainContext)
             let pendingRoundTrip = try TaskBackup.decode(pendingBackup.encoded())
-            try require(pendingRoundTrip.version == 10 && pendingRoundTrip.finance == original, "pending survives storage and portable backup without entering balances")
+            try require(pendingRoundTrip.version == 13 && pendingRoundTrip.finance == original, "pending survives storage and portable backup without entering balances")
         }
     }
 }

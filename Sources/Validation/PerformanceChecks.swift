@@ -130,9 +130,9 @@ extension FinanceChecks {
 extension CloudSync {
     /// Called only with the performance check's disposable store; no CloudKit or user data access.
     @MainActor static func snapshotPerformance(in context: ModelContext) throws {
-        let local = try TaskBackup.capture(context), baseline = try CloudMerge.bytes(local), digest = CloudMerge.digest(baseline)
+        let local = try TaskBackup.capture(context), baseline = try CloudMerge.bytes(local)
         let cached = SnapshotCache(contextID: ObjectIdentifier(context), revision: Store.revision, baseline: baseline,
-                                   local: local, localBytes: baseline, base: try TaskBackup.decode(baseline, allowLargeFile: true), baselineDigest: digest)
+                                   local: local, localBytes: baseline, base: try TaskBackup.decode(baseline, allowLargeFile: true))
         guard let historyBytes = try context.fetch(FetchDescriptor<CloudSyncState>()).first?.changeHistory else {
             throw TaskBackup.invalid("Performance snapshot is missing persisted sync history")
         }
@@ -148,14 +148,14 @@ extension CloudSync {
         for _ in 0..<3 {
             var start = ProcessInfo.processInfo.systemUptime
             let captured = try TaskBackup.capture(context), encoded = try CloudMerge.bytes(captured)
-            let base = try TaskBackup.decode(baseline, allowLargeFile: true), baselineDigest = CloudMerge.digest(baseline)
+            let base = try TaskBackup.decode(baseline, allowLargeFile: true)
             uncached.append(ProcessInfo.processInfo.systemUptime - start)
-            guard encoded == cached.localBytes, try CloudMerge.bytes(base) == baseline, baselineDigest == cached.baselineDigest else {
+            guard encoded == cached.localBytes, try CloudMerge.bytes(base) == baseline else {
                 throw TaskBackup.invalid("Sync cache differs from uncached preparation")
             }
             start = ProcessInfo.processInfo.systemUptime
             for _ in 0..<1000 {
-                guard cached.matches(context, baseline: baseline), cached.localBytes == baseline, cached.baselineDigest == digest else {
+                guard cached.matches(context, baseline: baseline), cached.localBytes == baseline else {
                     throw TaskBackup.invalid("Unchanged sync poll did not reuse its prepared snapshot")
                 }
             }

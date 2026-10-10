@@ -17,7 +17,8 @@ import SwiftData
     }
     static func decode(_ bytes: Data) throws -> FinanceData {
         if let cached, cached.payload == bytes { return cached.value }
-        let value = try JSONDecoder().decode(FinanceData.self, from: bytes)
+        var value = try JSONDecoder().decode(FinanceData.self, from: bytes)
+        value.migrateLegacyRecurring() // Saved with the next change; until then every read migrates the same way.
         try value.validate()
         cached = (bytes, value)
         return value
@@ -31,6 +32,11 @@ import SwiftData
             normalized.entries[i].deletedAt = normalized.entries[i].deletedAt.map(MoneyEntry.timestamp)
         }
         for i in normalized.rates.indices { normalized.rates[i].fetchedAt = MoneyEntry.timestamp(normalized.rates[i].fetchedAt) }
+        if normalized.recurring?.isEmpty == true { normalized.recurring = nil }
+        for i in normalized.recurring?.indices ?? 0..<0 {
+            normalized.recurring![i].nextDate = MoneyEntry.timestamp(normalized.recurring![i].nextDate)
+            normalized.recurring![i].until = normalized.recurring![i].until.map(MoneyEntry.timestamp)
+        }
         if trackSyncChanges { try SyncChanges.trackFinance(from: read(context), to: normalized, in: context) }
         let data = try JSONEncoder().encode(normalized)
         let existing = try context.fetch(FetchDescriptor<FinanceLedger>())

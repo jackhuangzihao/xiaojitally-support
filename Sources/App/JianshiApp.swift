@@ -75,7 +75,7 @@ final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
         }
         if CommandLine.arguments.contains("--self-check") {
             Task { @MainActor in
-                do { try SelfCheck.run(); _ = try await SyncHistoryChecks.backgroundPreparation(); exit(0) }
+                do { try SelfCheck.run(); _ = try await CloudRecordChecks.run(); _ = try await SyncHistoryChecks.backgroundPreparation(); exit(0) }
                 catch { print("SELF-CHECK FAILED: \(error)"); exit(1) }
             }
             RunLoop.main.run(); exit(1)

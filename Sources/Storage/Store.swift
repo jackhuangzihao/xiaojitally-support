@@ -103,8 +103,9 @@ import SQLite3
 /// SQLite's backup API includes committed WAL data even while another connection is open.
 /// This is a local rollback artifact, not a sync queue or a replacement for portable JSON backups.
 enum StoreUpgradeSnapshot {
-    // Bump for a persisted-schema change, not for every app build. Keep prior generations.
-    static let generation = "schema-v2"
+    // Bump for a persisted-schema or stored-format change, not for every app build. Keep prior generations.
+    // v3: per-record sync and recurring bills stored as rules (backup/sync format 13).
+    static let generation = "schema-v3"
     static func prepare(_ source: URL, generation: String = StoreUpgradeSnapshot.generation) throws -> URL? {
         guard !generation.isEmpty, generation.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 }) else {
             throw CocoaError(.fileWriteInvalidFileName)

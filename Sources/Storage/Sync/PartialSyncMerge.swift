@@ -47,10 +47,6 @@ enum PartialSyncMerge {
         private let blocked: Set<String>
         var count: Int { blocked.count }
         private static let ledger = "ledger"
-        private static let financialKinds: Set<String> = ["account", "book", "category", "entry", "setting", "rate"]
-        private static func financeKey(_ key: String) -> Bool {
-            financialKinds.contains(String(key.prefix { $0 != ":" }))
-        }
         private static func rateKey(_ rate: MoneyRate) -> String {
             "rate:" + [rate.base, rate.quote].sorted().joined(separator: "/")
         }
@@ -94,9 +90,15 @@ enum PartialSyncMerge {
                     reference(key, "task", row.taskID)
                     // A refund limit depends on the complete family, including concurrent newly added refunds.
                     if let original = row.refundOf { connect(key, SyncChanges.key("entry", original)) }
+                    // A generated entry stays with its bill, so a held bill never publishes half of its schedule.
+                    if let bill = row.recurringID { reference(key, "recurring", bill) }
+                }
+                for row in finance.recurringBills {
+                    let key = SyncChanges.key("recurring", row.id)
+                    reference(key, "account", row.accountID); reference(key, "book", row.bookID); reference(key, "category", row.categoryID)
                 }
                 if ledgerChanges {
-                    for key in known where Self.financeKey(key) { connect(Self.ledger, key) }
+                    for key in known where SyncChanges.isFinanceKey(key) { connect(Self.ledger, key) }
                     for rate in finance.rates { connect(Self.ledger, Self.rateKey(rate)) }
                 }
             }
@@ -108,12 +110,12 @@ enum PartialSyncMerge {
                 case "ledger", "ledger-currency", "base-currency":
                     pending.append(Self.ledger)
                     // A ledger-level conflict always holds the entire ledger, even if currencies match.
-                    for key in known where Self.financeKey(key) { connect(Self.ledger, key) }
+                    for key in known where SyncChanges.isFinanceKey(key) { connect(Self.ledger, key) }
                     for rate in snapshots.flatMap({ $0.finance?.rates ?? [] }) { connect(Self.ledger, Self.rateKey(rate)) }
                 case "rate":
                     guard parts.count == 2 else { throw conflict }
                     pending.append(item.id)
-                case "task", "task-chain", "task-lifecycle", "list", "week", "account", "account-postings", "book", "category", "category-family", "entry":
+                case "task", "task-chain", "task-lifecycle", "list", "week", "account", "account-postings", "book", "category", "category-family", "entry", "recurring":
                     guard parts.count == 2 else { throw conflict }
                     let ids = parts[1].split(separator: ",").compactMap { UUID(uuidString: String($0)) }
                     guard !ids.isEmpty && ids.count == parts[1].split(separator: ",").count else { throw conflict }
@@ -148,6 +150,8 @@ enum PartialSyncMerge {
                 result.finance!.books.removeAll { blocked.contains(SyncChanges.key("book", $0.id)) }
                 result.finance!.categories.removeAll { blocked.contains(SyncChanges.key("category", $0.id)) }
                 result.finance!.entries.removeAll { blocked.contains(SyncChanges.key("entry", $0.id)) }
+                result.finance!.recurring?.removeAll { blocked.contains(SyncChanges.key("recurring", $0.id)) }
+                if result.finance!.recurring?.isEmpty == true { result.finance!.recurring = nil }
                 result.finance!.rates.removeAll { blocked.contains(Self.rateKey($0)) }
             }
             result.syncChanges = source.syncChanges?.filter { !blocked.contains($0.key) }
@@ -170,6 +174,8 @@ enum PartialSyncMerge {
                 finance.books = rows(finance.books, source.finance?.books ?? [], kind: "book", id: { $0.id })
                 finance.categories = rows(finance.categories, source.finance?.categories ?? [], kind: "category", id: { $0.id })
                 finance.entries = rows(finance.entries, source.finance?.entries ?? [], kind: "entry", id: { $0.id })
+                let bills = rows(finance.recurringBills, source.finance?.recurringBills ?? [], kind: "recurring", id: { $0.id })
+                finance.recurring = bills.isEmpty ? nil : bills
                 finance.rates = finance.rates.filter { !blocked.contains(Self.rateKey($0)) } +
                     (source.finance?.rates ?? []).filter { blocked.contains(Self.rateKey($0)) }
                 result.finance = finance

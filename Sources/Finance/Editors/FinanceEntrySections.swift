@@ -14,6 +14,14 @@ struct FinanceEntryAmount<Focus: Hashable>: View {
     let focus: FocusState<Focus?>.Binding
     let amountFocus: Focus
     let titleFocus: Focus
+    var calculatorOn = false
+    var toggleCalculator: () -> Void = {}
+    /// Show how earlier names can be reused (new income and expenses only).
+    var nameHint = false
+    /// Earlier names matching what is typed; choosing one also takes its category and account.
+    var suggestions: [MoneyEntrySuggestion] = []
+    var detail: (MoneyEntrySuggestion) -> String = { _ in "" }
+    var choose: (MoneyEntrySuggestion) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -35,12 +43,41 @@ struct FinanceEntryAmount<Focus: Hashable>: View {
                 if expression.contains(where: { $0 == "+" || $0 == "−" || $0 == "-" }) && expression.count > 1, let value {
                     Text("= " + Money.format(value, currency)).font(.callout).foregroundStyle(.secondary).monospacedDigit()
                 }
+                Spacer(minLength: 0)
+                Button(action: toggleCalculator) {
+                    Label(L("计算器", "Calculator"), systemImage: "plus.forwardslash.minus").font(.callout)
+                }
+                .buttonStyle(.bordered).tint(calculatorOn ? .accentColor : nil)
+                .frame(minHeight: compact ? 44 : nil)
+                .accessibilityAddTraits(calculatorOn ? [.isSelected] : [])
+                .help(L("打开计算器键盘，可以输入加减算式", "Open the calculator keypad for addition and subtraction"))
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(L("备注", "Note")).font(.caption).foregroundStyle(.secondary)
-                TextField(L("可不填", "Optional"), text: $title)
+                Text(L("名称", "Name")).font(.caption).foregroundStyle(.secondary)
+                TextField(nameHint ? L("输入名称，可套用以前记过的分类和账户", "Type a name to reuse an earlier category and account")
+                                   : L("可不填", "Optional"), text: $title)
                     .textFieldStyle(.plain).focused(focus, equals: titleFocus).frame(minHeight: compact ? 44 : nil)
-                    .accessibilityLabel(L("备注", "Note"))
+                    .accessibilityLabel(L("名称", "Name"))
+                if !suggestions.isEmpty {
+                    FlowLayout(spacing: 6) {
+                        ForEach(suggestions) { suggestion in
+                            let exact = MoneyTitleIndex.isExact(suggestion, title)
+                            Button { choose(suggestion) } label: {
+                                HStack(spacing: 4) {
+                                    Text(suggestion.title).lineLimit(1)
+                                    let extra = detail(suggestion)
+                                    if !extra.isEmpty { Text(extra).foregroundStyle(.secondary).lineLimit(1) }
+                                }
+                                .font(.caption).padding(.horizontal, 8).padding(.vertical, 4)
+                                .frame(minHeight: compact ? 44 : nil)
+                                .background(exact ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06), in: Capsule())
+                                .contentShape(Capsule())
+                            }.buttonStyle(.plain)
+                                .accessibilityLabel(L("用以前的“", "Use earlier “") + suggestion.title + L("”", "”"))
+                                .accessibilityHint(L("同时选上次用的分类和账户", "Also picks the category and account used last time"))
+                        }
+                    }.accessibilityIdentifier("finance.titleSuggestions")
+                }
             }
         }
     }
@@ -49,40 +86,18 @@ struct FinanceEntryAmount<Focus: Hashable>: View {
 struct FinanceEntryDetails<Focus: Hashable>: View {
     @AppStorage("appLanguage") private var language = "system"
     let compact: Bool
-    let recent: [String]
     let tasks: [TaskItem]
     @Binding var notes: String
-    @Binding var tags: String
     @Binding var taskID: UUID?
     let focus: FocusState<Focus?>.Binding
     let notesFocus: Focus
-    let tagsFocus: Focus
-    let addTag: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            fieldTitle(L("详细说明", "Details"), L("写不下的细节，比如买了什么、和谁一起、发票号。", "Anything longer: what you bought, who with, an invoice number."))
+            fieldTitle(L("备注", "Notes"), L("补充细节，例如和谁一起、买了什么、发票号。填了会显示在账单列表里。", "Extra details such as who with, what you bought or an invoice number. Shown in the entry list."))
             TextField(L("可不填", "Optional"), text: $notes, axis: .vertical).focused(focus, equals: notesFocus).lineLimit(2...5).textFieldStyle(.roundedBorder)
-            fieldTitle(L("标签", "Tags"), L("给账单打记号，方便以后搜索，比如“报销”“出差”。多个用逗号分开。", "Marks for finding entries later, such as “reimburse” or “work trip”. Separate with commas."))
-            TextField(L("可不填", "Optional"), text: $tags).focused(focus, equals: tagsFocus).textFieldStyle(.roundedBorder)
-            if !recent.isEmpty {
-                ScrollView(.horizontal) {
-                HStack(spacing: 6) {
-                    Text(L("常用：", "Recent: ")).font(.caption).foregroundStyle(.secondary)
-                    ForEach(recent, id: \.self) { tag in
-                        Button(tag) { addTag(tag) }.buttonStyle(.plain).font(.caption)
-                            .padding(.horizontal, 8).padding(.vertical, 3).background(Capsule().fill(Color.primary.opacity(0.07)))
-                            .frame(minHeight: compact ? 44 : nil)
-                    }
-                }
-                }.scrollIndicators(.hidden)
-            }
             fieldTitle(L("关联任务", "Linked task"), L("这笔钱对应待办里的哪件事，可在任务里看到相关花费。", "Which task this money belongs to; the task shows its entries."))
-            Picker(L("关联任务", "Linked task"), selection: $taskID) {
-                Text(L("不关联", "None")).tag(nil as UUID?)
-                ForEach(tasks.filter { $0.deletedAt == nil || $0.id == taskID }.sorted { $0.createdAt > $1.createdAt }) { Text($0.title).tag(Optional($0.id)) }
-                if let id = taskID, !tasks.contains(where: { $0.id == id }) { Text(L("原任务已删除", "Original task removed")).tag(Optional(id)) }
-            }.labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
+            TaskLinkPicker(tasks: tasks, taskID: $taskID)
         }.padding(12).background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
     }
 
@@ -90,6 +105,104 @@ struct FinanceEntryDetails<Focus: Hashable>: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.callout.weight(.medium))
             Text(hint).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Which tasks to offer when linking an entry. Pure, so the choice is testable without a store.
+enum TaskLinkOptions {
+    struct Candidate: Equatable {
+        var id: UUID
+        var title: String
+        var done: Bool
+        var deleted: Bool
+        var date: Date?
+        var completedAt: Date?
+    }
+    struct Option: Identifiable, Equatable {
+        var id: UUID
+        var title: String
+        var done: Bool
+        var date: Date?
+    }
+
+    /// Without a query: unfinished tasks dated within a week either side of today, by date, then tasks completed
+    /// in the last week. With one: any task whose name contains it, unfinished first. Deleted tasks are never offered.
+    static func make(_ candidates: [Candidate], query: String, now: Date = Date(), calendar: Calendar = Dates.calendar)
+        -> (open: [Option], done: [Option]) {
+        let live = candidates.filter { !$0.deleted }
+        func option(_ c: Candidate) -> Option { Option(id: c.id, title: c.title, done: c.done, date: c.date) }
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !needle.isEmpty {
+            let hits = live.filter { $0.title.range(of: needle, options: [.caseInsensitive, .widthInsensitive, .diacriticInsensitive]) != nil }
+            func distance(_ c: Candidate) -> TimeInterval { c.date.map { abs($0.timeIntervalSince(now)) } ?? .infinity }
+            let ordered = hits.sorted { distance($0) < distance($1) }
+            return (Array(ordered.filter { !$0.done }.prefix(20)).map(option), Array(ordered.filter(\.done).prefix(10)).map(option))
+        }
+        let today = calendar.startOfDay(for: now)
+        guard let start = calendar.date(byAdding: .day, value: -7, to: today),
+              let end = calendar.date(byAdding: .day, value: 8, to: today) else { return ([], []) }
+        let open = live.filter { c in !c.done && c.date.map { $0 >= start && $0 < end } == true }
+            .sorted { ($0.date ?? .distantFuture) < ($1.date ?? .distantFuture) }
+        let done = live.filter { c in c.done && c.completedAt.map { $0 >= start } == true }
+            .sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
+        return (Array(open.prefix(8)).map(option), Array(done.prefix(5)).map(option))
+    }
+}
+
+/// Picks the task an entry belongs to, with search. An existing link to a deleted task stays shown until changed.
+struct TaskLinkPicker: View {
+    let tasks: [TaskItem]
+    @Binding var taskID: UUID?
+    @State private var query = ""
+
+    private var candidates: [TaskLinkOptions.Candidate] {
+        tasks.map { .init(id: $0.id, title: $0.title, done: $0.isDone, deleted: $0.deletedAt != nil, date: $0.calendarDate, completedAt: $0.completedAt) }
+    }
+    private var selectedTitle: String {
+        guard let id = taskID else { return L("不关联", "None") }
+        guard let task = tasks.first(where: { $0.id == id }) else { return L("原任务已删除", "Original task removed") }
+        return task.title + (task.deletedAt != nil ? L("（已删除）", " (deleted)") : "")
+    }
+
+    var body: some View {
+        let options = TaskLinkOptions.make(candidates, query: query)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Label(selectedTitle, systemImage: taskID == nil ? "circle.dashed" : "checklist")
+                    .font(.callout).lineLimit(1)
+                    .foregroundStyle(taskID == nil ? Color.secondary : .primary)
+                Spacer(minLength: 8)
+                if taskID != nil { Button(L("不关联", "Unlink")) { taskID = nil }.buttonStyle(.borderless).frame(minHeight: 32) }
+            }
+            TextField(L("搜索任务名称", "Search tasks"), text: $query).textFieldStyle(.roundedBorder)
+            if options.open.isEmpty && options.done.isEmpty {
+                Text(query.isEmpty ? L("近一周没有任务，输入名称搜索全部任务。", "No tasks this week. Type a name to search all tasks.")
+                     : L("没有找到“\(query)”", "No task matches “\(query)”"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            group(query.isEmpty ? L("未完成 · 近期", "Unfinished · this week") : L("未完成", "Unfinished"), options.open)
+            group(query.isEmpty ? L("最近完成", "Recently completed") : L("已完成", "Completed"), options.done)
+        }
+    }
+
+    @ViewBuilder private func group(_ title: String, _ options: [TaskLinkOptions.Option]) -> some View {
+        if !options.isEmpty {
+            Text(title).font(.caption).foregroundStyle(.secondary).padding(.top, 2)
+            ForEach(options) { option in
+                Button { taskID = option.id } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: option.done ? "checkmark.circle" : "circle").foregroundStyle(.secondary)
+                        Text(option.title).lineLimit(1)
+                        Spacer(minLength: 8)
+                        if let date = option.date { Text(Dates.label(date, pattern: "M月d日")).font(.caption).foregroundStyle(.secondary) }
+                        if option.id == taskID { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(option.id == taskID ? .isSelected : [])
+            }
         }
     }
 }

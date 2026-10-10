@@ -38,7 +38,7 @@ import CryptoKit
             try check(try SyncChanges.read(context) == revisions, "new history reads without changing timestamps or tombstones")
 
             let saved = state.changeHistory
-            let version = SyncVersion.next(after: nil, actor: UUID())
+            let version = SyncVersion.next(after: nil, actor: UUID(), now: date)
             var recordVersionOnly = revisions; recordVersionOnly[first]?.version = version
             try SyncChanges.stage(recordVersionOnly, in: context)
             try check(try state.changeHistory == encoder.encode(recordVersionOnly) && SyncChanges.read(context) == recordVersionOnly,
@@ -90,7 +90,7 @@ import CryptoKit
             try rejects("new field names are validated") { try SyncChanges.stage(invalid, in: context) }
             invalid = revisions; invalid[first]?.version = SyncVersion(clock: [:], winner: version.winner)
             try rejects("a record-version-only edit cannot bypass validation in a warm cache") { try SyncChanges.stage(invalid, in: context) }
-            var invalidFieldVersion = version; invalidFieldVersion.winner.counter += 1
+            var invalidFieldVersion = version; invalidFieldVersion.winner.stamp = version.winner.stamp.successor
             invalid = revisions; invalid[first]?.fields?["title"]?.version = invalidFieldVersion
             try rejects("a field-version-only edit cannot bypass validation in a warm cache") { try SyncChanges.stage(invalid, in: context) }
             try check(try SyncChanges.read(context) == revisions && state.changeHistory == encoder.encode(revisions),

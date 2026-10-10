@@ -89,7 +89,7 @@ def main():
         mac_app = products["mac"]
         info = plistlib.loads((mac_app / "Contents/Info.plist").read_bytes())
         executable = str(mac_app / "Contents/MacOS" / info["CFBundleExecutable"])
-        run("mac-self-check", [executable, "--self-check"], marker=("checks — calendar", "BACKGROUND HISTORY PASS:"))
+        run("mac-self-check", [executable, "--self-check"], marker=("checks — calendar", "CLOUD RECORD PASS:", "BACKGROUND HISTORY PASS:"))
         run("frozen-migration", [sys.executable, str(ROOT / "Checks/check_migration.py"), executable], marker="FROZEN MIGRATION PASS:")
         run("account-currency", [sys.executable, str(ROOT / "Checks/check_finance_account_switch.py")], marker="PASS:")
         if args.performance:
@@ -100,7 +100,7 @@ def main():
         run("simulator-install", ["xcrun", "simctl", "install", args.simulator, str(products["simulator"])])
         installed = True
         run("simulator-self-check", ["xcrun", "simctl", "launch", "--console", "--terminate-running-process",
-                                     args.simulator, identity, "--self-check"], marker=("checks — calendar", "BACKGROUND HISTORY PASS:"))
+                                     args.simulator, identity, "--self-check"], marker=("checks — calendar", "CLOUD RECORD PASS:", "BACKGROUND HISTORY PASS:"))
         if hashes() != source:
             raise RuntimeError("Source changed while checks were running; rerun the gate")
         passed = True

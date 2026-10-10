@@ -39,6 +39,7 @@
 		1C36E9E52ABDD9B72351F9A0 /* FinanceEntryEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96BF8223B6409869BF2F506B /* FinanceEntryEditor.swift */; };
 		73839E89261224A251DA972D /* FinanceHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDCCB0E8AE892B0780BD1917 /* FinanceHome.swift */; };
 		561A2B10CF4F602E63EEAC13 /* FinanceManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7317B9D598A90FF20610C37 /* FinanceManagement.swift */; };
+		D3560A935730180E638C95A5 /* FinanceRecurringBills.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FB0B8DAC0C568B3884C1AD2 /* FinanceRecurringBills.swift */; };
 		B6142E9C557F57D836FE7C6F /* FinanceNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1270A3A3F34F37E32DA66A61 /* FinanceNavigation.swift */; };
 		E61805AFABA16488A362A466 /* FinanceRateEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E3C55EE0283E3FAA023FCA5 /* FinanceRateEditor.swift */; };
 		9A25A2B2F5D1DC9EE8A5B1D9 /* FinanceStatistics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A568E0A1E6E60BEFE7B5C07B /* FinanceStatistics.swift */; };
@@ -84,7 +85,10 @@
 		A4FA164F940F67A35142C741 /* WeekDragProbes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B1C6A72B390E259C59187B6 /* WeekDragProbes.swift */; };
 		E96C5516F161AEBC90E95B91 /* WeekDragViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA94880B00F0D2FA1E0DAC9E /* WeekDragViews.swift */; };
 		6880AF4C949C44443AEE1CF5 /* FinanceEntryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C841E0E166F4B7F8508CD2B /* FinanceEntryRow.swift */; };
+		2147E995B7E9A59323D6A48D /* RecurringControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D5C1E1F4882479DAFB11F7A /* RecurringControls.swift */; };
 		84E50244A5A79BB7833E5D6C /* FinanceData+Rates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72963E3E46B5983493FED537 /* FinanceData+Rates.swift */; };
+		B4D09A84002FBE925DF8329B /* FinanceData+Recurring.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA56F0F1CE080F2DB958AD03 /* FinanceData+Recurring.swift */; };
+		8C563BDDED2BB3172E6BB40E /* FinanceSuggestions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D8D8E69D6EA842173A32EA7 /* FinanceSuggestions.swift */; };
 		A8DD81760977A1AB91743B26 /* FinanceData+Samples.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88D5D1617B1050277B7EE237 /* FinanceData+Samples.swift */; };
 		38822D0227476FD103CD6A5E /* FinanceData+Validation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CEC963A0B204BD8367D69AB /* FinanceData+Validation.swift */; };
 		878D57859F7B849FF27F63F2 /* ReminderScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CFE3B4519A20A5D20449D95 /* ReminderScheduler.swift */; };
@@ -109,6 +113,8 @@
 		F33A2EE57F6B425DFDB090C3 /* FinanceConversionChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B7C2B371FD3AAA9AD38395 /* FinanceConversionChecks.swift */; };
 		7DDC792CCD0B156C42C00E52 /* FinanceDataChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4D2D4F287F99283011DBE8A /* FinanceDataChecks.swift */; };
 		CCF6156930A8DD3D24D2818F /* FinancePostingChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 543C32B7D889132FA50EC172 /* FinancePostingChecks.swift */; };
+		806C4342C7BF7CE5B9B9FDB9 /* FinanceRecurringChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 403FAABE43B2596248EBFE1E /* FinanceRecurringChecks.swift */; };
+		668ECDC0CF7481C541F13E31 /* FinanceSuggestionChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03429B553AB372C59E0BDDC8 /* FinanceSuggestionChecks.swift */; };
 		7DD06E8FEC3F9167136904AA /* StorageChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C9D751F6DBA738D278EA05 /* StorageChecks.swift */; };
 		AD9CF1800BC14F20AEDD0003 /* SyncConflictChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD9CF1800BC14F20AEDD0004 /* SyncConflictChecks.swift */; };
 		49CE29AF22F09F9FF3DB4627 /* SyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */; };
@@ -119,8 +125,12 @@
 		F06F619CDF4920295A094162 /* SyncHistoryChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F53C3735A23674ECB3BCA69 /* SyncHistoryChecks.swift */; };
 		5E9ECA329AFA65A4B182A1FD /* PartialSyncMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3B426E92148EA9478DAF3A /* PartialSyncMerge.swift */; };
 		BEFCA4FFDA399FBA408D3AD0 /* SyncVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BADFBDB8EC6DC91C2207DDC /* SyncVersion.swift */; };
+		A74CEB2B55DD5A23D7735A40 /* CloudKitRecordTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D296E9C79F45E0002B3EA95 /* CloudKitRecordTransport.swift */; };
+		20AF7601ADCD946383E9D312 /* CloudRecordTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9624366DFA8D6F14F2F2CA8 /* CloudRecordTransport.swift */; };
+		0B47B5611C1A489651876EF7 /* CloudRecordCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8360A7B0AB36A62BE8B6740 /* CloudRecordCodec.swift */; };
 		FFF6492C3F56EAF1EAFF340A /* PartialSyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29A3D7B3874FE2AF23D65FA3 /* PartialSyncChecks.swift */; };
 		9BC3556275051AF4431B5F6E /* CausalSyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6D29A941D6F2669A8CB63AD /* CausalSyncChecks.swift */; };
+		EA032D9D6C5CFE37D95193CF /* CloudRecordChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA3A7FF6E4CD5CD39429F123 /* CloudRecordChecks.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -158,6 +168,7 @@
 		96BF8223B6409869BF2F506B /* FinanceEntryEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinanceEntryEditor.swift; sourceTree = "<group>"; };
 		EDCCB0E8AE892B0780BD1917 /* FinanceHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinanceHome.swift; sourceTree = "<group>"; };
 		C7317B9D598A90FF20610C37 /* FinanceManagement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinanceManagement.swift; sourceTree = "<group>"; };
+		5FB0B8DAC0C568B3884C1AD2 /* FinanceRecurringBills.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceRecurringBills.swift"; sourceTree = "<group>"; };
 		1270A3A3F34F37E32DA66A61 /* FinanceNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinanceNavigation.swift; sourceTree = "<group>"; };
 		4E3C55EE0283E3FAA023FCA5 /* FinanceRateEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinanceRateEditor.swift; sourceTree = "<group>"; };
 		A568E0A1E6E60BEFE7B5C07B /* FinanceStatistics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinanceStatistics.swift; sourceTree = "<group>"; };
@@ -202,7 +213,10 @@
 		8B1C6A72B390E259C59187B6 /* WeekDragProbes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WeekDragProbes.swift"; sourceTree = "<group>"; };
 		CA94880B00F0D2FA1E0DAC9E /* WeekDragViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WeekDragViews.swift"; sourceTree = "<group>"; };
 		8C841E0E166F4B7F8508CD2B /* FinanceEntryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceEntryRow.swift"; sourceTree = "<group>"; };
+		1D5C1E1F4882479DAFB11F7A /* RecurringControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RecurringControls.swift"; sourceTree = "<group>"; };
 		72963E3E46B5983493FED537 /* FinanceData+Rates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceData+Rates.swift"; sourceTree = "<group>"; };
+		DA56F0F1CE080F2DB958AD03 /* FinanceData+Recurring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceData+Recurring.swift"; sourceTree = "<group>"; };
+		6D8D8E69D6EA842173A32EA7 /* FinanceSuggestions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceSuggestions.swift"; sourceTree = "<group>"; };
 		88D5D1617B1050277B7EE237 /* FinanceData+Samples.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceData+Samples.swift"; sourceTree = "<group>"; };
 		5CEC963A0B204BD8367D69AB /* FinanceData+Validation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceData+Validation.swift"; sourceTree = "<group>"; };
 		6CFE3B4519A20A5D20449D95 /* ReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ReminderScheduler.swift"; sourceTree = "<group>"; };
@@ -227,6 +241,8 @@
 		F6B7C2B371FD3AAA9AD38395 /* FinanceConversionChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceConversionChecks.swift"; sourceTree = "<group>"; };
 		F4D2D4F287F99283011DBE8A /* FinanceDataChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceDataChecks.swift"; sourceTree = "<group>"; };
 		543C32B7D889132FA50EC172 /* FinancePostingChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinancePostingChecks.swift"; sourceTree = "<group>"; };
+		403FAABE43B2596248EBFE1E /* FinanceRecurringChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceRecurringChecks.swift"; sourceTree = "<group>"; };
+		03429B553AB372C59E0BDDC8 /* FinanceSuggestionChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FinanceSuggestionChecks.swift"; sourceTree = "<group>"; };
 		84C9D751F6DBA738D278EA05 /* StorageChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StorageChecks.swift"; sourceTree = "<group>"; };
 		AD9CF1800BC14F20AEDD0004 /* SyncConflictChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictChecks.swift; sourceTree = "<group>"; };
 		FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SyncChecks.swift"; sourceTree = "<group>"; };
@@ -237,8 +253,12 @@
 		5F53C3735A23674ECB3BCA69 /* SyncHistoryChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncHistoryChecks.swift; sourceTree = "<group>"; };
 		4B3B426E92148EA9478DAF3A /* PartialSyncMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PartialSyncMerge.swift; sourceTree = "<group>"; };
 		2BADFBDB8EC6DC91C2207DDC /* SyncVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncVersion.swift; sourceTree = "<group>"; };
+		3D296E9C79F45E0002B3EA95 /* CloudKitRecordTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitRecordTransport.swift; sourceTree = "<group>"; };
+		F9624366DFA8D6F14F2F2CA8 /* CloudRecordTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRecordTransport.swift; sourceTree = "<group>"; };
+		E8360A7B0AB36A62BE8B6740 /* CloudRecordCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRecordCodec.swift; sourceTree = "<group>"; };
 		29A3D7B3874FE2AF23D65FA3 /* PartialSyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PartialSyncChecks.swift; sourceTree = "<group>"; };
 		F6D29A941D6F2669A8CB63AD /* CausalSyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CausalSyncChecks.swift; sourceTree = "<group>"; };
+		DA3A7FF6E4CD5CD39429F123 /* CloudRecordChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRecordChecks.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -376,6 +396,8 @@
 				F6B7C2B371FD3AAA9AD38395 /* FinanceConversionChecks.swift */,
 				F4D2D4F287F99283011DBE8A /* FinanceDataChecks.swift */,
 				543C32B7D889132FA50EC172 /* FinancePostingChecks.swift */,
+				403FAABE43B2596248EBFE1E /* FinanceRecurringChecks.swift */,
+				03429B553AB372C59E0BDDC8 /* FinanceSuggestionChecks.swift */,
 				C97CB8082C083478226324B4 /* PerformanceChecks.swift */,
 				37BA96BCB4184ABA11F2F9F0 /* SandboxChecks.swift */,
 				947DDE6F11D0E1FF1D48198C /* SelfCheck.swift */,
@@ -385,6 +407,7 @@
 				7FEE8043D3B6344347E9F7E5 /* AutomaticSyncChecks.swift */,
 				5F53C3735A23674ECB3BCA69 /* SyncHistoryChecks.swift */,
 				F6D29A941D6F2669A8CB63AD /* CausalSyncChecks.swift */,
+				DA3A7FF6E4CD5CD39429F123 /* CloudRecordChecks.swift */,
 				29A3D7B3874FE2AF23D65FA3 /* PartialSyncChecks.swift */,
 				80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */,
 			);
@@ -410,6 +433,7 @@
 			children = (
 				A74EF932CF00C6A2CE254AF0 /* FinanceComponents.swift */,
 				8C841E0E166F4B7F8508CD2B /* FinanceEntryRow.swift */,
+				1D5C1E1F4882479DAFB11F7A /* RecurringControls.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -419,6 +443,8 @@
 			children = (
 				1FE6801AF37140A922D72981 /* ExchangeRates.swift */,
 				72963E3E46B5983493FED537 /* FinanceData+Rates.swift */,
+				DA56F0F1CE080F2DB958AD03 /* FinanceData+Recurring.swift */,
+				6D8D8E69D6EA842173A32EA7 /* FinanceSuggestions.swift */,
 				88D5D1617B1050277B7EE237 /* FinanceData+Samples.swift */,
 				5CEC963A0B204BD8367D69AB /* FinanceData+Validation.swift */,
 				6922B91B2282A9AAAC7A012B /* FinanceData.swift */,
@@ -447,6 +473,7 @@
 				F48C38C011AD8F92A04B5E25 /* FinanceEntries.swift */,
 				EDCCB0E8AE892B0780BD1917 /* FinanceHome.swift */,
 				C7317B9D598A90FF20610C37 /* FinanceManagement.swift */,
+				5FB0B8DAC0C568B3884C1AD2 /* FinanceRecurringBills.swift */,
 				1270A3A3F34F37E32DA66A61 /* FinanceNavigation.swift */,
 				48289D9B105C1348F2470077 /* FinancePendingEntries.swift */,
 				278C9DF6A8E7D6BEA4D42C85 /* FinanceStatisticsCharts.swift */,
@@ -477,6 +504,9 @@
 				C5F1D85FC27BE5FEC9B39282 /* SyncChanges.swift */,
 				CD6853CC28E747ED8C3E6569 /* SyncHistory.swift */,
 				2BADFBDB8EC6DC91C2207DDC /* SyncVersion.swift */,
+				3D296E9C79F45E0002B3EA95 /* CloudKitRecordTransport.swift */,
+				F9624366DFA8D6F14F2F2CA8 /* CloudRecordTransport.swift */,
+				E8360A7B0AB36A62BE8B6740 /* CloudRecordCodec.swift */,
 				4B3B426E92148EA9478DAF3A /* PartialSyncMerge.swift */,
 				1B7956C6146A75D2D437E745 /* SyncFields.swift */,
 				DFD9DA9C49366DAF3658F9CB /* AutomaticSyncPolicy.swift */,
@@ -623,6 +653,7 @@
 				1C36E9E52ABDD9B72351F9A0 /* FinanceEntryEditor.swift in Sources */,
 				73839E89261224A251DA972D /* FinanceHome.swift in Sources */,
 				561A2B10CF4F602E63EEAC13 /* FinanceManagement.swift in Sources */,
+				D3560A935730180E638C95A5 /* FinanceRecurringBills.swift in Sources */,
 				B6142E9C557F57D836FE7C6F /* FinanceNavigation.swift in Sources */,
 				E61805AFABA16488A362A466 /* FinanceRateEditor.swift in Sources */,
 				9A25A2B2F5D1DC9EE8A5B1D9 /* FinanceStatistics.swift in Sources */,
@@ -639,6 +670,9 @@
 				668C519EEC146D67434A57E8 /* SyncChanges.swift in Sources */,
 				13461953D7C6454897AE101E /* SyncHistory.swift in Sources */,
 				BEFCA4FFDA399FBA408D3AD0 /* SyncVersion.swift in Sources */,
+				A74CEB2B55DD5A23D7735A40 /* CloudKitRecordTransport.swift in Sources */,
+				20AF7601ADCD946383E9D312 /* CloudRecordTransport.swift in Sources */,
+				0B47B5611C1A489651876EF7 /* CloudRecordCodec.swift in Sources */,
 				5E9ECA329AFA65A4B182A1FD /* PartialSyncMerge.swift in Sources */,
 				785A153D859A9EB22DB55AD7 /* SyncFields.swift in Sources */,
 				3939300D0B230BF2A35BBA99 /* AutomaticSyncPolicy.swift in Sources */,
@@ -672,7 +706,10 @@
 				A4FA164F940F67A35142C741 /* WeekDragProbes.swift in Sources */,
 				E96C5516F161AEBC90E95B91 /* WeekDragViews.swift in Sources */,
 				6880AF4C949C44443AEE1CF5 /* FinanceEntryRow.swift in Sources */,
+				2147E995B7E9A59323D6A48D /* RecurringControls.swift in Sources */,
 				84E50244A5A79BB7833E5D6C /* FinanceData+Rates.swift in Sources */,
+				B4D09A84002FBE925DF8329B /* FinanceData+Recurring.swift in Sources */,
+				8C563BDDED2BB3172E6BB40E /* FinanceSuggestions.swift in Sources */,
 				A8DD81760977A1AB91743B26 /* FinanceData+Samples.swift in Sources */,
 				38822D0227476FD103CD6A5E /* FinanceData+Validation.swift in Sources */,
 				878D57859F7B849FF27F63F2 /* ReminderScheduler.swift in Sources */,
@@ -697,12 +734,15 @@
 				F33A2EE57F6B425DFDB090C3 /* FinanceConversionChecks.swift in Sources */,
 				7DDC792CCD0B156C42C00E52 /* FinanceDataChecks.swift in Sources */,
 				CCF6156930A8DD3D24D2818F /* FinancePostingChecks.swift in Sources */,
+				806C4342C7BF7CE5B9B9FDB9 /* FinanceRecurringChecks.swift in Sources */,
+				668ECDC0CF7481C541F13E31 /* FinanceSuggestionChecks.swift in Sources */,
 				7DD06E8FEC3F9167136904AA /* StorageChecks.swift in Sources */,
 				49CE29AF22F09F9FF3DB4627 /* SyncChecks.swift in Sources */,
 				AD9CF1800BC14F20AEDD0003 /* SyncConflictChecks.swift in Sources */,
 				5B8A237446346EE46B9CF013 /* AutomaticSyncChecks.swift in Sources */,
 				F06F619CDF4920295A094162 /* SyncHistoryChecks.swift in Sources */,
 				9BC3556275051AF4431B5F6E /* CausalSyncChecks.swift in Sources */,
+				EA032D9D6C5CFE37D95193CF /* CloudRecordChecks.swift in Sources */,
 				FFF6492C3F56EAF1EAFF340A /* PartialSyncChecks.swift in Sources */,
 				5EF967BA40959D15C918405F /* TaskLifecycleChecks.swift in Sources */,
 			);

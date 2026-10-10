@@ -1,0 +1,233 @@
+import SwiftUI
+import SwiftData
+import OSLog
+
+private let recurringLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tally", category: "FinanceRecurring")
+
+extension FinanceHome {
+    /// Recurring bills in Manage: schedule, account and next date at a glance, with edit, pause and stop.
+    var recurringSection: some View {
+        Section {
+            let bills = data.recurringBills.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            if bills.isEmpty {
+                Text(L("在“记一笔”里把“重复”设为每月等，就会出现在这里。", "Set Repeat when adding an entry, for example Monthly, and the bill appears here."))
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            ForEach(bills) { bill in recurringRow(bill) }
+        } header: { Text(L("周期账单", "Recurring bills")) } footer: {
+            Text(L("到日期自动生成待入账，确认后才计入余额和统计。停止重复后不再生成新的账单，已到期和已入账的保留；想恢复可在它的账单上选“设为周期账单…”。", "Each due date adds a pending entry that counts after you confirm it. Stopping ends new entries and keeps due and posted ones; to restart, choose “Make recurring…” on one of its entries."))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func recurringRow(_ bill: MoneyRecurring) -> some View {
+        let category = data.category(bill.categoryID)
+        let missed = Dates.calendar.startOfDay(for: bill.nextDate) < Dates.calendar.startOfDay(for: Date())
+        let detail = [bill.scheduleLabel, data.accounts.first { $0.id == bill.accountID }?.name,
+                      (missed ? L("已错过 ", "Missed ") : L("下次 ", "Next ")) + Dates.label(bill.nextDate, pattern: "M月d日")]
+            .compactMap { $0 }.joined(separator: " · ")
+        return HStack(spacing: 10) {
+            Button { editingRecurring = RecurringEditRequest(bill: bill) } label: {
+                HStack(spacing: 10) {
+                    MoneyIcon(symbol: category?.symbol ?? "repeat", emoji: category?.emoji,
+                              tint: MoneyColor.color(category?.resolvedColor ?? "blue"), size: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(bill.title).lineLimit(1)
+                        Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        if let note = MoneyNote.firstLine(bill.notes) { Text(note).font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
+                        if let issue = data.recurringIssue(bill) {
+                            Label(issue, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Text((bill.kind == .income ? "+" : "") + display(bill.amount, bill.currency)).monospacedDigit()
+                }.frame(minHeight: 44).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            Menu {
+                Button(L("编辑", "Edit")) { editingRecurring = RecurringEditRequest(bill: bill) }
+                Button(L("停止重复…", "Stop repeating…"), systemImage: "stop.circle", role: .destructive) { stoppingRecurring = bill }
+            } label: {
+                Label(L("管理周期账单", "Manage recurring bill"), systemImage: "ellipsis.circle").labelStyle(.iconOnly)
+                    .frame(minWidth: 44, minHeight: 44)
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden)
+                .accessibilityLabel(L("管理周期账单：", "Manage recurring bill: ") + bill.title)
+        }
+    }
+
+    func stopRecurring(_ bill: MoneyRecurring) {
+        mutate { $0.stopRecurring(bill.id) }
+        recurringLog.notice("Recurring bill stopped")
+    }
+    func stopMessage(_ bill: MoneyRecurring?) -> String {
+        L("待入账里不再出现它，已经入账的全部保留。\n以后想恢复，可在它的任意一笔账单的“⋯”里选“设为周期账单…”。",
+          "It leaves the pending list; every recorded entry stays.\nTo restart later, choose “Make recurring…” from any of its entries.")
+    }
+    /// A pending item that is a recurring bill's next occurrence, shown from its rule rather than stored.
+    private func occurrence(of entry: MoneyEntry) -> RecurringOccurrence? {
+        guard let id = entry.recurringID, !data.entries.contains(where: { $0.id == entry.id }) else { return nil }
+        return RecurringOccurrence(billID: id, scheduled: entry.date)
+    }
+    func confirmPendingItem(_ entry: MoneyEntry) {
+        if let occurrence = occurrence(of: entry) {
+            mutate { try $0.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled) }
+            recurringLog.notice("Recurring occurrence confirmed")
+        } else {
+            mutate { try $0.confirmPending(entry) }
+        }
+    }
+    func confirmPendingItemWithChanges(_ entry: MoneyEntry) {
+        editor = EntryRequest(entry: entry, expected: occurrence(of: entry) == nil ? entry : nil, confirmingPending: true, occurrence: occurrence(of: entry))
+    }
+    func postOccurrenceToday(_ entry: MoneyEntry) {
+        guard let occurrence = occurrence(of: entry) else { return }
+        mutate { try $0.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, postedOn: Date()) }
+        recurringLog.notice("Recurring occurrence recorded today")
+    }
+    func skipOccurrence(_ entry: MoneyEntry) {
+        guard let occurrence = occurrence(of: entry) else { return }
+        mutate { try $0.skipOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled) }
+        recurringLog.notice("Recurring occurrence skipped")
+    }
+
+    /// Turns `entry` itself into a recurring bill, in the same page used to edit one.
+    func restartRecurring(from entry: MoneyEntry) {
+        editingRecurring = RecurringEditRequest(bill: data.recurringDraft(from: entry), source: entry)
+    }
+}
+
+/// A recurring bill's occurrence being confirmed through the entry editor.
+struct RecurringOccurrence {
+    var billID: UUID
+    var scheduled: Date
+}
+
+/// Which bill editor to open: editing a bill, or making one from an existing entry.
+struct RecurringEditRequest: Identifiable {
+    var bill: MoneyRecurring
+    var source: MoneyEntry? = nil
+    var id: UUID { bill.id }
+}
+
+/// Edits a bill's amount, account, category, book, schedule and notes. Changes apply from today on;
+/// entries already generated keep their own values.
+struct FinanceRecurringEditor: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    let original: MoneyRecurring
+    let ledger: FinanceData
+    /// Set when turning an existing entry into a bill; that entry becomes its first occurrence.
+    let source: MoneyEntry?
+    @State private var bill: MoneyRecurring
+    @State private var amount: String
+    @State private var accountAmount: String
+    @State private var error: String?
+
+    init(bill: MoneyRecurring, ledger: FinanceData, source: MoneyEntry? = nil) {
+        original = bill; self.ledger = ledger; self.source = source
+        _bill = State(initialValue: bill)
+        _amount = State(initialValue: Money.text(bill.amount))
+        _accountAmount = State(initialValue: bill.accountAmount == 0 ? "" : Money.text(bill.accountAmount))
+    }
+
+    private var account: MoneyAccount? { ledger.accounts.first { $0.id == bill.accountID } }
+    private var footer: String {
+        if let source {
+            return L("原来那笔（\(Dates.label(source.date, pattern: "M月d日"))）作为已入账的第一期，不会被复制。下一期日期默认是下个周期，可以改。",
+                     "The original entry (\(Dates.label(source.date, pattern: "MMM d"))) becomes the first, recorded occurrence and is not copied. The next date defaults to the following period.")
+        }
+        return L("修改只改规则，待入账会立刻按新规则显示；已经入账的不受影响。", "Changes edit the rule only. The pending list follows at once; recorded entries are unaffected.")
+    }
+    /// The next date as a whole day picker; its time of day is kept.
+    private var nextDay: Binding<Date> {
+        Binding(get: { bill.nextDate }, set: { day in
+            let time = Dates.calendar.dateComponents([.hour, .minute], from: bill.nextDate)
+            bill.reschedule(to: Dates.calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day) ?? day)
+        })
+    }
+    private var foreignAccount: Bool { account.map { $0.currency != bill.currency } ?? false }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let issue = ledger.recurringIssue(bill) {
+                    Section { Label(issue, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                }
+                Section {
+                    TextField(L("名称", "Name"), text: $bill.title)
+                    LabeledContent(L("类型", "Type"), value: bill.kind.label)
+                    HStack {
+                        TextField(L("金额", "Amount"), text: $amount)
+                            #if os(iOS)
+                            .keyboardType(.decimalPad)
+                            #endif
+                        Text(bill.currency).foregroundStyle(.secondary)
+                    }
+                    Picker(L("账户", "Account"), selection: $bill.accountID) {
+                        Text(L("不计入账户（只记收支）", "No account (totals only)")).tag(nil as UUID?)
+                        ForEach(ledger.accounts.filter { !$0.archived || $0.id == original.accountID }) { Text($0.name + " · " + $0.currency).tag(Optional($0.id)) }
+                    }
+                    if let account, foreignAccount {
+                        HStack {
+                            TextField(L("账户计划金额", "Planned account amount"), text: $accountAmount)
+                                #if os(iOS)
+                                .keyboardType(.decimalPad)
+                                #endif
+                            Text(account.currency).foregroundStyle(.secondary)
+                        }
+                    }
+                    Picker(L("分类", "Category"), selection: $bill.categoryID) {
+                        Text(L("未分类", "Uncategorized")).tag(nil as UUID?)
+                        ForEach(ledger.orderedCategories.filter { $0.isIncome == (bill.kind == .income) && (!$0.archived || $0.id == original.categoryID) }) {
+                            Text($0.parentID == nil ? $0.label : ledger.categoryPath($0.id)).tag(Optional($0.id))
+                        }
+                    }
+                    Picker(L("账本", "Book"), selection: $bill.bookID) {
+                        ForEach(ledger.books.filter { !$0.archived || $0.id == original.bookID }) { Text($0.name).tag(Optional($0.id)) }
+                    }
+                }
+                Section {
+                    DatePicker(L("下一期日期", "Next date"), selection: nextDay, displayedComponents: .date)
+                        .accessibilityHint(L("每月几号、每周几都跟着这一天", "The day of month or week follows this date"))
+                    RecurringScheduleControls(rule: $bill.rule, until: $bill.until, start: bill.nextDate, allowsNone: false)
+                } header: { Text(L("重复", "Repeat")) } footer: {
+                    Text(footer).font(.caption).foregroundStyle(.secondary)
+                }
+                Section { TextField(L("备注", "Notes"), text: $bill.notes, axis: .vertical).lineLimit(2...6) }
+                if let error { Text(error).font(.callout).foregroundStyle(.red) }
+            }.formStyle(.grouped)
+            .navigationTitle(source == nil ? L("修改周期账单", "Edit recurring bill") : L("设为周期账单", "Make recurring"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { dismiss() }.keyboardShortcut(.cancelAction) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L("保存", "Save"), action: save).keyboardShortcut("s", modifiers: .command)
+                        .disabled(bill.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 620)
+        #endif
+    }
+
+    private func save() {
+        do {
+            var next = bill
+            next.title = next.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            next.amount = try Money.parse(amount, currency: next.currency)
+            next.accountAmount = foreignAccount ? try Money.parse(accountAmount, currency: account!.currency) : 0
+            // A plan in the base currency needs no separate conversion; a foreign one keeps it only on the same account.
+            if next.currency == ledger.baseCurrency || account?.currency == ledger.baseCurrency || next.accountID != original.accountID || next.amount != original.amount {
+                next.baseAmount = nil
+            }
+            if let source {
+                try FinanceStore.update(context) { try $0.makeRecurring(next, from: source.id) }
+            } else {
+                try FinanceStore.update(context) { try $0.updateRecurring(next, expected: original) }
+            }
+            recurringLog.notice("Recurring bill updated; rule=\(next.rule, privacy: .public)")
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+}

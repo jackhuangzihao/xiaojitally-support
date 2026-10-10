@@ -467,9 +467,9 @@ extension CloudMerge {
             try stage(base, in: cacheContext); try Store.save(cacheContext)
             let captured = try TaskBackup.capture(cacheContext), encoded = try bytes(captured)
             let cached = CloudSync.SnapshotCache(contextID: ObjectIdentifier(cacheContext), revision: Store.revision, baseline: encoded,
-                                                local: captured, localBytes: encoded, base: try TaskBackup.decode(encoded), baselineDigest: digest(encoded))
+                                                local: captured, localBytes: encoded, base: try TaskBackup.decode(encoded))
             try check(cached.matches(cacheContext, baseline: encoded) && cached.matches(cacheContext, baseline: encoded), "unchanged sync polls reuse the same saved revision")
-            try check(try cached.localBytes == bytes(TaskBackup.capture(cacheContext)) && bytes(cached.base!) == encoded && cached.baselineDigest == digest(encoded), "cached local snapshot and merge base equal fresh captures and encoding")
+            try check(try cached.localBytes == bytes(TaskBackup.capture(cacheContext)) && bytes(cached.base!) == encoded, "cached local snapshot and merge base equal fresh captures and encoding")
             try check(!cached.matches(reopened.mainContext, baseline: encoded), "reloaded or attached context cannot reuse another context's sync cache")
             try check(!cached.matches(cacheContext, baseline: nil) && !cached.matches(cacheContext, baseline: Data("different baseline".utf8)), "baseline reset or replacement invalidates sync cache")
             let cachedTask = try cacheContext.fetch(FetchDescriptor<TaskItem>()).first!
@@ -481,7 +481,7 @@ extension CloudMerge {
             try check(!cached.matches(cacheContext, baseline: encoded) && cached.localBytes != bytes(TaskBackup.capture(cacheContext)), "saved edits reject an older prepared snapshot even when baseline is unchanged")
             let fresh = try TaskBackup.capture(cacheContext), freshBytes = try bytes(fresh)
             let reset = CloudSync.SnapshotCache(contextID: ObjectIdentifier(cacheContext), revision: Store.revision, baseline: nil,
-                                               local: fresh, localBytes: freshBytes, base: nil, baselineDigest: nil)
+                                               local: fresh, localBytes: freshBytes, base: nil)
             Store.invalidateHistory()
             try check(!reset.matches(cacheContext, baseline: nil), "explicit store invalidation expires first-sync cache without a baseline")
         }

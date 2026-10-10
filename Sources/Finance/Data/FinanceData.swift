@@ -8,6 +8,8 @@ struct FinanceData: Codable, Equatable {
     var categories: [MoneyCategory] = []
     var entries: [MoneyEntry] = []
     var rates: [MoneyRate] = []
+    /// Optional so ledgers written before recurring bills decode unchanged; nil when there are none.
+    var recurring: [MoneyRecurring]?
     static var initial: Self {
         var result = Self()
         result.books = [MoneyBook(id: UUID(uuidString: "E837FC77-248C-4DE3-AF81-000000000001")!, name: L("日常", "Daily"))]
@@ -85,12 +87,12 @@ struct FinanceData: Codable, Equatable {
     func removalBlock(_ kind: FinanceEntityKind, id: UUID) -> String? {
         let referenced: Bool
         switch kind {
-        case .account: referenced = entries.contains { $0.accountID == id || $0.destinationID == id }
+        case .account: referenced = entries.contains { $0.accountID == id || $0.destinationID == id } || recurringBills.contains { $0.accountID == id }
         case .book:
             if books.count <= 1 || (books.first { $0.id == id }?.archived == false && !books.contains { $0.id != id && !$0.archived }) {
                 return L("请至少保留一个可用账本。", "Keep at least one available book.")
             }
-            referenced = entries.contains { $0.bookID == id }
+            referenced = entries.contains { $0.bookID == id } || recurringBills.contains { $0.bookID == id }
         case .category:
             if categories.contains(where: { $0.parentID == id }) {
                 return L("请先移走或删除子分类；归档父分类会同时归档子分类并保留全部历史。", "Move or remove subcategories first. Archiving the parent also archives its children and keeps all history.")
@@ -98,7 +100,7 @@ struct FinanceData: Codable, Equatable {
             if Self.initial.categories.contains(where: { $0.id == id }) {
                 return L("系统预设分类可归档；自建的空分类可删除。", "Archive preset categories; unused custom categories can be deleted.")
             }
-            referenced = entries.contains { $0.categoryID == id }
+            referenced = entries.contains { $0.categoryID == id } || recurringBills.contains { $0.categoryID == id }
         }
         return referenced ? L("有关联账单（含最近删除），请使用归档以保留历史。", "Linked entries exist, including Recently deleted. Archive this item to keep its history.") : nil
     }
@@ -167,7 +169,7 @@ struct FinanceData: Codable, Equatable {
         let entries = selected.filter { $0.deletedAt == nil && $0.bookID.map(ids.contains) == true }
         return statisticsTotal(entries, income: false, in: baseCurrency, history: nil, days: nil)
     }
-    var canChangeBaseCurrency: Bool { entries.isEmpty && books.allSatisfy { $0.budget == nil } }
+    var canChangeBaseCurrency: Bool { entries.isEmpty && books.allSatisfy { $0.budget == nil } && recurringBills.isEmpty }
     func requireBaseCurrency(_ expected: String) throws {
         guard baseCurrency == expected else {
             throw TaskBackup.invalid(L("记账本位币已在其他窗口改变，请重新打开后编辑。", "The recorded base currency changed in another window. Reopen this editor."))
@@ -357,6 +359,7 @@ struct FinanceData: Codable, Equatable {
     func copyEntry(_ original: MoneyEntry, preferredBookID: UUID? = nil, at date: Date = Date()) -> MoneyEntry {
         var entry = original
         entry.id = UUID(); entry.date = MoneyEntry.timestamp(date); entry.deletedAt = nil; entry.deletionBatchID = nil; entry.refundOf = nil; entry.taskID = nil; entry.rateNote = ""
+        entry.recurringID = nil // A copy is a one-off entry, not another occurrence of the bill.
         let source = accounts.first { $0.id == entry.accountID }, destination = accounts.first { $0.id == entry.destinationID }
         if entry.currency != baseCurrency || source.map({ $0.currency != entry.currency }) == true || destination.map({ $0.currency != entry.currency }) == true {
             entry.accountAmount = 0; entry.destinationAmount = 0; entry.baseAmount = nil; entry.baseFee = nil

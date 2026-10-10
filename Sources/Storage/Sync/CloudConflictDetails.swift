@@ -47,6 +47,7 @@ private struct ConflictDetails {
     private let books: [UUID: MoneyBook]
     private let categories: [UUID: MoneyCategory]
     private let entries: [UUID: MoneyEntry]
+    private let recurring: [UUID: MoneyRecurring]
     private let rates: [String: [MoneyRate]]
     private let baseCurrency: String?
     private let accountEntries: [UUID: Set<UUID>]
@@ -59,6 +60,7 @@ private struct ConflictDetails {
         books = Dictionary(uniqueKeysWithValues: (snapshot.finance?.books ?? []).map { ($0.id, $0) })
         categories = Dictionary(uniqueKeysWithValues: (snapshot.finance?.categories ?? []).map { ($0.id, $0) })
         entries = Dictionary(uniqueKeysWithValues: (snapshot.finance?.entries ?? []).map { ($0.id, $0) })
+        recurring = Dictionary(uniqueKeysWithValues: (snapshot.finance?.recurringBills ?? []).map { ($0.id, $0) })
         rates = Dictionary(grouping: snapshot.finance?.rates ?? [], by: { [$0.base, $0.quote].sorted().joined(separator: "/") })
         baseCurrency = snapshot.finance?.baseCurrency
         var accountEntries: [UUID: Set<UUID>] = [:], refundLinks: [UUID: Set<UUID>] = [:]
@@ -110,6 +112,14 @@ private struct ConflictDetails {
           (L("待入账", "Pending"), yes(row.isPending)), (L("关联任务", "Linked task"), name(row.taskID, in: tasks, label: { $0.title })),
           (L("退款原账单", "Refunded entry"), name(row.refundOf, in: entries, label: { $0.title })),
           (L("删除时间", "Deleted at"), date(row.deletedAt)) ]
+    }
+    private func recurringBill(_ row: MoneyRecurring) -> Fields {
+        [ (L("名称", "Name"), row.title), (L("类型", "Type"), row.kind.label),
+          (L("金额", "Amount"), row.currency + " " + decimal(row.amount)),
+          (L("账户", "Account"), name(row.accountID, in: accounts, label: { $0.name })), (L("账户计划金额", "Planned account amount"), decimal(row.accountAmount)),
+          (L("账本", "Book"), name(row.bookID, in: books, label: { $0.name })), (L("分类", "Category"), name(row.categoryID, in: categories, label: { $0.label })),
+          (L("重复", "Repeat"), row.scheduleLabel), (L("下一期", "Next"), date(row.nextDate)), (L("重复截至", "Repeat until"), date(row.until)),
+          (L("备注", "Notes"), row.notes), (L("标签", "Tags"), row.tags) ]
     }
     private func account(_ row: MoneyAccount) -> Fields {
         [(L("名称", "Name"), row.name), (L("币种", "Currency"), row.currency), (L("期初余额", "Opening balance"), decimal(row.opening)),
@@ -183,6 +193,7 @@ private struct ConflictDetails {
         case "entry": return compare(entries, other.entries, ids: ids, describeLeft: entry, describeRight: other.entry)
         case "account": return compare(accounts, other.accounts, ids: ids, describeLeft: account, describeRight: other.account)
         case "book": return compare(books, other.books, ids: ids, describeLeft: book, describeRight: other.book)
+        case "recurring": return compare(recurring, other.recurring, ids: ids, describeLeft: recurringBill, describeRight: other.recurringBill)
         case "category", "category-family":
             let family = kind == "category-family" ? ids.union(ids.flatMap { Array(categoryChildren[$0] ?? []) })
                 .union(ids.flatMap { Array(other.categoryChildren[$0] ?? []) }) : ids
@@ -201,6 +212,7 @@ private struct ConflictDetails {
                     compare(accounts, other.accounts, ids: nil, describeLeft: account, describeRight: other.account),
                     compare(entries, other.entries, ids: nil, describeLeft: entry, describeRight: other.entry),
                     compare(books, other.books, ids: nil, describeLeft: book, describeRight: other.book),
+                    compare(recurring, other.recurring, ids: nil, describeLeft: recurringBill, describeRight: other.recurringBill),
                     compare(categories, other.categories, ids: nil, describeLeft: category, describeRight: other.category),
                     changedRates.map { $0 + "\n" + rateComparison(with: other, pair: $0) }.joined(separator: "\n\n")]
                 .filter { !$0.isEmpty }.joined(separator: "\n\n")

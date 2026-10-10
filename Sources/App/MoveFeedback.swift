@@ -7,6 +7,8 @@ struct MoveFeedback: View {
     let shiftDeadline: () -> Void
     let undo: () -> Void
     let dismiss: () -> Void
+    /// An extra button, such as posting a completed task's pending entries.
+    var action: (title: String, run: () -> Void)? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var touchSize: CGFloat {
         #if os(iOS)
@@ -33,13 +35,18 @@ struct MoveFeedback: View {
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.16)))
             .task(id: message) {
                 do {
-                    try await Task.sleep(for: .seconds(dynamicTypeSize.isAccessibilitySize ? 10 : canUndo || canShiftDeadline ? 6 : 3))
+                    try await Task.sleep(for: .seconds(dynamicTypeSize.isAccessibilitySize ? 10 : canUndo || canShiftDeadline || action != nil ? 6 : 3))
                     dismiss()
                 } catch {}
             }
     }
     private var actions: some View {
         HStack(spacing: 8) {
+            if let action {
+                Button(action.title, action: action.run)
+                    .buttonStyle(.borderless).fontWeight(.semibold).fixedSize(horizontal: false, vertical: true)
+                    .frame(minHeight: touchSize)
+            }
             if canShiftDeadline {
                 Button(L("截止也一起移", "Move deadline too"), action: shiftDeadline)
                     .buttonStyle(.borderless).fixedSize(horizontal: false, vertical: true)

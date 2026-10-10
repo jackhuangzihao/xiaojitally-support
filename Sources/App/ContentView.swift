@@ -82,6 +82,12 @@ struct ContentView: View {
     @AppStorage("hideCompletedInAll") var hideCompletedInAll = false
     @State var purgeIDs: Set<UUID>?
     @State var errorMessage: String?
+    /// Linked entries per task, kept in step with the ledger by `TaskMoneyLoader`.
+    @State var taskMoney = TaskMoneyIndex()
+    /// Offered after completing a task that has pending entries.
+    @State var settlementOffer: SettlementOffer?
+    /// A pending entry that could not be posted as it stands, opened to finish confirming it.
+    @State var settlementEditor: EntryRequest?
 
     var isPhone: Bool {
         #if os(iOS)
@@ -167,14 +173,16 @@ struct ContentView: View {
                     confirmingDelete = nil
                 }
                 Button(L("取消", "Cancel"), role: .cancel) { confirmingDelete = nil }
-            } message: { Text(L("删除后可以在“最近删除”中找回。", "You can bring it back from Recently deleted.")) }
+            } message: { Text(L("删除后可以在“最近删除”中找回。", "You can bring it back from Recently deleted.") + linkedEntriesNote(confirmingDelete.map { [$0] } ?? [], purge: false)) }
             .confirmationDialog(purgeIDs?.count == 1 ? L("彻底删除这项任务？删除后无法恢复。", "Permanently delete this task? This can't be undone.") : L("彻底删除最近删除中的 \(purgeIDs?.count ?? 0) 项任务？删除后无法恢复。", "Permanently delete \(purgeIDs?.count ?? 0) tasks from Recently deleted? This can't be undone."), isPresented: Binding(get: { purgeIDs != nil }, set: { if !$0 { purgeIDs = nil } }), titleVisibility: .visible) {
                 Button(L("彻底删除", "Delete permanently"), role: .destructive) {
                     guard let ids = purgeIDs else { return }
-                    _ = commit { for task in tasks where ids.contains(task.id) && task.deletedAt != nil { context.delete(task) } }
-                    undoDeletedIDs.removeAll { ids.contains($0) }
+                    purgeTasks(ids)
                     purgeIDs = nil
                 }
+            } message: {
+                let note = linkedEntriesNote(Array(purgeIDs ?? []), purge: true)
+                if !note.isEmpty { Text(note) }
             }
             .task { initializeWindow() }
             .onOpenURL { url in
@@ -283,6 +291,9 @@ struct ContentView: View {
                 TaskEditor(request: request, draft: drafts.task)
             }
             .sheet(item: $listEditor, onDismiss: openReminderIfReady) { request in ListEditor(list: request.list, parentID: request.parentID, draft: drafts.list) }
+            .sheet(item: $settlementEditor, onDismiss: openReminderIfReady) { request in
+                FinanceEntryEditor(entry: request.entry, expected: request.expected, confirmingPending: request.confirmingPending)
+            }
     }
 
     private var reminderAlertActive: Bool {
@@ -298,7 +309,7 @@ struct ContentView: View {
     }
 
     private func openReminderIfReady() {
-        let blocked = !windowReady || editor != nil || listEditor != nil || copyRequest != nil || showingSettings || reminderAlertActive
+        let blocked = !windowReady || editor != nil || listEditor != nil || copyRequest != nil || showingSettings || reminderAlertActive || settlementEditor != nil
             || drafts.finance != nil || drafts.financeEntity != nil || drafts.financePresentationActive
             || Store.recovery.failure != nil || recoveryGeneration != Store.recovery.generation
         guard let id = drafts.reminder.take(blocked: blocked) else { return }
@@ -374,6 +385,7 @@ struct ContentView: View {
     // safe-area strip for it would resize the calendar and move a drag's target.
     private var taskContent: some View {
         mainContent
+            .background { TaskMoneyLoader(index: $taskMoney) }
             .overlay(alignment: .bottom) { taskNotice.padding(.bottom, 8) }
             .safeAreaInset(edge: .bottom, spacing: 0) { BackupStatusNotice { showingSettings = true } }
     }
@@ -396,6 +408,12 @@ struct ContentView: View {
                          canUndo: true, canShiftDeadline: false, shiftDeadline: {},
                          undo: undoDeletion, dismiss: { undoDeletedIDs = [] })
                 .id(undoDeletedIDs).frame(maxWidth: 480).padding(.horizontal, 12)
+        } else if let offer = settlementOffer {
+            MoveFeedback(message: offer.message, canUndo: false, canShiftDeadline: false, shiftDeadline: {}, undo: {},
+                         dismiss: { settlementOffer = nil }, action: (offer.buttonTitle, { confirmSettlement(offer) }))
+                .id(offer.id).frame(maxWidth: isPhone ? .infinity : 480)
+                .padding(.horizontal, 12).padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: isPhone ? .center : .trailing)
         } else if let movedMessage {
             MoveFeedback(message: movedMessage, canUndo: undoSchedule != nil || undoListMove != nil || (undoCopy && history.canUndo),
                          canShiftDeadline: deadlineMove != nil && undoSchedule != nil, shiftDeadline: shiftMovedDeadline,
@@ -411,7 +429,9 @@ struct ContentView: View {
         FinanceHome(selection: $financeSelection, openTask: { id in
             guard let task = tasks.first(where: { $0.id == id && $0.deletedAt == nil }) else { errorMessage = L("关联任务已删除或不在本机。", "Linked task was deleted or is unavailable."); return }
             financeMode = false; editor = EditorRequest(task: task)
-        }, settings: { showingSettings = true })
+        }, settings: { showingSettings = true }, taskLink: { id in
+            tasks.first { $0.id == id }.map { TaskLink(title: $0.title, deleted: $0.deletedAt != nil) }
+        })
             .safeAreaInset(edge: .bottom, spacing: 0) { BackupStatusNotice { showingSettings = true } }
     }
 

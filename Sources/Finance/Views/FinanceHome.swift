@@ -78,6 +78,8 @@ struct FinanceHome: View {
     @Binding var selection: String
     var openTask: (UUID) -> Void
     var settings: () -> Void
+    /// The linked task's name and whether it is in Recently deleted; nil once it no longer exists.
+    var taskLink: (UUID) -> TaskLink? = { _ in nil }
     @Environment(\.modelContext) private var context
     @Query private var records: [FinanceLedger]
     @AppStorage("hideMoney") var hidden = false
@@ -112,6 +114,8 @@ struct FinanceHome: View {
     @State var showArchivedAccounts = false
     @State var rangeBeforeAccount: MoneyDateRange?
     @State var confirmSamples = false
+    @State var editingRecurring: RecurringEditRequest?
+    @State var stoppingRecurring: MoneyRecurring?
     @State private var info: String?
     @AppStorage("moneyStatsCurrency") var statsCurrencyRaw = ""
     @State var entriesCurrencyRaw = ""
@@ -299,9 +303,15 @@ struct FinanceHome: View {
         // A display override belongs to this scope, never to a different book or a changed default account.
         .onChange(of: entryDefaultsKey) { _, _ in entriesCurrencyRaw = "" }
         // The request carries whether this is an existing entry, so the sheet never guesses from other state.
-        .sheet(item: $editor, onDismiss: reload) { request in FinanceEntryEditor(entry: request.entry, expected: request.expected, confirmingPending: request.confirmingPending) }
+        .sheet(item: $editor, onDismiss: reload) { request in FinanceEntryEditor(entry: request.entry, expected: request.expected, confirmingPending: request.confirmingPending, occurrence: request.occurrence) }
         .sheet(item: $entity, onDismiss: reload) { item in FinanceEntityEditor(kind: item.kind, id: item.existingID, income: item.income, parentID: item.parentID, data: data) }
         .sheet(item: $conversionRequest, onDismiss: reload) { request in FinanceConversionPreview(ledger: request.ledger) }
+        .sheet(item: $editingRecurring, onDismiss: reload) { request in FinanceRecurringEditor(bill: request.bill, ledger: data, source: request.source) }
+        .confirmationDialog(L("停止重复“\(stoppingRecurring?.title ?? "")”？", "Stop repeating “\(stoppingRecurring?.title ?? "")”?"),
+                            isPresented: Binding(get: { stoppingRecurring != nil }, set: { if !$0 { stoppingRecurring = nil } }), titleVisibility: .visible) {
+            Button(L("停止重复", "Stop repeating"), role: .destructive) { if let bill = stoppingRecurring { stopRecurring(bill) }; stoppingRecurring = nil }
+            Button(L("取消", "Cancel"), role: .cancel) { stoppingRecurring = nil }
+        } message: { Text(stopMessage(stoppingRecurring)) }
         .onChange(of: scenePhase) { _, phase in resumeAssetRates(phase) }
         .sheet(isPresented: $showAssetRates, onDismiss: { reload(); if automaticRates { refreshRates() } }) { FinanceRateEditor(data: data, currency: reportingCurrency) }
         .fileExporter(isPresented: $exporting, document: document, contentType: .commaSeparatedText, defaultFilename: "Tally-Ledger") { result in if case .failure(let failure) = result { error = failure.localizedDescription } }

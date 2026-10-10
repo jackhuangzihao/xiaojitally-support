@@ -273,3 +273,76 @@ struct DateChoiceButton: View {
         onChoose(); showingCalendar = false
     }
 }
+
+/// Interval, unit and weekdays for a custom `RepeatRule`. Shared by tasks and recurring bills.
+/// Its rows sit directly in the caller's stack so spacing matches the surrounding panel.
+struct CustomRepeatControls: View {
+    let rule: RepeatRule
+    /// The weekday a new weekly rule starts with: that of the item's own date.
+    let baseWeekday: Int
+    /// Pills instead of a stepper and segmented picker. Forms on macOS re-lay those out as label and control
+    /// columns, which hides the unit picker; pills stay put anywhere.
+    var pills = false
+    let change: (String) -> Void
+
+    private static let units: [(RepeatRule.Unit, String, String)] = [(.day, "天", "days"), (.week, "周", "weeks"), (.month, "个月", "months"), (.year, "年", "years")]
+
+    var body: some View {
+        if pills { pillControls } else { standardControls }
+        if rule.unit == .week { weekdays }
+    }
+
+    private var pillControls: some View {
+        FlowLayout(spacing: 8) {
+            Text(L("每", "Every")).foregroundStyle(.secondary).frame(minHeight: 27)
+            Button { step(-1) } label: { Image(systemName: "minus").frame(width: 22, height: 22) }
+                .buttonStyle(.borderless).disabled(rule.interval <= 1).accessibilityLabel(L("减少间隔", "Fewer"))
+            Text("\(rule.interval)").font(.callout.monospacedDigit().weight(.semibold)).frame(minWidth: 22, minHeight: 27)
+                .accessibilityLabel(L("间隔 \(rule.interval)", "Interval \(rule.interval)"))
+            Button { step(1) } label: { Image(systemName: "plus").frame(width: 22, height: 22) }
+                .buttonStyle(.borderless).disabled(rule.interval >= 99).accessibilityLabel(L("增加间隔", "More"))
+            ForEach(Self.units, id: \.0) { unit, zh, en in
+                SelectPill(title: L(zh, en), selected: rule.unit == unit) {
+                    change(RepeatRule(interval: rule.interval, unit: unit, weekdays: unit == .week ? [baseWeekday] : []).text)
+                }
+            }
+        }
+    }
+    private func step(_ delta: Int) {
+        var next = rule; next.interval = min(99, max(1, rule.interval + delta)); change(next.text)
+    }
+
+    @ViewBuilder private var standardControls: some View {
+        HStack(spacing: 10) {
+            Text(L("每", "Every")).foregroundStyle(.secondary)
+            Stepper(value: Binding(get: { rule.interval }, set: { value in
+                var next = rule; next.interval = min(99, max(1, value)); change(next.text)
+            }), in: 1...99) {
+                Text("\(rule.interval)").font(.callout.monospacedDigit().weight(.semibold)).frame(minWidth: 22)
+            }.fixedSize()
+            Picker(L("单位", "Unit"), selection: Binding(get: { rule.unit }, set: { unit in
+                change(RepeatRule(interval: rule.interval, unit: unit, weekdays: unit == .week ? [baseWeekday] : []).text)
+            })) {
+                Text(L("天", "days")).tag(RepeatRule.Unit.day)
+                Text(L("周", "weeks")).tag(RepeatRule.Unit.week)
+                Text(L("个月", "months")).tag(RepeatRule.Unit.month)
+                Text(L("年", "years")).tag(RepeatRule.Unit.year)
+            }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 240)
+        }
+    }
+
+    @ViewBuilder private var weekdays: some View {
+        if rule.unit == .week {
+            let chosen = rule.weekdays.isEmpty ? [baseWeekday] : rule.weekdays
+            FlowLayout(spacing: 6) {
+                ForEach(RepeatRule.weekOrder, id: \.self) { day in
+                    SelectPill(title: RepeatRule.weekdayName(day), selected: chosen.contains(day)) {
+                        var days = chosen
+                        if days.contains(day) { if days.count > 1 { days.remove(day) } } else { days.insert(day) }
+                        change(RepeatRule(interval: rule.interval, unit: .week, weekdays: days).text)
+                    }
+                }
+            }
+        }
+    }
+}

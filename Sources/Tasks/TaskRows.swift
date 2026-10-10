@@ -25,7 +25,8 @@ extension ContentView {
                                     updated[index].isDone.toggle(); task.subtasks = updated
                                 }
                             }
-                        })
+                        },
+                        money: taskMoney.summary(for: task.id), moneyCurrency: taskMoney.baseCurrency)
     }
 
     func taskMetadata(_ task: TaskItem) -> some View {

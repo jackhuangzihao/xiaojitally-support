@@ -1,6 +1,7 @@
 import Foundation
 
-/// Causality wins over wall clocks. Concurrent ordinary edits use a stable tie-break, with recovery copies.
+/// An edit that saw the other side wins. Concurrent ordinary edits keep the later hybrid-clock stamp; a stamp
+/// more than five minutes ahead of this device cannot be ordered and needs review. Recovery copies are kept either way.
 struct AutomaticSyncPolicy {
     let revisions: SyncChanges.Resolution
     let now: Date
@@ -22,7 +23,8 @@ struct AutomaticSyncPolicy {
             if left.dominates(right) { return .local }
             if right.dominates(left) { return .cloud }
             // Equal histories with different contents are inconsistent, not an ordinary concurrent edit.
-            guard left.clock != right.clock, left.winner != right.winner else { return nil }
+            guard left.clock != right.clock, left.winner != right.winner,
+                  !left.winner.stamp.isAhead(of: now), !right.winner.stamp.isAhead(of: now) else { return nil }
             return SyncVersion.precedes(left.winner, right.winner) ? .cloud : .local
         }
         // Old snapshots have no causal history. Keep the conservative legacy rule until a real edit or review.

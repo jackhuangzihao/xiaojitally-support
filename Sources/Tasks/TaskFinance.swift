@@ -1,5 +1,171 @@
 import SwiftUI
 import SwiftData
+import OSLog
+
+private let linkLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.jianshi.personal", category: "TaskMoney")
+
+// MARK: - Task ↔ entry links
+//
+// An entry belongs to at most one task (`MoneyEntry.taskID`); a task can have any number of entries. The link is
+// stored only on the entry, so the task side is always derived and two devices can never disagree about it.
+// Three rules, and no others:
+// 1. Completing a task offers to post its pending entries; they can always be posted from Finance instead.
+// 2. Deleting a task never deletes money. In Recently deleted its entries stay linked; purging it unlinks them.
+// 3. A task in Recently deleted takes no new entries. Restoring it allows them again.
+
+/// What a task row shows about its entries.
+struct TaskMoneySummary: Equatable {
+    struct Line: Equatable {
+        var title: String
+        var amount: Decimal
+        var currency: String
+        var pending: Bool
+        var date: Date
+    }
+    /// Newest first.
+    var lines: [Line] = []
+    var pendingCount = 0
+    /// Income minus spending in the base currency, or nil while an entry still needs its conversion.
+    var net: Decimal? = 0
+
+    var count: Int { lines.count }
+
+    /// "¥3,200 · 待入账", "¥5,180 · 2 笔", "+¥300 · 1 笔待入账".
+    func label(baseCurrency: String, hidden: Bool) -> String {
+        let amount: String? = net.flatMap { value in
+            value == 0 ? nil : (value > 0 ? "+" : "") + Money.display(abs(value), baseCurrency, hidden: hidden)
+        }
+        let status = pendingCount == count ? L("待入账", "Pending")
+            : pendingCount > 0 ? L("\(pendingCount) 笔待入账", "\(pendingCount) pending")
+            : L("\(count) 笔", count == 1 ? "1 entry" : "\(count) entries")
+        return [amount, status].compactMap { $0 }.joined(separator: " · ")
+    }
+    /// One line per entry, for the pointer tooltip and the expanded card.
+    func detail(hidden: Bool) -> String {
+        lines.map { line in
+            line.title + " · " + (line.pending ? L("待入账", "Pending") : L("已入账", "Posted")) + "  " + Money.display(line.amount, line.currency, hidden: hidden)
+        }.joined(separator: "\n")
+    }
+}
+
+/// Every task's linked entries, built once per ledger so task rows never scan the entries themselves.
+struct TaskMoneyIndex: Equatable {
+    private(set) var baseCurrency = "CNY"
+    private var summaries: [UUID: TaskMoneySummary] = [:]
+
+    init() {}
+    init(_ ledger: FinanceData) {
+        baseCurrency = ledger.baseCurrency
+        for entry in ledger.entries where entry.deletedAt == nil {
+            guard let id = entry.taskID else { continue }
+            var summary = summaries[id] ?? TaskMoneySummary()
+            summary.lines.append(.init(title: entry.title, amount: entry.amount, currency: entry.currency, pending: entry.isPending, date: entry.date))
+            if entry.isPending { summary.pendingCount += 1 }
+            let sign: Decimal? = entry.kind == .income || entry.kind == .refund ? 1 : entry.kind == .expense ? -1 : nil
+            if let sign { summary.net = entry.baseAmount.flatMap { base in summary.net.map { $0 + sign * base } } }
+            summaries[id] = summary
+        }
+        for id in summaries.keys { summaries[id]!.lines.sort { $0.date > $1.date } }
+    }
+
+    func summary(for taskID: UUID) -> TaskMoneySummary? { summaries[taskID] }
+}
+
+/// Rule 3: an entry may keep a link to a task in Recently deleted, but not gain one.
+enum TaskLinkRule {
+    static func check(newTaskID: UUID?, previousTaskID: UUID?, taskIsAvailable: (UUID) -> Bool) throws {
+        guard let id = newTaskID, id != previousTaskID, !taskIsAvailable(id) else { return }
+        throw TaskBackup.invalid(L("这个任务已删除，不能再关联新的账单。恢复任务后可以再关联。", "This task was deleted and cannot take new entries. Restore it to link entries again."))
+    }
+}
+
+/// The outcome of posting a task's pending entries in one step.
+struct TaskSettlement: Equatable {
+    var posted: [MoneyEntry] = []
+    /// Entries that cannot be posted as they stand (a missing conversion, an archived book…); they open in the editor.
+    var needsReview: [MoneyEntry] = []
+}
+
+extension FinanceData {
+    /// Rule 1. Posts every pending entry of a task: one already due keeps its planned date, one not due yet is
+    /// posted today. Each entry is posted on its own, so one that needs attention never blocks the others.
+    mutating func settlePendingEntries(ofTask taskID: UUID, now: Date = Date()) -> TaskSettlement {
+        var result = TaskSettlement()
+        for original in entries where original.taskID == taskID && original.isPending && original.deletedAt == nil {
+            // A foreign amount without its conversion would leave the totals incomplete.
+            if original.currency != baseCurrency && original.baseAmount == nil { result.needsReview.append(original); continue }
+            var next = self
+            do {
+                var entry = original
+                if !entry.isDueForConfirmation(at: now) {
+                    entry.date = MoneyEntry.timestamp(now)
+                    try next.updateEntry(entry, expected: original, baseCurrency: baseCurrency)
+                }
+                try next.confirmPending(entry, now: now)
+                self = next
+                result.posted.append(entry)
+            } catch {
+                result.needsReview.append(original)
+            }
+        }
+        return result
+    }
+
+    /// Rule 2. Entries of permanently deleted tasks stay, without a link to a task that no longer exists.
+    @discardableResult mutating func unlinkTasks(_ ids: Set<UUID>) -> Int {
+        var count = 0
+        for index in entries.indices where entries[index].taskID.map(ids.contains) == true {
+            entries[index].taskID = nil; count += 1
+        }
+        return count
+    }
+}
+
+extension FinanceStore {
+    /// Stages the unlinking of purged tasks' entries, to be saved with the purge itself.
+    static func stageUnlinking(_ ids: Set<UUID>, in context: ModelContext) throws {
+        guard !ids.isEmpty, var ledger = try read(context) else { return }
+        let count = ledger.unlinkTasks(ids)
+        guard count > 0 else { return }
+        try stage(ledger, in: context)
+        linkLog.notice("Unlinked \(count, privacy: .public) entries from purged tasks")
+    }
+}
+
+/// The prompt after completing a task with pending entries.
+struct SettlementOffer: Identifiable, Equatable {
+    let id = UUID()
+    let taskID: UUID
+    let message: String
+    let buttonTitle: String
+}
+
+/// What an entry row shows about its task.
+struct TaskLink: Equatable {
+    var title: String
+    var deleted: Bool
+}
+
+/// Keeps the task views' `TaskMoneyIndex` in step with the ledger, rebuilding it only when the ledger changes.
+struct TaskMoneyLoader: View {
+    @Binding var index: TaskMoneyIndex
+    @Query private var records: [FinanceLedger]
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
+            .task(id: records.first?.payload) { refresh() }
+    }
+
+    private func refresh() {
+        guard let payload = records.first?.payload else { index = TaskMoneyIndex(); return }
+        do { index = TaskMoneyIndex(try FinanceStore.decode(payload)) }
+        catch {
+            // Task views stay usable without money tags; Finance reports the ledger problem itself.
+            linkLog.error("Linked entries unavailable: \(error.localizedDescription, privacy: .public)")
+            index = TaskMoneyIndex()
+        }
+    }
+}
 
 /// A value-only entry attached to an unsaved task. It never creates its own save or repeating template.
 struct TaskFinanceDraft: Equatable {

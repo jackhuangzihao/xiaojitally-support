@@ -45,22 +45,48 @@ import SwiftData
             let base = try edited(TaskBackup(lists: [], tasks: [task]), actor: a, date: now)
             var left = base, right = base
             left.tasks[0].title = "Mac title"; right.tasks[0].title = "Phone title"
-            left = try edited(left, from: base, actor: a, date: now.addingTimeInterval(3600 + Double(round)))
+            left = try edited(left, from: base, actor: a, date: now.addingTimeInterval(120 + Double(round)))
+            // A clock running an hour behind still stamps after the shared version it has seen.
             right = try edited(right, from: base, actor: b, date: now.addingTimeInterval(-3600 - Double(round)))
             let titleLeft = left
             let result = try converges(left, right, base)
-            let expected = result.tasks[0].title
+            try check(result.tasks[0].title == "Mac title", "the later concurrent edit wins even when the other clock is behind")
             var shiftedLeft = left, shiftedRight = right
             shiftedLeft.syncChanges?[key]?.date = now.addingTimeInterval(-7200)
             shiftedLeft.syncChanges?[key]?.fields?["title"]?.date = now.addingTimeInterval(-7200)
             shiftedRight.syncChanges?[key]?.date = now.addingTimeInterval(7200)
             shiftedRight.syncChanges?[key]?.fields?["title"]?.date = now.addingTimeInterval(7200)
-            try check(try CloudMerge.merge(local: shiftedLeft, cloud: shiftedRight, base: base, now: now).tasks[0].title == expected,
-                      "wall-clock skew does not change a causal concurrent decision")
+            try check(try CloudMerge.merge(local: shiftedLeft, cloud: shiftedRight, base: base, now: now).tasks[0].title == "Mac title",
+                      "displayed edit dates never override hybrid clock stamps")
+            var ahead = base; ahead.tasks[0].title = "Phone title from a fast clock"
+            ahead = try edited(ahead, from: base, actor: b, date: now.addingTimeInterval(Double(SyncStamp.maximumDrift) / 1000 + 60))
+            try requiresReview("an edit stamped more than five minutes ahead cannot be ordered automatically") {
+                _ = try CloudMerge.merge(local: left, cloud: ahead, base: base, now: now)
+            }
             var next = result; next.tasks[0].title = "After observing both"
             next = try edited(next, from: result, actor: b, date: now.addingTimeInterval(-9999))
             try check(try converges(left, next, base).tasks[0].title == next.tasks[0].title,
                       "a causally later edit wins even on a slower clock")
+
+            // Concurrent edits after the shared version (dated `now`): the later one wins on either device, whichever actor made it.
+            for (earlier, later) in [(a, b), (b, a)] {
+                for (start, gap) in [(10 + Double(round), 190.0), (100, 0.001)] {
+                    var first = base, second = base
+                    first.tasks[0].title = "Earlier title"; second.tasks[0].title = "Later title"
+                    first = try edited(first, from: base, actor: earlier, date: now.addingTimeInterval(start))
+                    second = try edited(second, from: base, actor: later, date: now.addingTimeInterval(start + gap))
+                    try check(try converges(first, second, base).tasks[0].title == "Later title", "the later concurrent edit wins, even by a millisecond")
+                    try check(try converges(second, first, base).tasks[0].title == "Later title", "the later edit wins from either device")
+                }
+            }
+            // Identical stamps from different devices: the device identity breaks the tie the same way everywhere.
+            var tiedA = base, tiedB = base
+            tiedA.tasks[0].title = "Tie A"; tiedB.tasks[0].title = "Tie B"
+            tiedA = try edited(tiedA, from: base, actor: a, date: now.addingTimeInterval(100))
+            tiedB = try edited(tiedB, from: base, actor: b, date: now.addingTimeInterval(100))
+            let tieWinner = a.uuidString > b.uuidString ? "Tie A" : "Tie B"
+            try check(try converges(tiedA, tiedB, base).tasks[0].title == tieWinner && converges(tiedB, tiedA, base).tasks[0].title == tieWinner,
+                      "identical stamps resolve by device identity regardless of direction")
 
             left = base; right = base
             left.tasks[0].subtasks[0].title = "Local step"; right.tasks[0].subtasks[0].title = "Cloud step"
@@ -170,16 +196,15 @@ import SwiftData
                       "restored deletion history still suppresses only its known older live value")
         }
         do {
-            let valid = SyncVersion.next(after: nil, actor: a)
+            let valid = SyncVersion.next(after: nil, actor: a, now: now)
             let hash = try SyncChanges.fingerprint("Validated")
             let key = SyncChanges.key("task", UUID())
             var malformed: [SyncVersion] = []
-            var value = valid; value.clock = ["not-a-device": 1]; malformed.append(value)
-            value = valid; value.clock[a.uuidString] = 0; malformed.append(value)
-            value = valid; value.clock[a.uuidString] = 9_007_199_254_740_992; malformed.append(value)
+            var value = valid; value.clock = ["not-a-device": valid.winner.stamp]; malformed.append(value)
+            value = valid; value.clock[a.uuidString] = SyncStamp(millis: SyncStamp.millisRange.upperBound + 1, counter: 0); malformed.append(value)
             value = valid; value.winner.actor = b.uuidString; malformed.append(value)
-            value = valid; value.winner.counter = 2; malformed.append(value)
-            value = valid; value.clock = Dictionary(uniqueKeysWithValues: (0..<2049).map { _ in (UUID().uuidString, UInt64(1)) }); malformed.append(value)
+            value = valid; value.winner.stamp = valid.winner.stamp.successor; malformed.append(value)
+            value = valid; value.clock = Dictionary(uniqueKeysWithValues: (0..<2049).map { _ in (UUID().uuidString, valid.winner.stamp) }); malformed.append(value)
             for candidate in malformed {
                 for field in [false, true] {
                     var revision = SyncChanges.Revision(date: now, fingerprint: hash, version: field ? valid : candidate)
@@ -189,14 +214,24 @@ import SwiftData
                     try check(rejected, "malformed record and field causal versions are rejected at the persistence boundary")
                 }
             }
-            let maximum: UInt64 = 9_007_199_254_740_991
-            let exhausted = SyncVersion(clock: [a.uuidString: maximum], winner: .init(actor: a.uuidString, counter: maximum))
+            let exhaustedStamp = SyncStamp(millis: valid.winner.stamp.millis, counter: .max)
+            let exhausted = SyncVersion(clock: [a.uuidString: exhaustedStamp], winner: .init(actor: a.uuidString, stamp: exhaustedStamp))
             let advanced = SyncVersion.next(after: exhausted, actor: a)
-            try check(advanced.isValid && advanced.dominates(exhausted) && advanced.winner.counter > 0,
-                      "counter exhaustion keeps prior history and never wraps to zero")
+            try check(advanced.isValid && advanced.dominates(exhausted) && advanced.winner.stamp == SyncStamp(millis: exhaustedStamp.millis + 1, counter: 0),
+                      "counter exhaustion advances the millisecond instead of wrapping")
+            let slow = SyncVersion.next(after: advanced, actor: b, now: now.addingTimeInterval(-86400))
+            try check(slow.dominates(advanced) && advanced.winner.stamp < slow.winner.stamp,
+                      "a backwards clock still stamps after everything it has seen")
             let encoded = try JSONEncoder().encode(advanced)
             try check(try JSONDecoder().decode(SyncVersion.self, from: encoded) == advanced,
-                      "large valid counters survive an exact serialization round trip")
+                      "hybrid clock versions survive an exact serialization round trip")
+            // Histories saved with the earlier counter vectors are dropped, not rejected, and fall back to dated history.
+            let counterJSON = #"{"date":0,"fingerprint":"\#(hash)","version":{"clock":{"\#(a.uuidString)":3},"winner":{"actor":"\#(a.uuidString)","counter":3}},"fields":{"title":{"fingerprint":"\#(hash)","version":{"clock":{"\#(a.uuidString)":3},"winner":{"actor":"\#(a.uuidString)","counter":3}}}}}"#
+            let decoded = try JSONDecoder().decode(SyncChanges.Revision.self, from: Data(counterJSON.utf8))
+            try check(decoded.version == nil && decoded.fields?["title"]?.version == nil && decoded.fingerprint == hash,
+                      "counter-vector versions from format 10 decode as unknown history")
+            let empty = try JSONDecoder().decode(SyncVersion.self, from: Data(#"{"clock":{},"winner":{"actor":"x","stamp":[0,1]}}"#.utf8))
+            try check(!empty.isValid, "an empty clock is never mistaken for a legacy counter version")
         }
         // The review session's reference time must remain fixed across a delayed user confirmation.
         var original = TaskBackup.TaskRecord(TaskItem(title: "Legacy original")); original.createdAt = now

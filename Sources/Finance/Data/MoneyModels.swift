@@ -230,6 +230,7 @@ struct MoneyEntry: Codable, Identifiable, Equatable {
     var deletedAt: Date?
     var deletionBatchID: UUID? // Only rows deleted by the same action are restored together.
     var pending: Bool? // Absent in older ledgers; only true means not yet posted.
+    var recurringID: UUID? // The recurring bill that generated this entry. It may outlive a stopped bill.
     var isPending: Bool { pending == true }
 
     func isDueForConfirmation(at now: Date = Date(), calendar: Calendar = Dates.calendar) -> Bool {

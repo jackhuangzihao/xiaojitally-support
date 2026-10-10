@@ -20,6 +20,7 @@ extension FinanceHome {
             } header: { Text(L("账本与预算", "Books & budgets")) } footer: {
                 Text(L("账本用来分开日常、旅行等开支；账户由所有账本共用，任何账本里的消费都会从同一个账户余额扣除。", "Books separate daily and travel spending; accounts are shared, so any book's spending comes out of the same balance.")).font(.caption).foregroundStyle(.secondary)
             }
+            recurringSection
             Section { categoryGrid(income: false) } header: { Text(L("支出分类", "Spending categories")) }
             Section { categoryGrid(income: true) } header: { Text(L("收入分类", "Income categories")) }
             Section {

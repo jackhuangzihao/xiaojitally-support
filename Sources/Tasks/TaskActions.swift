@@ -32,7 +32,68 @@ extension ContentView {
     }
 
     func toggleCompletion(_ task: TaskItem) {
-        _ = commit { task.toggleCompletion(in: context) }
+        let completing = !task.isDone
+        guard commit({ task.toggleCompletion(in: context) }) else { return }
+        if completing { offerSettlement(for: task) }
+        else if settlementOffer?.taskID == task.id { settlementOffer = nil }
+    }
+
+    /// Rule 1: completing a task with pending entries offers to post them. Without any, completion stays silent.
+    private func offerSettlement(for task: TaskItem) {
+        guard let money = taskMoney.summary(for: task.id), money.pendingCount > 0 else { return }
+        let pending = money.lines.filter(\.pending)
+        let hidden = UserDefaults.standard.bool(forKey: "hideMoney")
+        // One total only when every pending entry is in the same currency.
+        let total = Set(pending.map(\.currency)).count == 1
+            ? " " + Money.display(pending.reduce(0) { $0 + $1.amount }, pending[0].currency, hidden: hidden) : ""
+        settlementOffer = SettlementOffer(
+            taskID: task.id,
+            message: L("已完成“\(task.title)” · 有 \(pending.count) 笔待入账", "Completed “\(task.title)” · \(pending.count) pending") + total,
+            buttonTitle: pending.count == 1 ? L("确认入账", "Post") : L("确认入账（\(pending.count) 笔）", "Post \(pending.count)"))
+    }
+
+    /// Posts the offer's entries as they are now: some may have been posted or changed in Finance meanwhile.
+    func confirmSettlement(_ offer: SettlementOffer) {
+        settlementOffer = nil
+        var outcome = TaskSettlement()
+        do { try FinanceStore.update(context) { outcome = $0.settlePendingEntries(ofTask: offer.taskID) } }
+        catch { errorMessage = Store.recovery.failure == nil ? error.localizedDescription : nil; return }
+        if let first = outcome.needsReview.first {
+            // Opened as a confirmation; one not due yet is dated today, as in the quick action.
+            var draft = first
+            if !first.isDueForConfirmation() { draft.date = MoneyEntry.timestamp(Date()) }
+            settlementEditor = EntryRequest(entry: draft, expected: first, confirmingPending: true)
+        }
+        switch (outcome.posted.count, outcome.needsReview.count) {
+        case (0, 0): notify(L("这些账单已经入账了", "These entries are already posted"))
+        case (0, _): break
+        case (let posted, 0): notify(L("已入账 \(posted) 笔", "Posted \(posted)"))
+        case (let posted, let review): notify(L("已入账 \(posted) 笔，另有 \(review) 笔需要补充后确认", "Posted \(posted); \(review) need details first"))
+        }
+    }
+
+    /// Rule 2: purging never deletes money. Linked entries are unlinked in the same save as the purge.
+    func purgeTasks(_ ids: Set<UUID>) {
+        let doomed = Set(tasks.filter { ids.contains($0.id) && $0.deletedAt != nil }.map(\.id))
+        guard !doomed.isEmpty else { return }
+        do {
+            try Store.recovery.requireWritable(context)
+            try FinanceStore.stageUnlinking(doomed, in: context)
+        } catch {
+            context.rollback()
+            errorMessage = Store.recovery.failure == nil ? error.localizedDescription : nil
+            return
+        }
+        _ = commit { for task in tasks where doomed.contains(task.id) { context.delete(task) } }
+        undoDeletedIDs.removeAll { ids.contains($0) }
+    }
+
+    /// " 它关联的 2 笔账单会保留。" for the delete dialogs; empty when no entries are linked.
+    func linkedEntriesNote(_ ids: [UUID], purge: Bool) -> String {
+        let count = ids.reduce(0) { $0 + (taskMoney.summary(for: $1)?.count ?? 0) }
+        guard count > 0 else { return "" }
+        return purge ? L("关联的 \(count) 笔账单会保留，只是不再关联任务。", "\(count) linked entries are kept, no longer linked to a task.")
+            : L(" 它关联的 \(count) 笔账单会保留。", " Its \(count) linked entries are kept.")
     }
 
     func remindNow(_ task: TaskItem) {

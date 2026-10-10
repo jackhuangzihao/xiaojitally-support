@@ -38,8 +38,14 @@ extension FinanceHome {
                 if !trash && drilldown == nil {
                     PendingEntriesSection(entries: pendingEntries, data: data, hidden: hidden,
                                           open: { editor = EntryRequest(entry: $0, expected: $0) },
-                                          confirm: { editor = EntryRequest(entry: $0, expected: $0, confirmingPending: true) },
-                                          remove: { confirmDelete = $0 })
+                                          confirm: confirmPendingItem,
+                                          confirmWithChanges: confirmPendingItemWithChanges,
+                                          remove: { confirmDelete = $0 },
+                                          editBill: { editingRecurring = RecurringEditRequest(bill: $0) },
+                                          stopBill: { stoppingRecurring = $0 },
+                                          restartBill: { restartRecurring(from: $0) },
+                                          postToday: postOccurrenceToday,
+                                          skip: skipOccurrence)
                 }
                 if entries.isEmpty && (trash || pendingEntries.isEmpty || drilldown != nil) { emptyState.padding(.top, 40).frame(maxWidth: .infinity) }
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
@@ -48,6 +54,8 @@ extension FinanceHome {
                             ForEach(days[day] ?? []) { entry in
                                 FinanceEntryRow(entry: entry, data: data, showBook: showBook, hidden: hidden, accountID: trash ? nil : accountDetailID, balanceAfter: balances[entry.id],
                                                 restore: trash ? { restore(entry) } : nil,
+                                                task: entry.taskID.flatMap(taskLink),
+                                                openTask: entry.taskID.map { id in { openTask(id) } },
                                                 open: { if !trash { editor = EntryRequest(entry: entry, expected: entry) } }) { actions(entry) }
                             }
                         } header: { dayHeader(day, days[day] ?? []) }
@@ -64,6 +72,9 @@ extension FinanceHome {
         if entry.deletedAt == nil {
             Button(L("编辑", "Edit")) { editor = EntryRequest(entry: entry, expected: entry) }
             if entry.kind == .expense || entry.kind == .income || entry.kind == .transfer { Button(L("再记一笔同样的", "Record another like this")) { duplicate(entry) } }
+            if (entry.kind == .expense || entry.kind == .income) && entry.refundOf == nil && data.recurringBill(entry.recurringID) == nil {
+                Button(L("设为周期账单…", "Make recurring…")) { restartRecurring(from: entry) }
+            }
             if entry.isDueForConfirmation() {
                 Button(L("确认入账…", "Confirm entry…")) { editor = EntryRequest(entry: entry, expected: entry, confirmingPending: true) }
             }

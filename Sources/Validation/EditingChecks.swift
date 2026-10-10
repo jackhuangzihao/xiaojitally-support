@@ -209,6 +209,85 @@ import AppKit
         savedTask.isDone = true; savedTask.ensureNextOccurrence(in: moneyContext); try Store.save(moneyContext)
         try require(try moneyContext.fetch(FetchDescriptor<TaskItem>()).count == 2 && FinanceStore.read(moneyContext)?.entries.count == 1,
                     "Completing a repeating task creates its next task without another financial posting")
+
+        // Task ↔ entry links: one summary per task, posting on completion, no new links to deleted tasks,
+        // unlinking on purge, and which tasks the picker offers.
+        let linkTask = UUID(), otherTask = UUID()
+        let now = Date()
+        let yesterday = Dates.calendar.date(byAdding: .day, value: -1, to: now)!, inTwoDays = Dates.calendar.date(byAdding: .day, value: 2, to: now)!
+        func linkedEntry(_ title: String, _ amount: Decimal, pending: Bool, on day: Date, task: UUID = linkTask) -> MoneyEntry {
+            var entry = MoneyEntry(); entry.title = title; entry.date = MoneyEntry.timestamp(day); entry.amount = amount
+            entry.accountID = bank.id; entry.accountAmount = amount; entry.baseAmount = amount
+            entry.bookID = ledger.books[0].id; entry.categoryID = ledger.defaultCategory(income: false)
+            entry.taskID = task; entry.pending = pending ? true : nil
+            return entry
+        }
+        var links = ledger
+        var foreignPending = linkedEntry("Visa fee", 80, pending: true, on: yesterday)
+        foreignPending.currency = "USD"; foreignPending.accountID = nil; foreignPending.accountAmount = 0; foreignPending.baseAmount = nil
+        links.entries = [linkedEntry("Flight", 4860, pending: false, on: yesterday), linkedEntry("Bags", 320, pending: false, on: now),
+                         linkedEntry("Rent", 3200, pending: true, on: yesterday), linkedEntry("Checkup", 580, pending: true, on: inTwoDays),
+                         foreignPending, linkedEntry("Other task", 10, pending: false, on: now, task: otherTask)]
+        try links.validate()
+        let index = TaskMoneyIndex(links)
+        let summary = index.summary(for: linkTask)
+        try require(summary?.count == 5 && summary?.pendingCount == 3 && summary?.net == nil && index.summary(for: otherTask)?.net == -10
+                    && index.summary(for: UUID()) == nil, "Each task has one summary; an unconverted entry leaves its total open")
+        try require(summary?.lines.first.map { Dates.sameDay($0.date, inTwoDays) } == true, "A task's entries are listed newest first")
+        var settled = links
+        let outcome = settled.settlePendingEntries(ofTask: linkTask, now: now)
+        let rent = settled.entries.first { $0.title == "Rent" }, checkup = settled.entries.first { $0.title == "Checkup" }
+        try require(outcome.posted.count == 2 && outcome.needsReview.map(\.title) == ["Visa fee"]
+                    && rent?.isPending == false && Dates.sameDay(rent!.date, yesterday)
+                    && checkup?.isPending == false && Dates.sameDay(checkup!.date, now)
+                    && settled.entries.first { $0.title == "Visa fee" }?.isPending == true && (try? settled.validate()) != nil,
+                    "Completing posts due entries on their date, future ones today, and leaves an unconverted one for review")
+        try require(settled.balance(bank.id) == bank.opening - 4860 - 320 - 3200 - 580 - 10, "Posted task entries change the account once")
+        var again = settled
+        try require(again.settlePendingEntries(ofTask: linkTask, now: now).posted.isEmpty, "Entries posted in Finance meanwhile are not posted twice")
+        if let category = links.categories.firstIndex(where: { $0.id == ledger.defaultCategory(income: false) }) {
+            var blocked = links
+            blocked.categories[category].archived = true
+            let before = blocked
+            let partial = blocked.settlePendingEntries(ofTask: linkTask, now: now)
+            try require(partial.posted.isEmpty && partial.needsReview.count == 3 && blocked == before,
+                        "An entry that cannot be posted as it stands is left for review, never half posted")
+        }
+        try rejects("A task in Recently deleted takes no new entries") {
+            try TaskLinkRule.check(newTaskID: linkTask, previousTaskID: nil) { _ in false }
+        }
+        let keepsLink = (try? TaskLinkRule.check(newTaskID: linkTask, previousTaskID: linkTask) { _ in false }) != nil
+        let removesLink = (try? TaskLinkRule.check(newTaskID: nil, previousTaskID: linkTask) { _ in false }) != nil
+        let linksAvailable = (try? TaskLinkRule.check(newTaskID: otherTask, previousTaskID: nil) { _ in true }) != nil
+        try require(keepsLink && removesLink && linksAvailable,
+                    "An existing link to a deleted task can stay or be removed; an available task can be linked")
+        var unlinked = links
+        try require(unlinked.unlinkTasks([linkTask]) == 5 && unlinked.entries.filter { $0.taskID == linkTask }.isEmpty
+                    && unlinked.entries.count == links.entries.count && unlinked.entries.first { $0.title == "Other task" }?.taskID == otherTask,
+                    "Purging a task unlinks only its entries and keeps every entry")
+        savedTask.deletedAt = Date()
+        try Store.save(moneyContext)
+        try FinanceStore.stageUnlinking([savedTask.id], in: moneyContext)
+        moneyContext.delete(savedTask)
+        try Store.save(moneyContext)
+        try require(FinanceStore.read(moneyContext)?.entries.count == 1 && FinanceStore.read(moneyContext)?.entries[0].taskID == nil,
+                    "A purge and the unlinking of its entries save together")
+        func candidate(_ title: String, done: Bool = false, deleted: Bool = false, days: Int?, completedDays: Int? = nil) -> TaskLinkOptions.Candidate {
+            .init(id: UUID(), title: title, done: done, deleted: deleted,
+                  date: days.flatMap { Dates.calendar.date(byAdding: .day, value: $0, to: now) },
+                  completedAt: completedDays.flatMap { Dates.calendar.date(byAdding: .day, value: $0, to: now) })
+        }
+        let candidates = [candidate("Pay rent", days: 0), candidate("Checkup", days: 2), candidate("Renew passport", days: 40),
+                          candidate("Book flight", done: true, days: -1, completedDays: -1), candidate("Old receipt", done: true, days: -60, completedDays: -60),
+                          candidate("Trashed errand", deleted: true, days: 1), candidate("No date", days: nil)]
+        let recent = TaskLinkOptions.make(candidates, query: "", now: now)
+        try require(recent.open.map(\.title) == ["Pay rent", "Checkup"] && recent.done.map(\.title) == ["Book flight"],
+                    "Without a search the picker offers this week's unfinished tasks and recent completions")
+        let errand = TaskLinkOptions.make(candidates, query: "errand", now: now)
+        try require(TaskLinkOptions.make(candidates, query: "passport", now: now).open.map(\.title) == ["Renew passport"]
+                    && TaskLinkOptions.make(candidates, query: "receipt", now: now).done.map(\.title) == ["Old receipt"]
+                    && errand.open.isEmpty && errand.done.isEmpty,
+                    "Searching finds any task by name, never a deleted one")
         print("Editor checks passed: \(checks)")
         return checks
     }

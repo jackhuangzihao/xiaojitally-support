@@ -9,17 +9,41 @@ enum SyncChanges {
         var date: Date?
         var fingerprint: String
         var version: SyncVersion? = nil
+
+        init(date: Date?, fingerprint: String, version: SyncVersion? = nil) {
+            self.date = date; self.fingerprint = fingerprint; self.version = version
+        }
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            date = try container.decodeIfPresent(Date.self, forKey: .date)
+            fingerprint = try container.decode(String.self, forKey: .fingerprint)
+            version = try container.decodeSyncVersion(forKey: .version)
+        }
     }
     struct Revision: Codable, Equatable, Sendable {
         var date: Date
         var fingerprint: String?
         var fields: [String: FieldRevision]? = nil
         var version: SyncVersion? = nil
+
+        init(date: Date, fingerprint: String?, fields: [String: FieldRevision]? = nil, version: SyncVersion? = nil) {
+            self.date = date; self.fingerprint = fingerprint; self.fields = fields; self.version = version
+        }
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            date = try container.decode(Date.self, forKey: .date)
+            fingerprint = try container.decodeIfPresent(String.self, forKey: .fingerprint)
+            fields = try container.decodeIfPresent([String: FieldRevision].self, forKey: .fields)
+            version = try container.decodeSyncVersion(forKey: .version)
+        }
     }
     typealias Revisions = [String: Revision]
     struct Decision {
         var needsReview: Bool
     }
+    /// Record kinds that belong to the ledger; a base-currency change or ledger-level conflict holds them together.
+    static let financeKinds: Set<String> = ["account", "book", "category", "entry", "recurring", "setting", "rate"]
+    static func isFinanceKey(_ key: String) -> Bool { financeKinds.contains(String(key.prefix { $0 != ":" })) }
     static let currencyKey = key("setting", TaskItem.syncIdentity("sync-finance-currency"))
     static func rateKey(_ pair: String) -> String { key("rate", TaskItem.syncIdentity("sync-finance-rate:" + pair)) }
     static func financeSettings(_ finance: FinanceData?) throws -> [String: String] {
@@ -51,7 +75,7 @@ enum SyncChanges {
         func validFingerprint(_ value: String) -> Bool {
             value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
         }
-        let kinds: Set<String> = ["task", "list", "week", "account", "book", "category", "entry", "setting", "rate"]
+        let kinds = financeKinds.union(["task", "list", "week"])
         guard revisions.allSatisfy({ key, revision in
             let parts = key.split(separator: ":", omittingEmptySubsequences: false)
             guard parts.count == 2 && kinds.contains(String(parts[0])) && UUID(uuidString: String(parts[1])) != nil,
@@ -84,7 +108,7 @@ enum SyncChanges {
             let old = revisions[key]
             let changed = old?.fingerprint != fingerprint || old == nil
             let previousVersion = old?.version ?? old.flatMap { SyncVersion.legacy(key: key, fingerprint: $0.fingerprint, date: $0.date) }
-            let event = changed ? actor.map { SyncVersion.next(after: previousVersion, actor: $0) } : old?.version
+            let event = changed ? actor.map { SyncVersion.next(after: previousVersion, actor: $0, now: now) } : old?.version
             // Integer milliseconds preserve ordering and survive the backup's epoch-date conversion exactly.
             var date = changed ? timestamp(now, after: old?.date) : old?.date ?? timestamp(now, after: nil)
             var fields = fingerprint == nil ? nil : old?.fields
@@ -104,7 +128,11 @@ enum SyncChanges {
                             let ancestor = stamp?.version ?? stamp.flatMap {
                                 SyncVersion.legacy(key: key + ":" + name, fingerprint: $0.fingerprint, date: $0.date)
                             } ?? before.map { SyncVersion.observed(key: key + ":" + name, fingerprint: $0) }
-                            return ancestor.map { event.joined(with: $0) } ?? event
+                            guard let ancestor, let actor else { return event }
+                            // The field may have seen later stamps than the record; its edit must still be the latest of them.
+                            let joined = event.joined(with: ancestor)
+                            return joined.clock.values.allSatisfy { $0 <= event.winner.stamp } ? joined
+                                : SyncVersion.next(after: joined, actor: actor, now: now)
                         }
                         fields?[name] = FieldRevision(date: fieldDate, fingerprint: hash, version: version)
                     } else if stamp?.fingerprint == hash {
@@ -206,6 +234,7 @@ enum SyncChanges {
         try collect(previous?.books ?? [], next.books, kind: "book")
         try collect(previous?.categories ?? [], next.categories, kind: "category")
         try collect(previous?.entries ?? [], next.entries, kind: "entry")
+        try collect(previous?.recurringBills ?? [], next.recurringBills, kind: "recurring")
         let oldSettings = try financeSettings(previous), newSettings = try financeSettings(next)
         for key in Set(oldSettings.keys).union(newSettings.keys) where oldSettings[key] != newSettings[key] {
             changes[key] = .some(newSettings[key]); previousValues[key] = oldSettings[key]
@@ -234,6 +263,7 @@ enum SyncChanges {
             try collect(finance.books, kind: "book", id: { $0.id })
             try collect(finance.categories, kind: "category", id: { $0.id })
             try collect(finance.entries, kind: "entry", id: { $0.id })
+            try collect(finance.recurringBills, kind: "recurring", id: { $0.id })
             values.merge(try financeSettings(finance)) { current, _ in current }
         }
         return values
@@ -340,7 +370,7 @@ enum SyncChanges {
         }
         var financeKeys: [String] {
             Set(localValues.keys).union(cloudValues.keys).union(baseValues.keys).filter {
-                ["account", "book", "category", "entry", "setting", "rate"].contains(String($0.prefix { $0 != ":" }))
+                SyncChanges.isFinanceKey($0)
             }.sorted()
         }
         func decision(_ keys: [String]) -> Decision {

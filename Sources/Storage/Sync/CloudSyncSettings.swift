@@ -27,6 +27,7 @@ struct CloudSyncSettings: View {
     }
     @Environment(\.locale) private var locale
     @State private var confirmEnable = false
+    @State private var confirmReupload = false
     @State private var resolve = false
     @State private var export = false
     @State private var document: BackupDocument?
@@ -55,7 +56,7 @@ struct CloudSyncSettings: View {
                         .id(reviewID)
                     }
             }
-            Text(L("独立修改自动合并，已同步的处理结果会沿用。删除、金额等重要冲突仍需核对。使用同一 Apple 账户，打开 App 后同步；离线仍可编辑。", "Independent changes merge automatically, and synced decisions are retained. Deletions and important financial conflicts still need review. Use the same Apple Account with the app open; offline editing remains available."))
+            Text(L("独立修改自动合并；同一处两边都改时保留后改的，已同步的处理结果会沿用。删除、金额等重要冲突仍需核对。使用同一 Apple 账户，打开 App 后同步；离线仍可编辑。", "Independent changes merge automatically; when both devices edit the same item, the later edit is kept, and synced decisions are retained. Deletions and important financial conflicts still need review. Use the same Apple Account with the app open; offline editing remains available."))
                 .font(.caption).foregroundStyle(.secondary)
             if let summary = sync.automaticSummary {
                 Text(L("最近一次自动处理了 \(summary.count) 处修改：", "Most recent automatic resolution: \(summary.count) edits, ")
@@ -66,6 +67,15 @@ struct CloudSyncSettings: View {
             if !sync.detail.isEmpty && !sync.conflict { Text(sync.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             if sync.enabled {
                 Button(L("立即同步", "Sync now")) { Task { await sync.sync() } }.disabled(sync.running)
+                if sync.cloudRemoved {
+                    Button(L("用本机数据重新上传…", "Re-upload this device’s data…")) { confirmReupload = true }
+                        .disabled(sync.running)
+                        .confirmationDialog(L("用本机数据重新上传？", "Re-upload this device’s data?"), isPresented: $confirmReupload, titleVisibility: .visible) {
+                            Button(L("重新上传", "Re-upload")) { Task { await sync.reuploadLocalData() } }
+                        } message: {
+                            Text(L("本机的任务、清单与账目会成为新的 iCloud 副本，其他设备之后会与它合并。上传前会先保存一份本机恢复副本，可在“导出同步恢复副本”中找到。", "This device’s tasks, lists and finances become the new iCloud copy, and other devices then merge with it. A local recovery copy is saved first; find it under Export sync recovery copy."))
+                        }
+                }
             }
             Menu(L("导出同步恢复副本", "Export sync recovery copy")) {
                 Button(L("上次冲突处理前的本机副本", "Local copy before last conflict resolution")) { exportConflictCopy(local: true) }

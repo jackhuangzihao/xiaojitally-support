@@ -308,34 +308,7 @@ extension TaskEditor {
 
     /// Every n days, weeks, months or years; weekly can also pick the weekdays.
     @ViewBuilder private func customRepeatControls(_ rule: RepeatRule) -> some View {
-        HStack(spacing: 10) {
-            Text(L("每", "Every")).foregroundStyle(.secondary)
-            Stepper(value: Binding(get: { rule.interval }, set: { value in
-                var next = rule; next.interval = min(99, max(1, value)); repeatRule = next.text
-            }), in: 1...99) {
-                Text("\(rule.interval)").font(.callout.monospacedDigit().weight(.semibold)).frame(minWidth: 22)
-            }.fixedSize()
-            Picker(L("单位", "Unit"), selection: Binding(get: { rule.unit }, set: { unit in
-                repeatRule = RepeatRule(interval: rule.interval, unit: unit, weekdays: unit == .week ? [baseWeekday] : []).text
-            })) {
-                Text(L("天", "days")).tag(RepeatRule.Unit.day)
-                Text(L("周", "weeks")).tag(RepeatRule.Unit.week)
-                Text(L("个月", "months")).tag(RepeatRule.Unit.month)
-                Text(L("年", "years")).tag(RepeatRule.Unit.year)
-            }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 240)
-        }
-        if rule.unit == .week {
-            let chosen = rule.weekdays.isEmpty ? [baseWeekday] : rule.weekdays
-            HStack(spacing: 6) {
-                ForEach(RepeatRule.weekOrder, id: \.self) { day in
-                    SelectPill(title: RepeatRule.weekdayName(day), selected: chosen.contains(day)) {
-                        var days = chosen
-                        if days.contains(day) { if days.count > 1 { days.remove(day) } } else { days.insert(day) }
-                        repeatRule = RepeatRule(interval: rule.interval, unit: .week, weekdays: days).text
-                    }
-                }
-            }
-        }
+        CustomRepeatControls(rule: rule, baseWeekday: baseWeekday) { repeatRule = $0 }
     }
 
     // MARK: Earlier tasks as suggestions (new tasks only)
