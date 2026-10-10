@@ -84,7 +84,8 @@ extension ContentView {
             errorMessage = Store.recovery.failure == nil ? error.localizedDescription : nil
             return
         }
-        _ = commit { for task in tasks where doomed.contains(task.id) { context.delete(task) } }
+        // Purged tasks can't be undeleted; after a failed save they still exist, so keep their undo.
+        guard commit({ for task in tasks where doomed.contains(task.id) { context.delete(task) } }) else { return }
         undoDeletedIDs.removeAll { ids.contains($0) }
     }
 

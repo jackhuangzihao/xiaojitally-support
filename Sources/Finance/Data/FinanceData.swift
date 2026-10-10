@@ -397,16 +397,20 @@ struct FinanceData: Codable, Equatable {
         return (income, expense, refunds, missing)
     }
     func csv(_ selected: [MoneyEntry]) -> String {
-        func cell(_ text: String) -> String {
-            // Formula-safe export, including user-authored labels beginning with spreadsheet operators.
-            let safe = ["=", "+", "-", "@", "\t", "\r"].contains(String(text.prefix(1))) ? "'" + text : text
+        func cell(_ text: String, numeric: Bool) -> String {
+            // Formula-safe export for text, including user-authored labels beginning with spreadsheet operators.
+            // Amounts are generated digits; a leading "-" there is a negative number and must stay summable.
+            let safe = !numeric && ["=", "+", "-", "@", "\t", "\r"].contains(String(text.prefix(1))) ? "'" + text : text
             return "\"" + safe.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
+        let numericColumns: Set<String> = ["Amount", "Account amount", "Received", "Fee", "Base amount", "Base fee"]
         let header = ["ID", "Date", "Type", "Title", "Currency", "Amount", "Account", "Account currency", "Account amount", "Destination", "Destination currency", "Received", "Fee", "Base currency", "Base amount", "Base fee", "Book", "Category", "Tags", "Notes", "Task ID", "Refund of", "Rate note", "Status"]
         let rows = selected.map { e -> [String] in
             let a = accounts.first { $0.id == e.accountID }, d = accounts.first { $0.id == e.destinationID }
             return [e.id.uuidString, e.date.ISO8601Format(), e.kind.rawValue, e.title, e.currency, Money.text(e.amount), a?.name ?? "", a?.currency ?? "", Money.text(e.accountAmount), d?.name ?? "", d?.currency ?? "", Money.text(e.destinationAmount), Money.text(e.fee), baseCurrency, e.baseAmount.map(Money.text) ?? "", e.baseFee.map(Money.text) ?? "", books.first { $0.id == e.bookID }?.name ?? "", categoryPath(e.categoryID), e.tags, e.notes, e.taskID?.uuidString ?? "", e.refundOf?.uuidString ?? "", e.rateNote, e.isPending ? "pending" : "posted"]
         }
-        return "\u{FEFF}" + ([header] + rows).map { $0.map(cell).joined(separator: ",") }.joined(separator: "\r\n")
+        let lines = [header.map { cell($0, numeric: false) }]
+            + rows.map { row in zip(header, row).map { cell($1, numeric: numericColumns.contains($0)) } }
+        return "\u{FEFF}" + lines.map { $0.joined(separator: ",") }.joined(separator: "\r\n")
     }
 }

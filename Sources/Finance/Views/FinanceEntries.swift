@@ -207,7 +207,8 @@ extension FinanceHome {
     func overview(_ entries: [MoneyEntry]) -> some View {
         let spent = entryTotals(entries, income: false)
         let earned = entryTotals(entries, income: true)
-        let balance = MoneyStatisticsTotal(total: earned.total - spent.total, missing: earned.missing + spent.missing, estimateDates: earned.estimateDates.union(spent.estimateDates))
+        let balance = MoneyStatisticsTotal(total: earned.total - spent.total, missing: earned.missing + spent.missing,
+                                           missingDates: earned.missingDates + spent.missingDates, estimateDates: earned.estimateDates.union(spent.estimateDates))
         let isMonth = selection == "stats" ? period == .month : dateRange == .month
         let hasFilters = accountFilter != nil || categoryFilter != nil || kindFilter != nil || drilldown != nil || !search.isEmpty
         let budget: Decimal? = isMonth && !hasFilters ? data.budget(for: bookFilterID, in: entries) : nil
@@ -259,7 +260,7 @@ extension FinanceHome {
                 Text(L("部分换算使用缓存参考汇率：", "Some conversions use cached reference rates: ") + balance.estimateDates.sorted().joined(separator: ", "))
                     .font(.caption).foregroundStyle(.orange)
             }
-            missingAmounts(balance.missing)
+            missingAmounts(balance.missingDates)
         }
         .padding(compact ? Design.Spacing.l : 20).cardSurface()
     }
@@ -344,9 +345,11 @@ extension FinanceHome {
         return parts.joined(separator: "\n")
     }
     /// Notes under a subtotal. Future-dated foreign amounts are expected and stay grey; the rest are orange with a fix.
-    @ViewBuilder func missingAmounts(_ count: Int) -> some View {
-        let scope = conversionScope
-        let breakdown = UnconvertedBreakdown(missing: count, unconverted: scope.missingConversionEntries, today: Date())
+    /// `missingDates` come from the totals, so a complete total costs nothing here; the conversion scope (a full
+    /// filter of the view's entries) is only built when the orange note needs its button.
+    @ViewBuilder func missingAmounts(_ missingDates: [Date]) -> some View {
+        let now = Date()
+        let breakdown = UnconvertedBreakdown(missingDates: missingDates, today: now)
         if breakdown.future > 0 {
             let when = breakdown.firstFutureDate.map { Dates.label($0, pattern: "M月d日") } ?? ""
             Label(L("不含 \(breakdown.future) 笔未来日期的外币账单（\(when) 起），到期后可补全折算",
@@ -355,11 +358,13 @@ extension FinanceHome {
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         if breakdown.actionable > 0 {
+            let scope = conversionScope
             VStack(alignment: .leading, spacing: 6) {
                 Label(L("不含 \(breakdown.actionable) 笔待折算，合计为已折算小计", "Excludes \(breakdown.actionable) unconverted amounts; totals are a converted subtotal"),
                       systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.orange)
-                if scope.missingConversionEntries.count > breakdown.future {
+                // Only entries due by today can be completed now; future ones have no published rate yet.
+                if scope.missingConversionEntries.contains(where: { !UnconvertedBreakdown.isFuture($0.date, today: now) }) {
                     Button { conversionRequest = MoneyConversionRequest(ledger: scope) } label: {
                         Label(L("补全折算…", "Complete conversions…"), systemImage: "arrow.triangle.2.circlepath")
                             .frame(minHeight: compact ? 44 : nil)

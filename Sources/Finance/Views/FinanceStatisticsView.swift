@@ -73,7 +73,7 @@ extension FinanceHome {
                         }
                     }
                     rateNote(entries, estimates: spent.estimateDates.union(earned.estimateDates))
-                    if spent.missing + earned.missing > 0 { Divider(); missingAmounts(spent.missing + earned.missing) }
+                    if spent.missing + earned.missing > 0 { Divider(); missingAmounts(spent.missingDates + earned.missingDates) }
                     DisclosureGroup(L("明细与计算说明", "Breakdown and calculation")) {
                         VStack(alignment: .leading, spacing: 8) {
                             originalSplit(entries)

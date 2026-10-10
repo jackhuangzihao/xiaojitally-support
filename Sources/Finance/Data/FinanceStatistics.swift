@@ -17,6 +17,8 @@ extension MoneyEntry {
 struct MoneyStatisticsTotal {
     var total: Decimal = 0
     var missing = 0
+    /// Dates of the entries counted in `missing`, so notes can tell future-dated ones from the rest.
+    var missingDates: [Date] = []
     var convertedCount = 0
     var estimateDates: Set<String> = []
     var complete: Bool { missing == 0 && estimateDates.isEmpty }
@@ -61,7 +63,7 @@ extension FinanceData {
                 result.total += value.amount
                 result.convertedCount += 1
                 if let date = value.estimateDate { result.estimateDates.insert(date) }
-            } else { result.missing += 1 }
+            } else { result.missing += 1; result.missingDates.append(entry.date) }
         }
         return result
     }
@@ -204,13 +206,16 @@ struct UnconvertedBreakdown: Equatable {
     /// Unconverted amounts that could be completed now (or need another display currency).
     var actionable = 0
 
-    /// `missing` is the count a total reported; `unconverted` the entries in view without a recorded conversion.
-    init(missing: Int, unconverted: [MoneyEntry], today: Date, calendar: Calendar = Dates.calendar) {
-        guard missing > 0 else { return }
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: today)) ?? today
-        let later = unconverted.filter { $0.date >= tomorrow }
-        future = min(missing, later.count)
-        firstFutureDate = later.map(\.date).min()
-        actionable = missing - future
+    /// `missingDates` are the dates of exactly the entries a total left out, so both notes count the same entries.
+    init(missingDates: [Date], today: Date, calendar: Calendar = Dates.calendar) {
+        let later = missingDates.filter { Self.isFuture($0, today: today, calendar: calendar) }
+        future = later.count
+        firstFutureDate = later.min()
+        actionable = missingDates.count - later.count
+    }
+
+    /// After today: no reference rate has been published for it yet.
+    static func isFuture(_ date: Date, today: Date, calendar: Calendar = Dates.calendar) -> Bool {
+        date >= (calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: today)) ?? today)
     }
 }

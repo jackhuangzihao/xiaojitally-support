@@ -157,6 +157,11 @@ struct TaskBackup: Codable {
     /// Save once: a failed write uses the same protective rollback as normal task edits.
     @MainActor func restore(_ context: ModelContext, replace: Bool) throws {
         try Store.recovery.requireWritable(context)
+        // Old records are deleted before the ledger and history are staged; a failure there must not leave half a restore.
+        try Store.discardingOnFailure(context) { try apply(to: context, replace: replace) }
+    }
+
+    @MainActor private func apply(to context: ModelContext, replace: Bool) throws {
         let original = try Self.capture(context)
         let merged = try merging(into: original, replace: replace)
         let oldTasks = try context.fetch(FetchDescriptor<TaskItem>())

@@ -118,6 +118,11 @@ import SwiftData
         var unsafe = lunch; unsafe.title = "=HYPERLINK(\"url\")"; unsafe.notes = "line1\nline2,comma"; unsafe.tags = "@formula"
         let csv = value.csv([unsafe])
         try require(csv.contains("'=HYPERLINK") && csv.contains("'@formula") && csv.contains("line1\nline2,comma"), "CSV quotes multiline text and protects formulas")
+        // Only the formatting is under test here: a negative account amount next to a title starting with "-".
+        var negative = lunch; negative.title = "-refund note"; negative.accountAmount = -50.25
+        let negativeCSV = value.csv([negative])
+        try require(negativeCSV.contains("\"'-refund note\"") && negativeCSV.contains("\"-50.25\"") && !negativeCSV.contains("'-50.25"),
+                    "CSV guards a text cell starting with '-' but keeps negative amounts as numbers")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("jianshi-finance-check-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

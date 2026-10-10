@@ -34,6 +34,21 @@ import AppKit
             var cleared = snapshot; cleared.weekTitles = []
             try cleared.restore(restored.mainContext, replace: true)
             try require(try restored.mainContext.fetchCount(FetchDescriptor<CalendarWeekTitle>()) == 0, "New backups explicitly restore an empty title collection")
+            // A multi-step update that fails after deleting must leave nothing for a later save to commit.
+            let interrupted = try Store.make(url: directory.appendingPathComponent("interrupted-update.store")), context = interrupted.mainContext
+            context.insert(TaskItem(title: "Survives a failed restore")); try Store.save(context)
+            do {
+                try Store.discardingOnFailure(context) {
+                    for task in try context.fetch(FetchDescriptor<TaskItem>()) { context.delete(task) }
+                    context.insert(TaskItem(title: "Half of a restore"))
+                    throw TaskBackup.invalid("Injected staging failure")
+                }
+                try require(false, "An injected staging failure is reported")
+            } catch let error as NSError where error.localizedDescription == "Injected staging failure" {}
+            try Store.save(context)
+            let survivors = try context.fetch(FetchDescriptor<TaskItem>()).map(\.title)
+            try require(!context.hasChanges && survivors == ["Survives a failed restore"],
+                        "A failed multi-step update is discarded, so the next save cannot commit half of it")
         }
     }
 

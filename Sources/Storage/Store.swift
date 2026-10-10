@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 import Observation
 import SQLite3
+import OSLog
 
 /// A failed context is never reused. Recovery opens the last committed store;
 /// editor drafts live outside this context and are applied only after another Save.
@@ -46,6 +47,8 @@ import SQLite3
     }
 }
 
+private let storeLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.jianshi.personal", category: "Store")
+
 @MainActor enum Store {
     static let recovery = StoreRecovery()
     static var didSave: ((ModelContext) -> Void)?
@@ -77,6 +80,20 @@ import SQLite3
     }
 
     static func invalidateHistory() { revision += 1 }
+
+    /// Runs several staging steps that end in `Store.save`. If a step throws before the save, the unsaved changes
+    /// are undone; otherwise the next unrelated save would commit half of them (and sync waits while they linger).
+    /// A failed `Store.save` has already rolled back and paused saving, so it is left as it is.
+    static func discardingOnFailure(_ context: ModelContext, _ changes: () throws -> Void) throws {
+        do { try changes() }
+        catch {
+            if recovery.failure == nil, context.hasChanges {
+                context.rollback()
+                storeLog.notice("Discarded unsaved changes after a failed multi-step update")
+            }
+            throw error
+        }
+    }
     static func failureMessage(_ error: Error) -> String {
         L("修改未保存。请使用“重新载入数据”恢复操作；编辑草稿会保留，载入后请检查并再次保存。", "Changes were not saved. Reload data to continue; editor drafts are kept. Review and save them after reloading.") + "\n" + error.localizedDescription
     }
