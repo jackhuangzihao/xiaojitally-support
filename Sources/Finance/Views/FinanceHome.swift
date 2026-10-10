@@ -100,6 +100,8 @@ struct FinanceHome: View {
     @State var customStart = Date()
     @State var customEnd = Date()
     @State var search = ""
+    /// The explanation of the totals on the bills page.
+    @State var showSummaryInfo = false
     @State var accountDetailID: UUID?
     @AppStorage("moneyRunningBalances") var showRunningBalances = false
     @State var accountFilter: UUID?

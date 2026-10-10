@@ -77,9 +77,7 @@ struct RecurringBadge: View {
     let bill: MoneyRecurring
     var body: some View {
         Label(bill.scheduleLabel, systemImage: "repeat")
-            .font(.caption2.weight(.medium)).foregroundStyle(Color.accentColor)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+            .tagStyle(.accentColor, weight: .medium)
             .accessibilityLabel(L("周期账单：", "Recurring bill: ") + bill.scheduleLabel)
     }
 }

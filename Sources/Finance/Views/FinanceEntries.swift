@@ -34,7 +34,7 @@ extension FinanceHome {
                         if let account = selectedAccount { accountOverview(account, entries: entries) }
                         else if !data.accounts.isEmpty || !data.entries.isEmpty || data.books.contains(where: { $0.budget != nil }) { overview(entries) }
                     }
-                }.padding(.horizontal, compact ? 4 : 24).padding(.top, 18).padding(.bottom, 6)
+                }.padding(.horizontal, Self.pageInset(compact)).padding(.top, 18).padding(.bottom, 6)
                 if !trash && drilldown == nil {
                     PendingEntriesSection(entries: pendingEntries, data: data, hidden: hidden,
                                           open: { editor = EntryRequest(entry: $0, expected: $0) },
@@ -51,12 +51,18 @@ extension FinanceHome {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     ForEach(keys, id: \.self) { day in
                         Section {
-                            ForEach(days[day] ?? []) { entry in
+                            let items = days[day] ?? []
+                            // Each day's entries read as one card.
+                            ForEach(Array(items.enumerated()), id: \.element.id) { index, entry in
                                 FinanceEntryRow(entry: entry, data: data, showBook: showBook, hidden: hidden, accountID: trash ? nil : accountDetailID, balanceAfter: balances[entry.id],
                                                 restore: trash ? { restore(entry) } : nil,
                                                 task: entry.taskID.flatMap(taskLink),
                                                 openTask: entry.taskID.map { id in { openTask(id) } },
                                                 open: { if !trash { editor = EntryRequest(entry: entry, expected: entry) } }) { actions(entry) }
+                                    .padding(.horizontal, Design.Spacing.xs).padding(.vertical, 2)
+                                    .background(CardRowBackground(first: index == 0, last: index == items.count - 1))
+                                    .overlay(alignment: .top) { if index > 0 { Divider().padding(.leading, 58) } }
+                                    .padding(.horizontal, Self.pageInset(compact))
                             }
                         } header: { dayHeader(day, days[day] ?? []) }
                     }
@@ -112,25 +118,30 @@ extension FinanceHome {
             } actions: { Button(L("记一笔", "New entry"), action: newEntry).buttonStyle(.borderedProminent) }
         }
     }
+    /// One left and right inset for the summary, pending card and entry list, so their edges line up.
+    static func pageInset(_ compact: Bool) -> CGFloat { compact ? Design.Spacing.xs : 10 }
     private func dayHeader(_ day: Date, _ items: [MoneyEntry]) -> some View {
         let spent = entryTotals(items, income: false)
         let earned = entryTotals(items, income: true)
         let flow = accountDetailID.map { data.accountFlow($0, in: items) }
-        return (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 5)) : AnyLayout(HStackLayout(spacing: 12))) {
-            Text(Dates.label(day, pattern: "M月d日 EEEE") + (Dates.calendar.isDateInToday(day) ? L(" · 今天", " · Today") : ""))
+        return (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))) {
+            HStack(spacing: 6) {
+                Text(Dates.label(day, pattern: "M月d日 EEEE")).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                if Dates.calendar.isDateInToday(day) { Text(L("今天", "Today")).font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor) }
+            }
             if !compact { Spacer() }
             HStack(spacing: 12) {
             if let flow, let account = selectedAccount {
-                if flow.outgoing != 0 { Text(L("出 ", "Out ") + display(flow.outgoing, account.currency)) }
-                if flow.incoming != 0 { Text(L("入 ", "In ") + display(flow.incoming, account.currency)) }
+                if flow.outgoing != 0 { Text(L("流出 ", "Out ") + display(flow.outgoing, account.currency)) }
+                if flow.incoming != 0 { Text(L("流入 ", "In ") + display(flow.incoming, account.currency)) }
             } else {
-                if spent.total != 0 || spent.missing > 0 { Text((spent.missing > 0 && spent.convertedCount > 0 ? L("支出小计 ", "Out subtotal ") : L("支 ", "Out ")) + totalDisplay(spent)) }
-                if earned.total != 0 || earned.missing > 0 { Text((earned.missing > 0 && earned.convertedCount > 0 ? L("收入小计 ", "In subtotal ") : L("收 ", "In ")) + totalDisplay(earned)) }
+                if spent.total != 0 || spent.missing > 0 { Text((spent.missing > 0 && spent.convertedCount > 0 ? L("支出小计 ", "Out subtotal ") : L("支出 ", "Out ")) + totalDisplay(spent)) }
+                if earned.total != 0 || earned.missing > 0 { Text((earned.missing > 0 && earned.convertedCount > 0 ? L("收入小计 ", "In subtotal ") : L("收入 ", "In ")) + totalDisplay(earned)) }
             }
-            }
+            }.font(.caption).foregroundStyle(.secondary)
         }
-        .font(.caption.weight(.medium)).foregroundStyle(.secondary).monospacedDigit()
-        .padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 5)
+        .monospacedDigit()
+        .padding(.horizontal, Self.pageInset(compact) + 6).padding(.top, 18).padding(.bottom, 6)
         .frame(maxWidth: .infinity)
         .background(Color.appBackground)
     }
@@ -191,7 +202,7 @@ extension FinanceHome {
             }.font(.caption).foregroundStyle(.secondary)
             Text(L("全部账本 · 流入含转入、退款，流出含转出、手续费，余额调整按增减计入。", "All books · Includes transfers, refunds, fees and balance adjustments."))
                 .font(.caption).foregroundStyle(.secondary)
-        }.monospacedDigit().padding(18).background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.045)))
+        }.monospacedDigit().padding(compact ? Design.Spacing.l : 20).cardSurface()
     }
     func overview(_ entries: [MoneyEntry]) -> some View {
         let spent = entryTotals(entries, income: false)
@@ -215,34 +226,79 @@ extension FinanceHome {
                     .font(.caption).foregroundStyle(.secondary)
                 Divider().padding(.vertical, 4)
             }
-            (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16)) : AnyLayout(HStackLayout(spacing: 32))) {
-                metric(totalLabel(L("支出", "Spending"), spent), totalDisplay(spent), size: compact ? 24 : 30)
+            // One number leads; income and net sit beside it. Explanations live behind the info button.
+            (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .top, spacing: 24))) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(totalLabel(L("支出", "Spending"), spent)).font(.caption).foregroundStyle(.secondary)
+                        summaryInfo(budgetNote: budget != nil && bookFilterID == nil)
+                    }
+                    Text(totalDisplay(spent)).font(.heroAmount).lineLimit(1).minimumScaleFactor(0.5)
+                        .accessibilityLabel(totalLabel(L("支出", "Spending"), spent)).accessibilityValue(totalDisplay(spent))
+                }
                 if !compact { Spacer(minLength: 0) }
-                metricPair((totalLabel(L("收入", "Income"), earned), totalDisplay(earned)),
-                           (L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: entriesCurrency)))
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { summaryFigures(spent: spent, earned: earned) }
+                    VStack(alignment: .leading, spacing: 8) { summaryFigures(spent: spent, earned: earned) }
+                }
             }
-            Text(L("本期结余为所选范围的收入减支出，不含账户初始余额。", "Period net is income minus spending in this view; it excludes opening balances."))
-                .font(.caption).foregroundStyle(.secondary)
             if let budget {
                 budgetBar(spent: data.budgetSpending(entries, for: bookFilterID), budget: budget,
                           books: data.budgetBooks(for: bookFilterID, in: entries), entries: entries)
+                    .padding(.top, 12).overlay(alignment: .top) { Divider() }
             }
-            VStack(alignment: .leading, spacing: 6) {
-                (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 8))) {
-                    Text(L("合计币种 · ", "Totals currency · ") + entriesCurrency)
-                    if !entriesCurrencyRaw.isEmpty {
-                        Button(L("恢复自动币种", "Use automatic currency")) { entriesCurrencyRaw = "" }
-                            .buttonStyle(.borderless).frame(minHeight: compact ? 44 : nil)
-                    }
-                }.foregroundStyle(.secondary)
-            }.font(.caption)
+            if !entriesCurrencyRaw.isEmpty {
+                // A chosen totals currency stays visible with its way back; the automatic one is in the info popover.
+                HStack(spacing: 8) {
+                    Text(L("合计币种 · ", "Totals currency · ") + entriesCurrency).foregroundStyle(.secondary)
+                    Button(L("恢复自动币种", "Use automatic currency")) { entriesCurrencyRaw = "" }
+                        .buttonStyle(.borderless).frame(minHeight: compact ? 44 : nil)
+                }.font(.caption)
+            }
             if !balance.estimateDates.isEmpty {
                 Text(L("部分换算使用缓存参考汇率：", "Some conversions use cached reference rates: ") + balance.estimateDates.sorted().joined(separator: ", "))
                     .font(.caption).foregroundStyle(.orange)
             }
             missingAmounts(balance.missing)
         }
-        .padding(18).background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.045)))
+        .padding(compact ? Design.Spacing.l : 20).cardSurface()
+    }
+    /// Income and period net beside the spending total, each in its own small block.
+    @ViewBuilder private func summaryFigures(spent: MoneyStatisticsTotal, earned: MoneyStatisticsTotal) -> some View {
+        summaryFigure(totalLabel(L("收入", "Income"), earned), totalDisplay(earned), tint: earned.total > 0 && !hidden ? .green : .primary)
+        summaryFigure(L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: entriesCurrency), tint: .primary)
+    }
+    private func summaryFigure(_ label: String, _ value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.figure).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.6)
+        }
+        .padding(.horizontal, Design.Spacing.m).padding(.vertical, Design.Spacing.s)
+        .frame(minWidth: compact ? nil : 120, alignment: .leading)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Design.Radius.medium, style: .continuous))
+        .accessibilityElement(children: .ignore).accessibilityLabel(label).accessibilityValue(value)
+    }
+    /// What the totals mean, without spending a line of the card on it.
+    private func summaryInfo(budgetNote: Bool) -> some View {
+        Button { showSummaryInfo = true } label: {
+            Image(systemName: "info.circle").font(.caption).foregroundStyle(.secondary)
+                .frame(minWidth: compact ? 44 : 18, minHeight: compact ? 44 : 18).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(L("合计说明", "About these totals"))
+        .help(L("合计说明", "About these totals"))
+        .popover(isPresented: $showSummaryInfo, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L("本期结余为所选范围的收入减支出，不含账户初始余额。", "Period net is income minus spending in this view; it excludes opening balances."))
+                Text(L("合计币种 · ", "Totals currency · ") + entriesCurrency + (entriesCurrencyRaw.isEmpty ? L("（自动）", " (automatic)") : ""))
+                if budgetNote {
+                    Text(L("预算仅包含所列账本；上方收支包含全部账本。", "The budget covers the listed books; totals include all books."))
+                }
+            }
+            .font(.callout).fixedSize(horizontal: false, vertical: true)
+            .padding(Design.Spacing.l).frame(width: 300, alignment: .leading)
+            .presentationCompactAdaptation(.popover)
+        }
     }
     private func bookAccountBalance(_ account: MoneyAccount) -> some View {
         let label = accountFilter == nil ? L("默认账户余额", "Default account balance") : L("账户余额", "Account balance")
@@ -310,41 +366,46 @@ extension FinanceHome {
     private func budgetBar(spent: MoneyStatisticsTotal, budget: Decimal, books: [MoneyBook], entries: [MoneyEntry]) -> some View {
         let ratio = budget > 0 ? min(1, max(0, double(spent.total / budget))) : 0
         let over = spent.total > budget
-        return VStack(alignment: .leading, spacing: 7) {
-            Button {
-                if books.count == 1 { entity = EntityRequest(kind: .book, existingID: books[0].id) }
-                else { selection = "manage" }
-            } label: {
-                Label(L("月预算 · ", "Monthly budget · ") + books.map(\.name).joined(separator: "、"), systemImage: "pencil")
-                    .font(.caption.weight(.medium)).multilineTextAlignment(.leading)
-                    .frame(minHeight: compact ? 44 : nil, alignment: .leading)
-            }.buttonStyle(.borderless).help(L("修改这些账本的预算", "Edit these books’ budgets"))
-            if spent.complete { MoneyBar(value: ratio, tint: over ? .red : ratio > 0.8 ? .orange : .accentColor) }
+        let title = Button {
+            if books.count == 1 { entity = EntityRequest(kind: .book, existingID: books[0].id) }
+            else { selection = "manage" }
+        } label: {
+            Label(L("月预算 · ", "Monthly budget · ") + books.map(\.name).joined(separator: "、"), systemImage: "pencil")
+                .font(.caption.weight(.medium)).multilineTextAlignment(.leading)
+                .frame(minHeight: compact ? 44 : nil, alignment: .leading)
+        }.buttonStyle(.borderless).help(L("修改这些账本的预算", "Edit these books’ budgets"))
+        let amount = Text(display(budget) + " · " + data.baseCurrency).font(.caption.weight(.semibold)).monospacedDigit()
+        return VStack(alignment: .leading, spacing: 6) {
             ViewThatFits(in: .horizontal) {
-                HStack {
-                    Text(L("预算 ", "Budget ") + display(budget) + " · " + data.baseCurrency).fixedSize()
+                HStack(spacing: 8) {
+                    title.fixedSize(); amount.fixedSize()
                     Spacer(minLength: 12)
-                    budgetRemaining(spent, budget: budget).fixedSize()
+                    budgetRemaining(spent, budget: budget).font(.caption).monospacedDigit().fixedSize()
                 }
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(L("预算 ", "Budget ") + display(budget) + " · " + data.baseCurrency)
-                    budgetRemaining(spent, budget: budget)
+                VStack(alignment: .leading, spacing: 4) {
+                    title; amount
+                    budgetRemaining(spent, budget: budget).font(.caption).monospacedDigit()
                 }
-            }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            if spent.missing > 0 {
-                Text(L("预算范围内 \(spent.missing) 笔金额待折算，补全后显示进度和剩余额度。", "\(spent.missing) amounts in these books need conversion before budget progress and remaining amounts are shown."))
-                    .font(.caption).foregroundStyle(.orange)
-                Button(L("补全预算折算…", "Complete budget conversions…")) {
-                    let ids = Set(books.map(\.id))
-                    prepareConversion(entries.filter { $0.deletedAt == nil && $0.bookID.map(ids.contains) == true
-                        && $0.originalStatistics(income: false, feeCurrency: nil) != nil })
-                }.buttonStyle(.borderless).font(.callout).frame(minHeight: compact ? 44 : nil)
             }
-            if bookFilterID == nil {
-                Text(L("预算仅包含以上账本；上方收支包含全部账本。", "The budget covers the books above; totals include all books."))
-                    .font(.caption).foregroundStyle(.secondary)
+            if spent.complete { MoneyBar(value: ratio, tint: over ? .red : ratio > 0.8 ? .orange : .accentColor) }
+            if spent.missing > 0 {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) { budgetConversionNote(spent.missing); budgetConversionButton(books: books, entries: entries) }
+                    VStack(alignment: .leading, spacing: 4) { budgetConversionNote(spent.missing); budgetConversionButton(books: books, entries: entries) }
+                }
             }
         }
+    }
+    private func budgetConversionNote(_ count: Int) -> some View {
+        Label(L("\(count) 笔金额待折算，补全后显示进度", "\(count) amounts need conversion before progress is shown"), systemImage: "exclamationmark.triangle")
+            .font(.caption).foregroundStyle(.orange)
+    }
+    private func budgetConversionButton(books: [MoneyBook], entries: [MoneyEntry]) -> some View {
+        Button(L("补全折算…", "Complete conversions…")) {
+            let ids = Set(books.map(\.id))
+            prepareConversion(entries.filter { $0.deletedAt == nil && $0.bookID.map(ids.contains) == true
+                && $0.originalStatistics(income: false, feeCurrency: nil) != nil })
+        }.buttonStyle(.borderless).font(.caption.weight(.semibold)).frame(minHeight: compact ? 44 : nil)
     }
     private func budgetRemaining(_ spent: MoneyStatisticsTotal, budget: Decimal) -> some View {
         Text(!spent.complete ? L("剩余额度待折算", "Remaining amount pending conversion") : spent.total > budget

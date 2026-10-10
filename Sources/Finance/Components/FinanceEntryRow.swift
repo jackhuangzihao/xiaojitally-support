@@ -56,16 +56,17 @@ struct FinanceEntryRow<Actions: View>: View {
         return HStack(spacing: 12) {
             MoneyIcon(symbol: icon.symbol, emoji: icon.emoji, tint: icon.tint, size: 34)
             VStack(alignment: .leading, spacing: 3) {
-                Text(entry.title).lineLimit(1)
+                Text(entry.title).font(.body.weight(.medium)).lineLimit(1)
                 HStack(spacing: 6) {
-                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    // The note joins the details, fainter, so a row stays two lines.
+                    (Text(detail) + Text(note.map { " · " + $0 } ?? "").foregroundStyle(.tertiary))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     taskChip
                 }
-                if let note { Text(note).font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
             }
             Spacer(minLength: 12)
             VStack(alignment: .trailing, spacing: 3) {
-                Text(amount).font(.body.weight(.medium)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8).foregroundStyle((accountID.map { entry.accountChange(for: $0) > 0 } ?? (entry.kind == .income || entry.kind == .refund)) ? Color.green : .primary)
+                Text(amount).font(.rowAmount).lineLimit(1).minimumScaleFactor(0.8).foregroundStyle((accountID.map { entry.accountChange(for: $0) > 0 } ?? (entry.kind == .income || entry.kind == .refund)) ? Color.green : .primary)
                 if let secondary { Text(secondary).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
                 if let balanceAfter, let account = data.account(accountID) {
                     Text(L("余额 ", "Balance ") + (hidden ? "••••" : Money.format(balanceAfter, account.currency)))
@@ -82,19 +83,13 @@ struct FinanceEntryRow<Actions: View>: View {
     @ViewBuilder private var taskChip: some View {
         if let task {
             let label = Label(task.title + (task.deleted ? L("（已删除）", " (deleted)") : ""), systemImage: task.deleted ? "trash" : "checklist")
-                .font(.caption).lineLimit(1)
-                .padding(.horizontal, 6).padding(.vertical, 1)
             if let openTask, !task.deleted {
-                Button(action: openTask) {
-                    label.foregroundStyle(Color.accentColor)
-                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
-                }
+                Button(action: openTask) { label.tagStyle(.accentColor, weight: .medium) }
                 .buttonStyle(.borderless).layoutPriority(1)
                 .help(L("打开任务", "Open task"))
                 .accessibilityLabel(L("关联任务：", "Linked task: ") + task.title)
             } else {
-                label.foregroundStyle(.secondary)
-                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+                label.tagStyle(.secondary, weight: .medium)
                     .layoutPriority(1)
                     .help(L("任务在最近删除中", "The task is in Recently deleted"))
             }
