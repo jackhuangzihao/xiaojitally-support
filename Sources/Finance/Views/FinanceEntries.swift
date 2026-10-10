@@ -268,7 +268,7 @@ extension FinanceHome {
         summaryFigure(totalLabel(L("收入", "Income"), earned), totalDisplay(earned), tint: earned.total > 0 && !hidden ? .green : .primary)
         summaryFigure(L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: entriesCurrency), tint: .primary)
     }
-    private func summaryFigure(_ label: String, _ value: String, tint: Color) -> some View {
+    func summaryFigure(_ label: String, _ value: String, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.figure).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.6)

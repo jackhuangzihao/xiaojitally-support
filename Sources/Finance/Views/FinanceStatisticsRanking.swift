@@ -10,9 +10,11 @@ private struct MoneyRanking<Row: View, Detail: View>: View {
     @ViewBuilder var detail: (MoneyCategoryTotal) -> Detail
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(rows) { item in
+        // One card for the whole ranking, rows separated by hairlines.
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
                 let open = expansion.key == item.id
+                if index > 0 { Divider().padding(.leading, 54) }
                 MoneyHover { hovering in
                     Button {
                         withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { expansion.key = open ? nil : item.id }
@@ -20,13 +22,13 @@ private struct MoneyRanking<Row: View, Detail: View>: View {
                         HStack(spacing: 12) {
                             row(item)
                             Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                        }.padding(.vertical, 8).padding(.horizontal, 10).contentShape(Rectangle())
-                            .background(RoundedRectangle(cornerRadius: 10).fill(hovering || open ? Color.primary.opacity(0.05) : .clear))
+                        }.padding(.vertical, 10).padding(.horizontal, 12).contentShape(Rectangle())
+                            .background(RoundedRectangle(cornerRadius: Design.Radius.medium, style: .continuous).fill(hovering || open ? Color.primary.opacity(0.05) : .clear))
                     }.buttonStyle(.plain)
                 }
                 if open { detail(item) }
             }
-        }.background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.035)))
+        }.padding(4).cardSurface()
     }
 }
 
@@ -61,7 +63,7 @@ struct FinanceCategoryRanking<Detail: View>: View {
                         Text(totalDisplay(row.summary)).monospacedDigit().foregroundStyle(row.missing > 0 ? Color.orange : row.total < 0 ? .green : .primary)
                     }
                     if row.missing > 0 {
-                        Text(L("\(row.missing) 笔待折算", "\(row.missing) unconverted")).font(.caption).foregroundStyle(.orange)
+                        Text(L("\(row.missing) 笔待折算", "\(row.missing) unconverted")).tagStyle(.orange)
                     } else {
                         MoneyBar(value: top > 0 ? double(abs(row.total) / top) : 0, tint: row.total < 0 ? .green : tint)
                     }

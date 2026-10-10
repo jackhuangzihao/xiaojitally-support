@@ -57,17 +57,23 @@ extension FinanceHome {
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 periodHeader
+                // Same summary card as the bills page: spending leads, income and net beside it.
                 VStack(alignment: .leading, spacing: 12) {
-                    (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16)) : AnyLayout(HStackLayout(spacing: 32))) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            metric(totalLabel(L("支出", "Spending"), spent), totalDisplay(spent, currency: statsCurrency), size: compact ? 24 : 30)
+                    (compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .top, spacing: 24))) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(totalLabel(L("支出", "Spending"), spent)).font(.caption).foregroundStyle(.secondary)
+                            Text(totalDisplay(spent, currency: statsCurrency)).font(.heroAmount).lineLimit(1).minimumScaleFactor(0.5)
+                                .accessibilityLabel(totalLabel(L("支出", "Spending"), spent)).accessibilityValue(totalDisplay(spent, currency: statsCurrency))
                             change(now: spent, before: before)
                         }
                         if !compact { Spacer(minLength: 0) }
-                        metricPair((totalLabel(L("收入", "Income"), earned), totalDisplay(earned, currency: statsCurrency)),
-                                   (L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: statsCurrency)))
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) { statsFigures(spent: spent, earned: earned) }
+                            VStack(alignment: .leading, spacing: 8) { statsFigures(spent: spent, earned: earned) }
+                        }
                     }
                     rateNote(entries, estimates: spent.estimateDates.union(earned.estimateDates))
+                    if spent.missing + earned.missing > 0 { Divider(); missingAmounts(spent.missing + earned.missing) }
                     DisclosureGroup(L("明细与计算说明", "Breakdown and calculation")) {
                         VStack(alignment: .leading, spacing: 8) {
                             originalSplit(entries)
@@ -75,32 +81,36 @@ extension FinanceHome {
                                 .font(.caption).foregroundStyle(.secondary)
                         }.padding(.top, 8)
                     }.font(.callout)
-                }.padding(18).background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.045)))
-                missingAmounts(spent.missing + earned.missing)
-                (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
-                    Picker(L("方向", "Direction"), selection: $statsIncome) {
-                        Text(L("支出", "Spending")).tag(false)
-                        Text(L("收入", "Income")).tag(true)
-                    }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 150)
-                    Picker(L("视图", "View"), selection: $statsCalendar) {
-                        Text(L("趋势", "Trend")).tag(false)
-                        Text(L("日历", "Calendar")).tag(true)
-                    }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 130)
-                    if !compact { Spacer() }
-                }
+                }.padding(compact ? Design.Spacing.l : 20).cardSurface()
                 let selectedTotal = statsIncome ? earned : spent
-                if selectedTotal.missing > 0 {
-                    Text(L("图表和分类仅显示已折算部分，空白不代表零收支。", "Charts and categories show converted amounts only; gaps do not mean zero activity."))
-                        .font(.caption).foregroundStyle(.orange)
-                }
-                if !statsCalendar && rows.isEmpty {
-                    Text(selectedTotal.missing > 0 ? L("本期账单尚待折算，补全后显示图表。", "Complete the pending conversions to see this period’s charts.") : statsIncome ? L("这段时间没有可统计的收入。", "No income in this period.") : L("这段时间没有可统计的支出或退款。", "No spending or refunds in this period."))
-                        .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 120)
-                } else {
-                    let points = buckets(entries, span: span, value: value)
-                    MoneyChartHover { hovered in
-                        if statsCalendar { calendarGrid(points, hovered: hovered) } else { trend(points, hovered: hovered) }
-                    }.id(span.start)
+                // The chart and its two switches share one card.
+                VStack(alignment: .leading, spacing: 10) {
+                    (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
+                        Picker(L("方向", "Direction"), selection: $statsIncome) {
+                            Text(L("支出", "Spending")).tag(false)
+                            Text(L("收入", "Income")).tag(true)
+                        }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 150)
+                        if !compact { Spacer() }
+                        Picker(L("视图", "View"), selection: $statsCalendar) {
+                            Text(L("趋势", "Trend")).tag(false)
+                            Text(L("日历", "Calendar")).tag(true)
+                        }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 130)
+                    }
+                    if selectedTotal.missing > 0 {
+                        Text(L("图表和分类仅显示已折算部分，空白不代表零收支。", "Charts and categories show converted amounts only; gaps do not mean zero activity."))
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    if !statsCalendar && rows.isEmpty {
+                        Text(selectedTotal.missing > 0 ? L("本期账单尚待折算，补全后显示图表。", "Complete the pending conversions to see this period’s charts.") : statsIncome ? L("这段时间没有可统计的收入。", "No income in this period.") : L("这段时间没有可统计的支出或退款。", "No spending or refunds in this period."))
+                            .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 120)
+                    } else {
+                        let points = buckets(entries, span: span, value: value)
+                        MoneyChartHover { hovered in
+                            if statsCalendar { calendarGrid(points, hovered: hovered) } else { trend(points, hovered: hovered) }
+                        }.id(span.start)
+                    }
+                }.padding(compact ? Design.Spacing.m : Design.Spacing.l).cardSurface()
+                if statsCalendar || !rows.isEmpty {
                     categorySummaryHeader
                     if rows.isEmpty {
                         Text(statsIncome ? L("所选日期没有收入。", "No income for the selected date.") : L("所选日期没有支出或退款。", "No spending or refunds for the selected date."))
@@ -112,6 +122,13 @@ extension FinanceHome {
         .onChange(of: span.start) { _, _ in statsSelectedDate = nil; rankingExpansion.key = nil }
         .onChange(of: period) { _, _ in statsSelectedDate = nil; rankingExpansion.key = nil }
         .task(id: "\(statsCurrency)-\(data.baseCurrency)-\(Int(earliest.timeIntervalSince1970 / 86400))") { await loadRates(since: earliest) }
+    }
+    /// Income and period net beside the spending total; an unconverted value shows in orange.
+    @ViewBuilder private func statsFigures(spent: MoneyStatisticsTotal, earned: MoneyStatisticsTotal) -> some View {
+        summaryFigure(totalLabel(L("收入", "Income"), earned), totalDisplay(earned, currency: statsCurrency),
+                      tint: earned.missing > 0 && earned.convertedCount == 0 ? .orange : earned.total > 0 && !hidden ? .green : .primary)
+        summaryFigure(L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: statsCurrency),
+                      tint: spent.missing + earned.missing > 0 ? .orange : .primary)
     }
     func loadRates(since: Date, currency: String? = nil) async {
         guard (currency ?? statsCurrency) != data.baseCurrency else { return }

@@ -6,6 +6,14 @@ import Charts
 import UIKit
 #endif
 
+/// A currency's balance inside the net-worth card, as a small block like the summary figures elsewhere.
+private struct AssetFigureBlock: ViewModifier {
+    func body(content: Content) -> some View {
+        content.padding(.horizontal, Design.Spacing.m).padding(.vertical, Design.Spacing.s + 2)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Design.Radius.medium, style: .continuous))
+    }
+}
+
 extension FinanceHome {
     private struct AccountGroup: Identifiable { var type: MoneyAccountType; var accounts: [MoneyAccount]; var id: String { type.rawValue } }
 }
@@ -57,13 +65,22 @@ extension FinanceHome {
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             ForEach(groups) { group in
                 Section {
+                    #if os(macOS)
+                    // On the Mac each group reads as one card; the phone's grouped list already does this.
+                    VStack(spacing: 0) {
+                        ForEach(Array(group.accounts.enumerated()), id: \.element.id) { index, account in
+                            if index > 0 { Divider().padding(.leading, 58) }
+                            accountRow(account, balance: balances[account.id, default: 0])
+                        }
+                    }.padding(.trailing, Design.Spacing.xs).cardSurface()
+                    #else
                     ForEach(group.accounts) { account in
                         accountRow(account, balance: balances[account.id, default: 0])
                     }
+                    #endif
                 } header: {
                     HStack {
-                        Text(group.type.label).font(.subheadline.weight(.semibold))
-                        Text("\(group.accounts.count)").font(.caption).foregroundStyle(.secondary)
+                        SectionCountHeader(title: group.type.label, count: group.accounts.count)
                         Spacer()
                         if let subtotal = data.assetSummary(in: reportingCurrency, accountBalances: balances, accounts: group.accounts).total {
                             Text(display(subtotal, reportingCurrency)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
@@ -116,7 +133,7 @@ extension FinanceHome {
                 Text(L("账户总览", "Accounts overview")).font(.headline)
                 Spacer()
                 Button { entity = EntityRequest(kind: .account) } label: { Label(L("新增账户", "New account"), systemImage: "plus") }
-                    .frame(minHeight: compact ? 44 : 24)
+                    .buttonStyle(CardButtonStyle(prominent: true, minHeight: compact ? 44 : 0))
             }
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
@@ -125,7 +142,7 @@ extension FinanceHome {
                     statsCurrencyMenu.labelStyle(.titleAndIcon).frame(minHeight: compact ? 44 : 24)
                 }.font(.subheadline)
                 Text(hidden ? "••••" : summary.total.map { display($0, reportingCurrency) } ?? L("待补充汇率", "Rates needed"))
-                    .font(.system(size: compact ? 30 : 36, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+                    .font(.heroAmount).lineLimit(1).minimumScaleFactor(0.6)
                 if summary.total == nil {
                     Label(L("缺少 \(summary.missingCurrencies.joined(separator: "、")) 汇率，总额尚不完整。", "Missing \(summary.missingCurrencies.joined(separator: ", ")) rates. The total is incomplete."), systemImage: "exclamationmark.circle")
                         .font(.caption).foregroundStyle(.orange)
@@ -137,7 +154,7 @@ extension FinanceHome {
                             .frame(minHeight: compact && assetCurrencies.count > 1 ? 44 : nil, alignment: .leading)
                         Text(display(summary.balances[reportingCurrency, default: 0], reportingCurrency))
                             .font(.system(size: compact ? 19 : 22, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxWidth: .infinity, alignment: .leading).modifier(AssetFigureBlock())
                     VStack(alignment: .leading, spacing: 6) {
                         if let currency = selectedForeignCurrency {
                             if assetCurrencies.count > 1 {
@@ -160,7 +177,7 @@ extension FinanceHome {
                             Text(L("其他币种", "Other currencies")).font(.caption).foregroundStyle(.secondary)
                             Text(L("暂无", "None")).font(.title3.weight(.semibold))
                         }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxWidth: .infinity, alignment: .leading).modifier(AssetFigureBlock())
                 }
                 if let currency = selectedForeignCurrency {
                     HStack(spacing: 8) {
@@ -178,10 +195,10 @@ extension FinanceHome {
                         }
                         Spacer(minLength: 0)
                         Button(L("修改汇率", "Edit rate")) { showAssetRates = true }
-                            .frame(minHeight: compact ? 44 : nil)
+                            .buttonStyle(CardButtonStyle(minHeight: compact ? 44 : 0)).font(.caption)
                     }.font(.caption).foregroundStyle(.secondary)
                 }
-            }.padding(18).background(RoundedRectangle(cornerRadius: 14).fill(Color.accentColor.opacity(0.08)))
+            }.padding(compact ? Design.Spacing.l : 20).cardSurface()
             if data.accounts.isEmpty {
                 ContentUnavailableView {
                     Label(L("添加你的第一个账户", "Add your first account"), systemImage: "wallet.pass")
