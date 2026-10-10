@@ -63,6 +63,8 @@ struct FinanceEntryEditor: View {
     @State private var converted: String
     @State private var convertedFee: String
     @State private var error: String?
+    /// Set once a save has gone through and the sheet is closing; a second click in that moment must not save again.
+    @State private var didSave = false
     @State private var notice: String?
     @State private var rates: [MoneyRate] = []
     @AppStorage("moneyAutoRates") private var automaticRates = true
@@ -821,6 +823,7 @@ struct FinanceEntryEditor: View {
         return e
     }
     private func save(again: Bool = false) {
+        guard !didSave else { return }
         do {
             keepDraft()
             let e = try preparedEntry()
@@ -852,7 +855,7 @@ struct FinanceEntryEditor: View {
             if let id = e.bookID { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyBook") }
             if e.kind == .expense || e.kind == .income { UserDefaults.standard.set(e.accountID?.uuidString ?? "none", forKey: "lastMoneyAccount") }
             if let id = e.categoryID, e.kind == .expense || e.kind == .income { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyCategory." + (e.kind == .income ? "income" : "expense")) }
-            if again { startAnother(after: e) } else { dismiss() }
+            if again { startAnother(after: e) } else { didSave = true; dismiss() }
         } catch {
             Self.postingLog.error("Entry save failed: \(error.localizedDescription, privacy: .private)")
             self.error = error.localizedDescription; notice = nil

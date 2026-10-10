@@ -35,6 +35,8 @@ struct FinanceEntityEditor: View {
     @Environment(EditorDrafts.self) private var drafts
     @State private var generation = Store.recovery.generation
     @State private var ready = false
+    /// Set once a save has gone through and the sheet is closing; a second click in that moment must not save again.
+    @State private var didSave = false
     @FocusState private var textFocused: Bool
     let kind: FinanceEntityKind
     let id: UUID?
@@ -309,6 +311,7 @@ struct FinanceEntityEditor: View {
         } catch { self.error = error.localizedDescription }
     }
     private func save(confirmedOpening: Bool = false) {
+        guard !didSave else { return }
         do {
             keepEntityDraft()
             let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -343,6 +346,7 @@ struct FinanceEntityEditor: View {
                     try data.updateCategory(value, expected: old)
                 }
             }
+            didSave = true
             dismiss()
         } catch { self.error = error.localizedDescription }
     }
