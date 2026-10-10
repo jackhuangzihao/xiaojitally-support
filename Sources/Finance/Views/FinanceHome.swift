@@ -175,9 +175,10 @@ struct FinanceHome: View {
     func totalLabel(_ label: String, _ total: MoneyStatisticsTotal) -> String {
         total.missing > 0 && total.convertedCount > 0 ? label + L(" · 已折算小计", " · converted subtotal") : label
     }
+    /// Like the spending and income totals, the net shows what has been converted; it reads "待折算" only when nothing has.
     func balanceDisplay(spent: MoneyStatisticsTotal, earned: MoneyStatisticsTotal, currency: String) -> String {
         if hidden { return "••••" }
-        guard spent.missing + earned.missing == 0 else { return L("待折算", "Unconverted") }
+        if spent.missing + earned.missing > 0 && spent.convertedCount + earned.convertedCount == 0 { return L("待折算", "Unconverted") }
         return ((!spent.estimateDates.isEmpty || !earned.estimateDates.isEmpty) ? "≈ " : "") + display(earned.total - spent.total, currency)
     }
     var filtered: [MoneyEntry] {

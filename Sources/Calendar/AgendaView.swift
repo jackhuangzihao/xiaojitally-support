@@ -168,9 +168,10 @@ extension ContentView {
                     }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel(L("查看范围", "View range"))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 8) {
                         Text(searchingCalendar ? L("搜索结果", "Search results") : selection == .calendar ? Dates.label(selectedDate, pattern: wholeMonth ? "M月安排" : "M月d日 EEEE") : title)
-                            .font(.title3.weight(.medium))
+                            .font(isPhone ? .title3.weight(.semibold) : .title2.weight(.semibold))
+                        if selection != .calendar { CountCapsule(count: visibleTasks.count) }
                         #if os(macOS)
                         // A visible way to edit the open list; the sidebar's right-click menu is easy to miss.
                         if case .list(let id) = selection, !searchingCalendar, let list = lists.first(where: { $0.id == id }) {
@@ -180,11 +181,20 @@ extension ContentView {
                         #endif
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
-                HStack {
+                HStack(spacing: 10) {
+                    if selection == .calendar {
+                        Text(L("\(visibleTasks.count) 项", "\(visibleTasks.count) \(visibleTasks.count == 1 ? "task" : "tasks")"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if hiddenCompletedCount > 0 {
+                        Text(L("已隐藏 \(hiddenCompletedCount) 项已完成", "\(hiddenCompletedCount) completed hidden"))
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    // Hiding completed tasks sits beside the filter, so a list's controls stay on the title line.
+                    if selection == .all {
+                        Toggle(L("隐藏已完成", "Hide completed"), isOn: $hideCompletedInAll)
+                            .toggleStyle(.switch).controlSize(.small).font(.callout).fixedSize()
+                    }
                     if selection != .calendar { filterMenu }
-                    Text(L("\(visibleTasks.count) 项", "\(visibleTasks.count) \(visibleTasks.count == 1 ? "task" : "tasks")")
-                         + (hiddenCompletedCount > 0 ? L(" · 已隐藏 \(hiddenCompletedCount) 项已完成", " · \(hiddenCompletedCount) completed hidden") : ""))
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             if selection != .calendar && filter.isActive {
@@ -197,17 +207,13 @@ extension ContentView {
                 Label(L("正在搜索全部任务（不含最近删除）", "Searching all tasks (except Recently deleted)"), systemImage: "magnifyingglass")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if selection == .all {
-                Toggle(L("隐藏已完成", "Hide completed"), isOn: $hideCompletedInAll)
-                    .toggleStyle(.switch).controlSize(.small).font(.callout)
-            }
             if selection == .trash {
                 HStack {
                     Text(L("删除的任务会保留在这里，可以恢复或彻底删除。", "Deleted tasks stay here until you restore or permanently delete them.")).font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     if !visibleTasks.isEmpty {
                         Button(L("清空", "Empty"), role: .destructive) { purgeIDs = Set(tasks.filter { $0.deletedAt != nil }.map(\.id)) }
-                            .buttonStyle(.borderless)
+                            .buttonStyle(CardButtonStyle())
                     }
                 }
             }
@@ -269,7 +275,7 @@ extension ContentView {
                     }
                 } header: {
                     if !isPhone || selection != .calendar || wholeMonth || searchingCalendar {
-                        Text(Dates.groupLabel(group.date, today: currentDay))
+                        taskGroupHeader(group)
                     }
                 }
             }
@@ -306,16 +312,22 @@ extension ContentView {
                     Text(search.isEmpty ? L("添加一件想做的事，慢慢完成。", "Add something you want to do. Take it one step at a time.") : L("试试其他关键词或查看范围。", "Try another search or view."))
                 }
             } else {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(groups, id: \.date) { group in
-                        Text(Dates.groupLabel(group.date, today: currentDay))
-                            .font(.caption).foregroundStyle(.secondary).padding(.top, 8)
+                        taskGroupHeader(group).padding(.top, group.date == groups.first?.date ? 0 : 10)
                         ForEach(group.tasks) { task in taskRow(task) }
                     }
                 }
             }
             }
             }
+
+    private func taskGroupHeader(_ group: (date: Date, tasks: [TaskItem])) -> some View {
+        // Completed and deleted tasks can't be late, so only the planning lists mark a past day.
+        let canBeLate = selection != .completed && selection != .trash
+        return TaskGroupHeader(date: group.date, today: currentDay, count: group.tasks.count,
+                               overdue: canBeLate && group.tasks.contains { !$0.isDone && $0.isOverdue(today: currentDay) })
+    }
 
     private func taskRow(_ task: TaskItem) -> some View {
         taskRowBody(task)

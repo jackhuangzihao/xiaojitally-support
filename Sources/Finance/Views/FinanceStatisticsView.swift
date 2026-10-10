@@ -128,7 +128,8 @@ extension FinanceHome {
         summaryFigure(totalLabel(L("收入", "Income"), earned), totalDisplay(earned, currency: statsCurrency),
                       tint: earned.missing > 0 && earned.convertedCount == 0 ? .orange : earned.total > 0 && !hidden ? .green : .primary)
         summaryFigure(L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: statsCurrency),
-                      tint: spent.missing + earned.missing > 0 ? .orange : .primary)
+                      tint: spent.missing + earned.missing > 0 && spent.convertedCount + earned.convertedCount == 0 ? .orange : .primary,
+                      caption: netCaption(spent: spent, earned: earned))
     }
     func loadRates(since: Date, currency: String? = nil) async {
         guard (currency ?? statsCurrency) != data.baseCurrency else { return }

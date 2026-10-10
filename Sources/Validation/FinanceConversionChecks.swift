@@ -7,6 +7,15 @@ import SwiftData
         let reference = try ExchangeRates.parse(xml, base: "AUD", quotes: ["CNY", "EUR"], onOrBefore: "2026-09-27")
         try require(reference.first { $0.quote == "CNY" }?.rate == 5 && reference.first?.date == "2026-09-25", "weekend rates use most recent published day, cross rates exact")
         try require(try ExchangeRates.parse(xml, base: "AUD", quotes: ["CNY"], onOrBefore: "2026-09-24").first?.rate == 4, "historical conversion never uses a later rate")
+        let today = Dates.calendar.date(from: DateComponents(year: 2026, month: 10, day: 10, hour: 15))!
+        func unconverted(_ days: Int) -> MoneyEntry { var entry = MoneyEntry(); entry.date = Dates.calendar.date(byAdding: .day, value: days, to: today)!; return entry }
+        let mixed = UnconvertedBreakdown(missing: 3, unconverted: [unconverted(-2), unconverted(0), unconverted(50), unconverted(20)], today: today)
+        try require(mixed.future == 2 && mixed.actionable == 1 && mixed.firstFutureDate == unconverted(20).date,
+                    "a subtotal note separates future-dated amounts from ones that can be converted now")
+        try require(UnconvertedBreakdown(missing: 1, unconverted: [unconverted(0)], today: today) == UnconvertedBreakdown(missing: 1, unconverted: [], today: today)
+                    && UnconvertedBreakdown(missing: 1, unconverted: [], today: today).actionable == 1
+                    && UnconvertedBreakdown(missing: 0, unconverted: [unconverted(5)], today: today).future == 0,
+                    "today's amounts can be converted now, and a complete total has no note")
         try rejects("missing historical rates are not fabricated") { _ = try ExchangeRates.parse(xml, base: "AUD", quotes: ["CNY"], onOrBefore: "2026-01-01") }
         try rejects("unsupported rate is not 1 to 1") { _ = try ExchangeRates.parse(xml, base: "AUD", quotes: ["USD"], onOrBefore: "2026-09-25") }
         do {

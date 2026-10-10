@@ -14,7 +14,7 @@ extension FinanceHome {
                     .font(.callout).foregroundStyle(.secondary)
             }
             ForEach(bills) { bill in recurringRow(bill) }
-        } header: { Text(L("周期账单", "Recurring bills")) } footer: {
+        } header: { SectionCountHeader(title: L("周期账单", "Recurring bills"), count: data.recurringBills.count).textCase(nil) } footer: {
             Text(L("到日期自动生成待入账，确认后才计入余额和统计。停止重复后不再生成新的账单，已到期和已入账的保留；想恢复可在它的账单上选“设为周期账单…”。", "Each due date adds a pending entry that counts after you confirm it. Stopping ends new entries and keeps due and posted ones; to restart, choose “Make recurring…” on one of its entries."))
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -22,17 +22,19 @@ extension FinanceHome {
 
     private func recurringRow(_ bill: MoneyRecurring) -> some View {
         let category = data.category(bill.categoryID)
-        let missed = Dates.calendar.startOfDay(for: bill.nextDate) < Dates.calendar.startOfDay(for: Date())
-        let detail = [bill.scheduleLabel, data.accounts.first { $0.id == bill.accountID }?.name,
-                      (missed ? L("已错过 ", "Missed ") : L("下次 ", "Next ")) + Dates.label(bill.nextDate, pattern: "M月d日")]
+        let detail = [bill.scheduleLabel, data.accounts.first { $0.id == bill.accountID }?.name]
             .compactMap { $0 }.joined(separator: " · ")
+        let status = RecurringStatus(next: bill.nextDate, today: Date())
         return HStack(spacing: 10) {
             Button { editingRecurring = RecurringEditRequest(bill: bill) } label: {
                 HStack(spacing: 10) {
                     MoneyIcon(symbol: category?.symbol ?? "repeat", emoji: category?.emoji,
                               tint: MoneyColor.color(category?.resolvedColor ?? "blue"), size: 32)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(bill.title).lineLimit(1)
+                        HStack(spacing: 6) {
+                            Text(bill.title).lineLimit(1)
+                            Text(status.label).tagStyle(status.tint, weight: status.needsAttention ? .semibold : .medium)
+                        }
                         Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         if let note = MoneyNote.firstLine(bill.notes) { Text(note).font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
                         if let issue = data.recurringIssue(bill) {
@@ -40,7 +42,7 @@ extension FinanceHome {
                         }
                     }
                     Spacer(minLength: 8)
-                    Text((bill.kind == .income ? "+" : "") + display(bill.amount, bill.currency)).monospacedDigit()
+                    Text((bill.kind == .income ? "+" : "") + display(bill.amount, bill.currency)).font(.rowAmount)
                 }.frame(minHeight: 44).contentShape(Rectangle())
             }.buttonStyle(.plain)
             Menu {
@@ -228,6 +230,36 @@ struct FinanceRecurringEditor: View {
             dismiss()
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+}
+
+/// Where a recurring bill stands today, shown as a tag beside its name: missed, due today, or the next date.
+enum RecurringStatus: Equatable {
+    case missed(Date)
+    case dueToday
+    case upcoming(Date)
+
+    init(next: Date, today: Date, calendar: Calendar = Dates.calendar) {
+        let day = calendar.startOfDay(for: next), now = calendar.startOfDay(for: today)
+        self = day < now ? .missed(next) : day == now ? .dueToday : .upcoming(next)
+    }
+
+    var label: String {
+        switch self {
+        case .missed(let date): L("已错过 ", "Missed ") + Dates.label(date, pattern: "M月d日")
+        case .dueToday: L("今天到期", "Due today")
+        case .upcoming(let date): L("下次 ", "Next ") + Dates.label(date, pattern: "M月d日")
+        }
+    }
+
+    var needsAttention: Bool { if case .upcoming = self { false } else { true } }
+
+    var tint: Color {
+        switch self {
+        case .missed: .red
+        case .dueToday: .orange
+        case .upcoming: .secondary
         }
     }
 }

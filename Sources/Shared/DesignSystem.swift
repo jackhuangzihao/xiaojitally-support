@@ -141,10 +141,20 @@ struct SectionCountHeader: View {
     var body: some View {
         HStack(spacing: 6) {
             Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(muted ? Color.secondary : .primary)
-            Text("\(count)").font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
-                .padding(.horizontal, 7).padding(.vertical, 1)
-                .background(Color.primary.opacity(0.07), in: Capsule())
+            CountCapsule(count: count)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A count in a small grey capsule, beside a page or section title.
+struct CountCapsule: View {
+    let count: Int
+
+    var body: some View {
+        Text("\(count)").font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
+            .padding(.horizontal, 7).padding(.vertical, 1)
+            .background(Color.primary.opacity(0.07), in: Capsule())
+            .accessibilityLabel(L("\(count) 项", "\(count) items"))
     }
 }

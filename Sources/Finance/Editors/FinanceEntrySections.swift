@@ -155,6 +155,17 @@ enum TaskLinkOptions {
             .sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
         return (Array(open.prefix(8)).map(option), Array(done.prefix(5)).map(option))
     }
+
+    /// The short list shown before "Show more": the `openLimit` unfinished tasks nearest to today, still in date
+    /// order, and the latest completed ones. `hidden` is how many more the full list has.
+    static func shortList(_ options: (open: [Option], done: [Option]), now: Date = Date(),
+                          openLimit: Int = 3, doneLimit: Int = 1) -> (open: [Option], done: [Option], hidden: Int) {
+        func distance(_ option: Option) -> TimeInterval { option.date.map { abs($0.timeIntervalSince(now)) } ?? .infinity }
+        let nearest = Set(options.open.sorted { distance($0) < distance($1) }.prefix(openLimit).map(\.id))
+        let open = options.open.filter { nearest.contains($0.id) }
+        let done = Array(options.done.prefix(doneLimit))
+        return (open, done, options.open.count + options.done.count - open.count - done.count)
+    }
 }
 
 /// Picks the task an entry belongs to, with search. An existing link to a deleted task stays shown until changed.
@@ -162,6 +173,8 @@ struct TaskLinkPicker: View {
     let tasks: [TaskItem]
     @Binding var taskID: UUID?
     @State private var query = ""
+    /// Shows the whole week rather than the short list; a search always shows every match.
+    @State private var showsAll = false
 
     private var candidates: [TaskLinkOptions.Candidate] {
         tasks.map { .init(id: $0.id, title: $0.title, done: $0.isDone, deleted: $0.deletedAt != nil, date: $0.calendarDate, completedAt: $0.completedAt) }
@@ -174,22 +187,35 @@ struct TaskLinkPicker: View {
 
     var body: some View {
         let options = TaskLinkOptions.make(candidates, query: query)
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let short = TaskLinkOptions.shortList(options)
+        let shown = searching || showsAll ? (open: options.open, done: options.done) : (open: short.open, done: short.done)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Label(selectedTitle, systemImage: taskID == nil ? "circle.dashed" : "checklist")
-                    .font(.callout).lineLimit(1)
+                    .font(.callout.weight(taskID == nil ? .regular : .semibold)).lineLimit(1)
                     .foregroundStyle(taskID == nil ? Color.secondary : .primary)
                 Spacer(minLength: 8)
-                if taskID != nil { Button(L("不关联", "Unlink")) { taskID = nil }.buttonStyle(.borderless).frame(minHeight: 32) }
+                if taskID != nil { Button(L("不关联", "Unlink")) { taskID = nil }.buttonStyle(CardButtonStyle()) }
             }
+            .padding(.horizontal, 8).frame(minHeight: 34)
+            .background(taskID == nil ? Color.clear : Color.accentColor.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: Design.Radius.medium - 2, style: .continuous))
             TextField(L("搜索任务名称", "Search tasks"), text: $query).textFieldStyle(.roundedBorder)
             if options.open.isEmpty && options.done.isEmpty {
                 Text(query.isEmpty ? L("近一周没有任务，输入名称搜索全部任务。", "No tasks this week. Type a name to search all tasks.")
                      : L("没有找到“\(query)”", "No task matches “\(query)”"))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            group(query.isEmpty ? L("未完成 · 近期", "Unfinished · this week") : L("未完成", "Unfinished"), options.open)
-            group(query.isEmpty ? L("最近完成", "Recently completed") : L("已完成", "Completed"), options.done)
+            group(searching ? L("未完成", "Unfinished") : L("近期未完成", "Unfinished · this week"), shown.open)
+            group(searching ? L("已完成", "Completed") : L("最近完成", "Recently completed"), shown.done)
+            if !searching && short.hidden > 0 {
+                Button { showsAll.toggle() } label: {
+                    Label(showsAll ? L("收起", "Show less") : L("显示更多（另 \(short.hidden) 个）", "Show \(short.hidden) more"),
+                          systemImage: showsAll ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold)).frame(minHeight: 28)
+                }.buttonStyle(.borderless).foregroundStyle(Color.accentColor)
+            }
         }
     }
 

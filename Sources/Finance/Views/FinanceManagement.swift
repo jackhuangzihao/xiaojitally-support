@@ -16,13 +16,19 @@ extension FinanceHome {
                         ForEach(data.books.filter(\.archived)) { book in managedBookRow(book) }
                     }
                 }
-                Button(L("新增账本", "New book")) { entity = EntityRequest(kind: .book) }
-            } header: { Text(L("账本与预算", "Books & budgets")) } footer: {
+            } header: {
+                HStack {
+                    SectionCountHeader(title: L("账本与预算", "Books & budgets"), count: data.books.filter { !$0.archived }.count)
+                    Spacer()
+                    Button { entity = EntityRequest(kind: .book) } label: { Label(L("新增账本", "New book"), systemImage: "plus") }
+                        .buttonStyle(CardButtonStyle(prominent: true))
+                }.textCase(nil)
+            } footer: {
                 Text(L("账本用来分开日常、旅行等开支；账户由所有账本共用，任何账本里的消费都会从同一个账户余额扣除。", "Books separate daily and travel spending; accounts are shared, so any book's spending comes out of the same balance.")).font(.caption).foregroundStyle(.secondary)
             }
             recurringSection
-            Section { categoryGrid(income: false) } header: { Text(L("支出分类", "Spending categories")) }
-            Section { categoryGrid(income: true) } header: { Text(L("收入分类", "Income categories")) }
+            Section { categoryGrid(income: false) } header: { categoryHeader(income: false) }
+            Section { categoryGrid(income: true) } header: { categoryHeader(income: true) }
             Section {
                 Picker(L("显示币种", "Display currency"), selection: $statsCurrencyRaw) {
                     Text(L("跟随记账本位币 · ", "Use recorded currency · ") + data.baseCurrency).tag("")
@@ -72,9 +78,16 @@ extension FinanceHome {
         HStack {
             Label { Text(book.name) } icon: { MoneyGlyph(symbol: book.iconSymbol, emoji: book.emoji) }
             Spacer()
-            Text(book.budget.map { L("预算 ", "Budget ") + display($0) + L(" / 月", " / month") } ?? L("未设预算", "No budget")).foregroundStyle(.secondary).monospacedDigit()
+            Text(book.budget.map { L("预算 ", "Budget ") + display($0) + L(" / 月", " / month") } ?? L("未设预算", "No budget"))
+                .monospacedDigit().tagStyle(book.budget == nil ? .secondary : .accentColor, weight: book.budget == nil ? .medium : .semibold)
             Button(L("编辑", "Edit")) { entity = EntityRequest(kind: .book, existingID: book.id) }
+                .buttonStyle(CardButtonStyle())
         }
+    }
+    private func categoryHeader(income: Bool) -> some View {
+        SectionCountHeader(title: income ? L("收入分类", "Income categories") : L("支出分类", "Spending categories"),
+                           count: data.categories.filter { $0.isIncome == income && !$0.archived }.count)
+            .textCase(nil)
     }
     private func categoryGrid(income: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {

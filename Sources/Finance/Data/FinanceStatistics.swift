@@ -193,3 +193,24 @@ enum MoneyDateRange: String, CaseIterable, Identifiable {
         return DateInterval(start: start, end: upper)
     }
 }
+
+/// Why a total is a subtotal: entries dated in the future can't be converted until their rate is published, which is
+/// expected and shown quietly; the rest could be completed now. Display only; it never changes what the totals add up.
+struct UnconvertedBreakdown: Equatable {
+    /// Unconverted entries dated after today.
+    var future = 0
+    /// The earliest of those dates, to tell the reader when they can be converted.
+    var firstFutureDate: Date?
+    /// Unconverted amounts that could be completed now (or need another display currency).
+    var actionable = 0
+
+    /// `missing` is the count a total reported; `unconverted` the entries in view without a recorded conversion.
+    init(missing: Int, unconverted: [MoneyEntry], today: Date, calendar: Calendar = Dates.calendar) {
+        guard missing > 0 else { return }
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: today)) ?? today
+        let later = unconverted.filter { $0.date >= tomorrow }
+        future = min(missing, later.count)
+        firstFutureDate = later.map(\.date).min()
+        actionable = missing - future
+    }
+}

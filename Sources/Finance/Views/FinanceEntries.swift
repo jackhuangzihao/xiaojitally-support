@@ -266,17 +266,23 @@ extension FinanceHome {
     /// Income and period net beside the spending total, each in its own small block.
     @ViewBuilder private func summaryFigures(spent: MoneyStatisticsTotal, earned: MoneyStatisticsTotal) -> some View {
         summaryFigure(totalLabel(L("收入", "Income"), earned), totalDisplay(earned), tint: earned.total > 0 && !hidden ? .green : .primary)
-        summaryFigure(L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: entriesCurrency), tint: .primary)
+        summaryFigure(L("本期结余", "Period net"), balanceDisplay(spent: spent, earned: earned, currency: entriesCurrency), tint: .primary,
+                      caption: netCaption(spent: spent, earned: earned))
     }
-    func summaryFigure(_ label: String, _ value: String, tint: Color) -> some View {
+    /// "已折算小计" under the net when some amounts are left out of it.
+    func netCaption(spent: MoneyStatisticsTotal, earned: MoneyStatisticsTotal) -> String? {
+        spent.missing + earned.missing > 0 && spent.convertedCount + earned.convertedCount > 0 ? L("已折算小计", "Converted subtotal") : nil
+    }
+    func summaryFigure(_ label: String, _ value: String, tint: Color, caption: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.figure).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.6)
+            if let caption { Text(caption).font(.caption2).foregroundStyle(.secondary) }
         }
         .padding(.horizontal, Design.Spacing.m).padding(.vertical, Design.Spacing.s)
         .frame(minWidth: compact ? nil : 120, alignment: .leading)
         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Design.Radius.medium, style: .continuous))
-        .accessibilityElement(children: .ignore).accessibilityLabel(label).accessibilityValue(value)
+        .accessibilityElement(children: .ignore).accessibilityLabel(label).accessibilityValue(value + (caption.map { "，" + $0 } ?? ""))
     }
     /// What the totals mean, without spending a line of the card on it.
     private func summaryInfo(budgetNote: Bool) -> some View {
@@ -337,13 +343,24 @@ extension FinanceHome {
         parts.append(L("清除前会先保存一份完整备份。", "A full backup is saved first."))
         return parts.joined(separator: "\n")
     }
+    /// Notes under a subtotal. Future-dated foreign amounts are expected and stay grey; the rest are orange with a fix.
     @ViewBuilder func missingAmounts(_ count: Int) -> some View {
-        if count > 0 {
+        let scope = conversionScope
+        let breakdown = UnconvertedBreakdown(missing: count, unconverted: scope.missingConversionEntries, today: Date())
+        if breakdown.future > 0 {
+            let when = breakdown.firstFutureDate.map { Dates.label($0, pattern: "M月d日") } ?? ""
+            Label(L("不含 \(breakdown.future) 笔未来日期的外币账单（\(when) 起），到期后可补全折算",
+                    "Excludes \(breakdown.future) future-dated foreign entries (from \(when)); convert them once they're due"),
+                  systemImage: "clock")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        if breakdown.actionable > 0 {
             VStack(alignment: .leading, spacing: 6) {
-                Label(L("\(count) 笔金额尚未折算，合计不完整。", "\(count) amounts are unconverted; totals are incomplete."), systemImage: "exclamationmark.circle")
+                Label(L("不含 \(breakdown.actionable) 笔待折算，合计为已折算小计", "Excludes \(breakdown.actionable) unconverted amounts; totals are a converted subtotal"),
+                      systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.orange)
-                if !conversionScope.missingConversionEntries.isEmpty {
-                    Button { conversionRequest = MoneyConversionRequest(ledger: conversionScope) } label: {
+                if scope.missingConversionEntries.count > breakdown.future {
+                    Button { conversionRequest = MoneyConversionRequest(ledger: scope) } label: {
                         Label(L("补全折算…", "Complete conversions…"), systemImage: "arrow.triangle.2.circlepath")
                             .frame(minHeight: compact ? 44 : nil)
                     }.buttonStyle(.borderless).font(.callout)

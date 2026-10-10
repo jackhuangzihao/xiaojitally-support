@@ -167,3 +167,29 @@ private struct CompactTagLabelStyle: LabelStyle {
         }
     }
 }
+
+/// "10月6日 星期二  1  已过期": the date of a group in a task list, with its count and a today/overdue tag.
+struct TaskGroupHeader: View {
+    let date: Date
+    let today: Date
+    let count: Int
+    /// Some open task in the group is past its day.
+    var overdue = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(Self.title(for: date, today: today)).font(.subheadline.weight(.semibold))
+            if Dates.sameDay(date, today) { Text(L("今天", "Today")).tagStyle(.accentColor) }
+            else if overdue { Text(L("已过期", "Overdue")).tagStyle(.orange) }
+            CountCapsule(count: count)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The date with its weekday; the year only when it isn't this year. Undated tasks share one group.
+    static func title(for date: Date, today: Date) -> String {
+        if date == .distantFuture { return L("无日期", "No date") }
+        let sameYear = Dates.calendar.isDate(date, equalTo: today, toGranularity: .year)
+        return Dates.label(date, pattern: sameYear ? "M月d日 EEEE" : "yyyy年M月d日 EEEE")
+    }
+}

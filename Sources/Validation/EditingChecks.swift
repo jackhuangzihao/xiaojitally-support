@@ -288,6 +288,14 @@ import AppKit
                     && TaskLinkOptions.make(candidates, query: "receipt", now: now).done.map(\.title) == ["Old receipt"]
                     && errand.open.isEmpty && errand.done.isEmpty,
                     "Searching finds any task by name, never a deleted one")
+        let week = TaskLinkOptions.make([candidate("Last week", days: -6), candidate("Yesterday", days: -1), candidate("Today", days: 0),
+                                         candidate("In five days", days: 5), candidate("Tomorrow", days: 1),
+                                         candidate("Done today", done: true, days: 0, completedDays: 0),
+                                         candidate("Done earlier", done: true, days: -3, completedDays: -3)], query: "", now: now)
+        let short = TaskLinkOptions.shortList(week, now: now)
+        try require(short.open.map(\.title) == ["Yesterday", "Today", "Tomorrow"] && short.done.map(\.title) == ["Done today"] && short.hidden == 3,
+                    "The short link list keeps the tasks nearest today in date order and counts the rest")
+        try require(TaskLinkOptions.shortList(([], []), now: now).hidden == 0, "An empty link list has nothing to show more of")
         print("Editor checks passed: \(checks)")
         return checks
     }
