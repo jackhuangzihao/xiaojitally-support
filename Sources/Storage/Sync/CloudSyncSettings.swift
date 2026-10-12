@@ -83,6 +83,8 @@ struct CloudSyncSettings: View {
                 Button(L("上次自动处理前的本机副本", "Local copy before last automatic resolution")) { exportConflictCopy(local: true, kind: .automaticMerge) }
                 Button(L("上次自动处理前的云端副本", "Cloud copy before last automatic resolution")) { exportConflictCopy(local: false, kind: .automaticMerge) }
                 Divider()
+                Button(L("迁移前的旧快照", "Old snapshot before migration")) { exportMigrationCopy(source: "snapshot") }
+                Button(L("迁移前的记录副本", "Record copy before migration")) { exportMigrationCopy(source: "records") }
                 Button(L("合并前的本机副本", "Local copy before merge")) { exportCopy(owner: "sync-local") }
                 Button(L("合并前的云端副本", "Cloud copy before merge")) { exportCopy(owner: "sync-cloud") }
             }
@@ -109,6 +111,15 @@ struct CloudSyncSettings: View {
                     return data
                 }.value
                 document = BackupDocument(data: data); exportError = nil; export = true
+            } catch { exportError = error.localizedDescription }
+        }
+    }
+
+    private func exportMigrationCopy(source: String) {
+        Task {
+            do {
+                document = BackupDocument(data: try await sync.migrationRecoveryCopy(source: source))
+                exportError = nil; export = true
             } catch { exportError = error.localizedDescription }
         }
     }
