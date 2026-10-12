@@ -3,12 +3,14 @@ import CloudKit
 
 /// Uses the production coordinator; the store models independent server batches and head compare-and-swap.
 actor FaultingCommitStore: CloudCommitStore {
-    enum Fault: Sendable { case beforeBatch(Int), afterBatch(Int), beforeHead, afterHead, cancelled, denied }
+    enum Fault: Sendable { case beforeBatch(Int), afterBatch(Int), beforeHead, afterHead, afterReupload, cancelled, denied }
     private var head = CloudCommitProtocol.Head(commit: UUID(), round: 0, pages: [], migration: .init(previousRound: 0, hadHead: false, legacyDigest: nil))
     private var tag = 0
     private var blobs: [String: Data] = [:]
     private var fault: Fault?
     private var seed = CloudCommitProtocol.Seed(items: [:], exists: false)
+    private var headExists = true
+    private var legacyDigest: String?
     private(set) var batches = 0
     private(set) var uploaded = 0
     private(set) var publications = 0
@@ -16,9 +18,10 @@ actor FaultingCommitStore: CloudCommitStore {
     func setSeed(_ value: CloudCommitProtocol.Seed) { seed = value }
     func readHead() -> CloudCommitProtocol.Cursor { .init(head: head, tag: Data(String(tag).utf8)) }
     func prepareReupload() throws {
-        guard head.round == 0 else { throw CloudRecordError.changedElsewhere }
+        let value = try CloudMigration.reuploadHead(existing: headExists ? head : nil, legacyDigest: legacyDigest)
         seed = .init(items: [:], exists: false)
-        head.migration?.reupload = true; tag += 1
+        head = value; headExists = true; tag += 1
+        if case .afterReupload = fault { fault = nil; throw URLError(.networkConnectionLost) }
     }
     func migrationSeed(_ cursor: CloudCommitProtocol.Cursor) throws -> CloudCommitProtocol.Seed {
         guard cursor == readHead() else { throw CloudRecordError.changedElsewhere }; return seed
@@ -55,8 +58,10 @@ actor FaultingCommitStore: CloudCommitStore {
     }
     func removeBlob(_ id: String) { blobs[id] = nil }
     func corruptBlob(_ id: String) { blobs[id] = Data("broken".utf8) }
-    func resetCloud() {
-        head = .init(commit: UUID(), round: 0, pages: [], migration: .init(previousRound: 0, hadHead: false, legacyDigest: nil))
+    func resetCloud(legacyDigest: String? = nil) {
+        self.legacyDigest = legacyDigest; headExists = false
+        head = .init(commit: UUID(), round: 0, pages: [],
+                     migration: .init(previousRound: 0, hadHead: false, legacyDigest: legacyDigest), legacyDigest: legacyDigest)
         blobs = [:]; tag += 1
     }
 }

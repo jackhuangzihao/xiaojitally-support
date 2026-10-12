@@ -133,9 +133,12 @@
 		9BC3556275051AF4431B5F6E /* CausalSyncChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6D29A941D6F2669A8CB63AD /* CausalSyncChecks.swift */; };
 		EA032D9D6C5CFE37D95193CF /* CloudRecordChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA3A7FF6E4CD5CD39429F123 /* CloudRecordChecks.swift */; };
 		6231554FBB7C85049FF40F32 /* CloudCommitProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7B138669170A14A3DADE9D /* CloudCommitProtocol.swift */; };
+		F9036EDB6B4CF190EB1340C6 /* CloudBlobUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35682882BF2B355E42F5A5CF /* CloudBlobUpload.swift */; };
 		0A786DEC1191EA8362A432A1 /* CloudLegacyReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F8D2DA6857C7B1FAD4D7CF /* CloudLegacyReader.swift */; };
 		57921247846F1961E897D003 /* CloudMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 813C241D4930818C510363A2 /* CloudMigration.swift */; };
 		8C3BAB2FAEDEF3C5E183CDD0 /* CloudCommitChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E8856D88426BF4A32F1C893 /* CloudCommitChecks.swift */; };
+		5DBCB2902D2607A2A6560F09 /* CloudReuploadChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDA7C9E120FD003CE5CCD86C /* CloudReuploadChecks.swift */; };
+		EA3BD1261E3B3D2F4D2935A6 /* CloudBatchChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C82580F43D30380FDC8DB5D /* CloudBatchChecks.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -266,9 +269,12 @@
 		F6D29A941D6F2669A8CB63AD /* CausalSyncChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CausalSyncChecks.swift; sourceTree = "<group>"; };
 		DA3A7FF6E4CD5CD39429F123 /* CloudRecordChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRecordChecks.swift; sourceTree = "<group>"; };
 		9B7B138669170A14A3DADE9D /* CloudCommitProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudCommitProtocol.swift; sourceTree = "<group>"; };
+		35682882BF2B355E42F5A5CF /* CloudBlobUpload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudBlobUpload.swift; sourceTree = "<group>"; };
 		32F8D2DA6857C7B1FAD4D7CF /* CloudLegacyReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudLegacyReader.swift; sourceTree = "<group>"; };
 		813C241D4930818C510363A2 /* CloudMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudMigration.swift; sourceTree = "<group>"; };
 		3E8856D88426BF4A32F1C893 /* CloudCommitChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudCommitChecks.swift; sourceTree = "<group>"; };
+		EDA7C9E120FD003CE5CCD86C /* CloudReuploadChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudReuploadChecks.swift; sourceTree = "<group>"; };
+		0C82580F43D30380FDC8DB5D /* CloudBatchChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudBatchChecks.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -420,6 +426,8 @@
 				F6D29A941D6F2669A8CB63AD /* CausalSyncChecks.swift */,
 				DA3A7FF6E4CD5CD39429F123 /* CloudRecordChecks.swift */,
 				3E8856D88426BF4A32F1C893 /* CloudCommitChecks.swift */,
+				EDA7C9E120FD003CE5CCD86C /* CloudReuploadChecks.swift */,
+				0C82580F43D30380FDC8DB5D /* CloudBatchChecks.swift */,
 				29A3D7B3874FE2AF23D65FA3 /* PartialSyncChecks.swift */,
 				80AD72DAE2FE7CE2647B5F33 /* TaskLifecycleChecks.swift */,
 			);
@@ -522,6 +530,7 @@
 				813C241D4930818C510363A2 /* CloudMigration.swift */,
 				32F8D2DA6857C7B1FAD4D7CF /* CloudLegacyReader.swift */,
 				9B7B138669170A14A3DADE9D /* CloudCommitProtocol.swift */,
+				35682882BF2B355E42F5A5CF /* CloudBlobUpload.swift */,
 				4B3B426E92148EA9478DAF3A /* PartialSyncMerge.swift */,
 				1B7956C6146A75D2D437E745 /* SyncFields.swift */,
 				DFD9DA9C49366DAF3658F9CB /* AutomaticSyncPolicy.swift */,
@@ -692,6 +701,7 @@
 				57921247846F1961E897D003 /* CloudMigration.swift in Sources */,
 				0A786DEC1191EA8362A432A1 /* CloudLegacyReader.swift in Sources */,
 				6231554FBB7C85049FF40F32 /* CloudCommitProtocol.swift in Sources */,
+				F9036EDB6B4CF190EB1340C6 /* CloudBlobUpload.swift in Sources */,
 				5E9ECA329AFA65A4B182A1FD /* PartialSyncMerge.swift in Sources */,
 				785A153D859A9EB22DB55AD7 /* SyncFields.swift in Sources */,
 				3939300D0B230BF2A35BBA99 /* AutomaticSyncPolicy.swift in Sources */,
@@ -763,6 +773,8 @@
 				9BC3556275051AF4431B5F6E /* CausalSyncChecks.swift in Sources */,
 				EA032D9D6C5CFE37D95193CF /* CloudRecordChecks.swift in Sources */,
 				8C3BAB2FAEDEF3C5E183CDD0 /* CloudCommitChecks.swift in Sources */,
+				5DBCB2902D2607A2A6560F09 /* CloudReuploadChecks.swift in Sources */,
+				EA3BD1261E3B3D2F4D2935A6 /* CloudBatchChecks.swift in Sources */,
 				FFF6492C3F56EAF1EAFF340A /* PartialSyncChecks.swift in Sources */,
 				5EF967BA40959D15C918405F /* TaskLifecycleChecks.swift in Sources */,
 			);

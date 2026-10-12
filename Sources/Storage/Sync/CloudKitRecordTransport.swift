@@ -85,8 +85,7 @@ actor CloudKitCommitStore: CloudCommitStore {
         try await requireAccount()
         let existing = try await record(Self.headID)
         if let existing {
-            let value = try Self.cursor(existing).head
-            guard value.round == 0, value.migration?.hadHead == false, value.legacyDigest == nil else { throw CloudRecordError.changedElsewhere }
+            try CloudMigration.validateReuploadHead(Self.cursor(existing).head)
         } else {
             let zone = CKRecordZone(zoneID: CloudKitRecordTransport.zoneID)
             let result = try await database.modifyRecordZones(saving: [zone], deleting: [])
@@ -94,14 +93,14 @@ actor CloudKitCommitStore: CloudCommitStore {
             _ = try saved.get()
         }
         let legacy = try await CloudMigration.sealLegacy(in: database, account: account, authorize: { try await self.requireAccount() })
-        let value = CloudCommitProtocol.Head(commit: UUID(), round: 0, pages: [],
-            migration: .init(previousRound: 0, hadHead: false, legacyDigest: legacy.digest, reupload: true), legacyDigest: legacy.digest)
+        let value = try CloudMigration.reuploadHead(existing: existing.map { try Self.cursor($0).head }, legacyDigest: legacy.digest)
         let head = try Self.setting(value, on: existing ?? CKRecord(recordType: "TallyHead", recordID: Self.headID))
         try await requireAccount()
         let result = try await database.modifyRecords(saving: [head], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)
         guard let saved = result.saveResults[Self.headID] else { throw CloudRecordError.inconsistentCloud("Missing re-upload fence") }
         _ = try saved.get()
-        CloudMigration.log.notice("User confirmed re-upload after cloud removal")
+        try await requireAccount()
+        CloudMigration.log.notice("Re-upload checkpoint confirmed; resumed: \(existing != nil, privacy: .public)")
     }
 
     func readBlobs(_ names: [String]) async throws -> [String: Data] {
@@ -121,34 +120,32 @@ actor CloudKitCommitStore: CloudCommitStore {
 
     func writeBlobs(_ blobs: [String: Data]) async throws {
         guard blobs.count <= CloudCommitProtocol.batchSize else { throw CloudRecordError.inconsistentCloud("Oversized batch") }
-        var pending = blobs
-        // A concurrent writer may already have created an identical immutable record. Verify, never overwrite it.
-        for _ in 0..<3 {
-            try await requireAccount()
-            guard !pending.isEmpty else { return }
-            let records = try pending.map { name, bytes -> CKRecord in
-                try CloudCommitProtocol.validate(bytes, named: name)
-                let record = CKRecord(recordType: "TallyImmutable", recordID: CKRecord.ID(recordName: name, zoneID: CloudKitRecordTransport.zoneID))
-                record.encryptedValues["bytes"] = bytes
-                return record
-            }
-            let result = try await database.modifyRecords(saving: records, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)
-            var failures: [Error] = []
-            for record in records {
-                guard let saved = result.saveResults[record.recordID] else { throw CloudRecordError.inconsistentCloud("Missing save result") }
-                do { _ = try saved.get(); pending[record.recordID.recordName] = nil }
-                catch let error as CKError where error.code == .serverRecordChanged {
-                    guard let server = error.serverRecord, server.recordType == "TallyImmutable",
-                          server.encryptedValues["bytes"] as? Data == pending[record.recordID.recordName] else {
-                        throw CloudRecordError.inconsistentCloud("Immutable record collision")
-                    }
-                    pending[record.recordID.recordName] = nil
-                } catch { failures.append(error) }
-            }
-            if let failure = failures.first(where: { ($0 as? CKError)?.code != .batchRequestFailed }) { throw failure }
-            if failures.isEmpty { return }
+        try await CloudBlobUpload.write(blobs) { try await self.writeBlobBatch($0) }
+    }
+
+    private func writeBlobBatch(_ blobs: [String: Data]) async throws -> CloudBlobUpload.Results {
+        try await requireAccount()
+        let records = try blobs.map { name, bytes -> CKRecord in
+            try CloudCommitProtocol.validate(bytes, named: name)
+            let record = CKRecord(recordType: "TallyImmutable", recordID: CKRecord.ID(recordName: name, zoneID: CloudKitRecordTransport.zoneID))
+            record.encryptedValues["bytes"] = bytes
+            return record
         }
-        guard pending.isEmpty else { throw CloudRecordError.changedElsewhere }
+        let result = try await database.modifyRecords(saving: records, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)
+        var outcomes: CloudBlobUpload.Results = [:]
+        for record in records {
+            guard let saved = result.saveResults[record.recordID] else { throw CloudRecordError.inconsistentCloud("Missing save result") }
+            do { _ = try saved.get(); outcomes[record.recordID.recordName] = .success(()) }
+            catch let error as CKError where error.code == .serverRecordChanged {
+                // A concurrent writer may have created this version. Verify it, never overwrite it.
+                guard let server = error.serverRecord, server.recordType == "TallyImmutable",
+                      server.recordID == record.recordID, server.encryptedValues["bytes"] as? Data == blobs[record.recordID.recordName] else {
+                    throw CloudRecordError.inconsistentCloud("Immutable record collision")
+                }
+                outcomes[record.recordID.recordName] = .success(())
+            } catch { outcomes[record.recordID.recordName] = .failure(error) }
+        }
+        return outcomes
     }
 
     func publish(_ value: CloudCommitProtocol.Head, replacing cursor: CloudCommitProtocol.Cursor) async throws -> CloudCommitProtocol.Cursor {

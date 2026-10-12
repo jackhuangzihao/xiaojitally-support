@@ -199,11 +199,9 @@ actor CloudCommitTransport: CloudRecordTransport {
 
     private func upload(_ plan: CloudCommitProtocol.Plan, replacing expected: CloudCommitProtocol.Cursor) async throws -> CloudCommitProtocol.Cursor {
         let missing = plan.blobs.filter { blobs[$0.key] != $0.value }
-        let names = missing.keys.sorted()
-        for offset in stride(from: 0, to: names.count, by: CloudCommitProtocol.batchSize) {
+        for batch in try CloudBlobUpload.batches(missing) {
             try Task.checkCancellation()
-            let batch = names.dropFirst(offset).prefix(CloudCommitProtocol.batchSize)
-            try await store.writeBlobs(Dictionary(uniqueKeysWithValues: batch.map { ($0, missing[$0]!) }))
+            try await store.writeBlobs(batch)
         }
         try Task.checkCancellation()
         do { return try await store.publish(plan.head, replacing: expected) }

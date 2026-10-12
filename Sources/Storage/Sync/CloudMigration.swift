@@ -8,6 +8,26 @@ enum CloudMigration {
     static let legacyID = CKRecord.ID(recordName: "tally-personal-v1")
     struct LegacyState: Sendable { let digest: String?; let committed: Bool }
 
+    static func validateReuploadHead(_ head: CloudCommitProtocol.Head) throws {
+        try CloudCommitProtocol.validate(head)
+        guard head.round == 0, let migration = head.migration, !migration.hadHead,
+              migration.reupload == true || head.legacyDigest == nil else {
+            throw CloudRecordError.changedElsewhere
+        }
+    }
+
+    static func reuploadHead(existing: CloudCommitProtocol.Head?, legacyDigest: String?) throws -> CloudCommitProtocol.Head {
+        if let existing {
+            try validateReuploadHead(existing)
+            guard existing.legacyDigest == legacyDigest else { throw CloudRecordError.changedElsewhere }
+            // A lost response must resume the same authorized checkpoint, not start another migration.
+            if existing.migration?.reupload == true { return existing }
+        }
+        return .init(commit: UUID(), round: 0, pages: [],
+                     migration: .init(previousRound: 0, hadHead: false, legacyDigest: legacyDigest, reupload: true),
+                     legacyDigest: legacyDigest)
+    }
+
     static func sealLegacy(in database: CKDatabase, account: String, authorize: @Sendable () async throws -> Void) async throws -> LegacyState {
         let header: CKRecord?
         do {
