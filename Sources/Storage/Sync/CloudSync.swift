@@ -437,12 +437,19 @@ struct AutomaticSyncSummary: Equatable {
         }.value
     }
     static func message(_ error: Error) -> String {
-        guard let error = error as? CKError else { return error.localizedDescription }
+        guard var error = error as? CKError else { return error.localizedDescription }
+        // A partial failure wraps one error per record; the useful one is the record that was rejected.
+        if error.code == .partialFailure, let inner = error.partialErrorsByItemID?.values.compactMap({ $0 as? CKError })
+            .first(where: { $0.code != .batchRequestFailed }) { error = inner }
         switch error.code {
         case .networkUnavailable, .networkFailure: return L("网络不可用，恢复连接后会自动重试。本地修改已保留。", "Offline. Sync retries when connected. Local changes are retained.")
         case .quotaExceeded: return L("iCloud 空间不足，请释放空间后重试。本地修改已保留。", "iCloud storage is full. Free up space and retry. Local changes are retained.")
         case .serverRecordChanged: return L("另一台设备刚刚更新了数据，稍后会重新合并。", "Another device just updated the data. Sync will merge again shortly.")
         case .notAuthenticated: return L("请登录 iCloud 后重试。本地修改已保留。", "Sign in to iCloud and retry. Local changes are retained.")
+        case .serverRejectedRequest, .invalidArguments, .permissionFailure:
+            // Also what an iCloud container returns when its server-side structure doesn't match this build yet.
+            return L("iCloud 拒绝了这次上传，本地修改已保留。可能是 iCloud 服务器还没有准备好这个版本的数据结构，请联系开发者。", "iCloud rejected this upload. Local changes are retained. Its server-side structure may not be ready for this version yet; please contact the developer.")
+                + "\n" + error.localizedDescription
         default: return L("iCloud 暂未同步，本地修改已保留。", "iCloud sync is pending. Local changes are retained.") + "\n" + error.localizedDescription
         }
     }

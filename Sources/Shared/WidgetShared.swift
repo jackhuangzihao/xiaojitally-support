@@ -39,7 +39,10 @@ struct WidgetSnapshot: Codable, Equatable {
     var tasks: [WidgetTask] = []
     var english = false
     var lists: [WidgetList]? = nil // Optional so existing snapshots remain readable during an update.
+    /// The app's resolved locale (region-aware for English); absent in snapshots from older builds.
+    var localeIdentifier: String? = nil
     func text(_ zh: String, _ en: String) -> String { english ? en : zh }
+    var locale: Locale { Locale(identifier: localeIdentifier ?? (english ? "en_US" : "zh_CN")) }
     private func sorted(_ values: [WidgetTask], calendar: Calendar) -> [WidgetTask] {
         values.sorted {
             if $0.isDone != $1.isDone { return !$0.isDone }
@@ -270,7 +273,7 @@ struct TodayWidgetCard: View {
             }
             footer
         }
-        .environment(\.locale, Locale(identifier: data.english ? "en_US" : "zh_CN"))
+        .environment(\.locale, data.locale)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     private var footer: some View {
@@ -344,7 +347,7 @@ struct TodayWidgetCard: View {
     }
     private func timeLabel(_ task: WidgetTask) -> String {
         guard let start = task.start else { return data.text("无日期", "No date") }
-        let locale = Locale(identifier: data.english ? "en_US" : "zh_CN")
+        let locale = data.locale
         let time = start.formatted(.dateTime.hour().minute().locale(locale))
         if Calendar.current.isDate(start, inSameDayAs: date) { return task.timed ? time : data.text("全天", "All day") }
         let day = start.formatted(.dateTime.month(.defaultDigits).day().locale(locale))

@@ -12,8 +12,16 @@ enum UISettings {
     }
     static var language: String { resolvedLanguage(UserDefaults.standard.string(forKey: "appLanguage")) }
     static var locale: Locale { locale(for: UserDefaults.standard.string(forKey: "appLanguage")) }
-    static func locale(for preference: String?, preferredLanguages: [String] = Locale.preferredLanguages) -> Locale {
-        Locale(identifier: resolvedLanguage(preference, preferredLanguages: preferredLanguages) == "en" ? "en_US" : "zh_CN")
+    /// English follows the user's region, so numeric dates read the local way (11/10/2026 in Australia,
+    /// 10/11/2026 in the US). The region comes from an "en-XX" preferred language, else the device region.
+    /// Money is unaffected: amounts use the app's own symbols and every English locale groups digits alike.
+    static func locale(for preference: String?, preferredLanguages: [String] = Locale.preferredLanguages,
+                       deviceRegion: String? = Locale.current.region?.identifier) -> Locale {
+        guard resolvedLanguage(preference, preferredLanguages: preferredLanguages) == "en" else { return Locale(identifier: "zh_CN") }
+        let englishRegion = preferredLanguages.lazy.map { Locale(identifier: $0) }
+            .first { $0.language.languageCode?.identifier == "en" }?.region?.identifier
+        let region = (englishRegion ?? deviceRegion).flatMap { $0.count == 2 && $0.allSatisfy(\.isLetter) ? $0.uppercased() : nil }
+        return Locale(identifier: "en_" + (region ?? "US"))
     }
 
     static func backupFailure(_ stored: String, language: String? = nil) -> String {

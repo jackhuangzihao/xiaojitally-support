@@ -103,7 +103,11 @@ actor CloudKitRecordTransport: CloudRecordTransport, CKSyncEngineDelegate {
         let unsent = outgoing.count
         outgoing = [:]
         if conflicted { engineLog.notice("Round \(round, privacy: .public) met newer cloud changes"); throw CloudRecordError.changedElsewhere }
-        if let failure = sendFailures.first { throw failure }
+        if let failure = Self.rootFailure(sendFailures) {
+            let codes = Set(sendFailures.compactMap { ($0 as? CKError)?.code.rawValue }).sorted().map(String.init).joined(separator: ",")
+            engineLog.error("Round \(round, privacy: .public) failed: \(self.sendFailures.count, privacy: .public) records, CKError codes [\(codes, privacy: .public)]")
+            throw failure
+        }
         // Retryable failures stay unsent; the next sync rebuilds them from fresh data.
         guard unsent == 0, current.head?.round == round else {
             engine.state.remove(pendingRecordZoneChanges: engine.state.pendingRecordZoneChanges)
@@ -111,6 +115,12 @@ actor CloudKitRecordTransport: CloudRecordTransport, CKSyncEngineDelegate {
         }
         engineLog.notice("Round \(round, privacy: .public) finished")
         return current.state
+    }
+
+    /// An atomic zone save fails every record when one is rejected; the others only say "batch request failed".
+    /// Report the record that caused it, so the message names the real reason.
+    static func rootFailure(_ failures: [Error]) -> Error? {
+        failures.first { ($0 as? CKError)?.code != .batchRequestFailed } ?? failures.first
     }
 
     // MARK: CKSyncEngineDelegate

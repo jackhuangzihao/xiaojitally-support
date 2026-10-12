@@ -358,8 +358,16 @@ import AppKit
             defaults.set("zh", forKey: "appLanguage")
             try require(Dates.label(day, pattern: "yyyy年M月d日") == chinese, "Switching language back reuses the correct formatter")
             try require(Money.format(Decimal(string: "1234.56")!, "CNY") == "¥1,234.56" && Money.format(1234, "JPY") == "JP¥1,234", "Money formatting keeps currency precision across cached formatters")
-            try require(UISettings.locale(for: "system", preferredLanguages: ["en-AU"]).identifier == "en_US"
-                        && UISettings.locale(for: nil, preferredLanguages: ["zh-Hans"]).identifier == "zh_CN", "System locale defaults resolve correctly")
+            try require(UISettings.locale(for: "system", preferredLanguages: ["en-AU"], deviceRegion: "US").identifier == "en_AU"
+                        && UISettings.locale(for: "en", preferredLanguages: ["zh-Hans-AU"], deviceRegion: "AU").identifier == "en_AU"
+                        && UISettings.locale(for: "en", preferredLanguages: ["zh-Hans"], deviceRegion: nil).identifier == "en_US"
+                        && UISettings.locale(for: nil, preferredLanguages: ["zh-Hans"], deviceRegion: "AU").identifier == "zh_CN", "System locale defaults resolve correctly")
+            // English dates follow the region's order; money formatting is identical across English regions.
+            let numeric = Date.FormatStyle(date: .numeric, time: .omitted, timeZone: TimeZone(identifier: "UTC")!)
+            let october11 = Date(timeIntervalSince1970: 1_791_720_000) // 2026-10-11 12:00 UTC
+            try require(october11.formatted(numeric.locale(UISettings.locale(for: "en", preferredLanguages: ["en-AU"]))) == "11/10/2026"
+                        && october11.formatted(numeric.locale(UISettings.locale(for: "en", preferredLanguages: ["en-US"]))) == "10/11/2026",
+                        "Australian English reads day/month/year; US English keeps month/day/year")
         }
         let timedBase = Dates.calendar.date(from: DateComponents(year: 2026, month: 9, day: 19, hour: 15, minute: 0))!
         try require(ReminderPreset.tenMinutes.date(base: timedBase, timed: true) == timedBase.addingTimeInterval(-600)

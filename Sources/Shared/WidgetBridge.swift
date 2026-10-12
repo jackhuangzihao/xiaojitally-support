@@ -32,7 +32,8 @@ extension CompleteWidgetTask: ForegroundContinuableIntent {}
             return WidgetTask(id: task.id, title: task.title, start: task.calendarDate, end: task.hasTime ? task.endAt : nil,
                               timed: task.clockDate != nil, priority: task.priority, list: task.list?.name ?? "", color: task.list?.colorHex ?? "799B80", listID: task.list?.id, completed: task.isDone, completedAt: task.completedAt)
         }.sorted { $0.id.uuidString < $1.id.uuidString }, english: UISettings.language == "en",
-            lists: lists.map { WidgetList(id: $0.id, name: ListTree.path($0, lists: lists), parentID: $0.parentID) })
+            lists: lists.map { WidgetList(id: $0.id, name: ListTree.path($0, lists: lists), parentID: $0.parentID) },
+            localeIdentifier: UISettings.locale.identifier)
     }
     static func publish(_ context: ModelContext) {
         guard isEnabled, Store.recovery.failure == nil else { return }

@@ -1,4 +1,5 @@
 import Foundation
+import CloudKit
 
 /// Per-record sync without an account or network: the row codec, minimal uploads, unfinished rounds and
 /// two devices saving at once, through the in-memory cloud.
@@ -159,6 +160,15 @@ import Foundation
         var cleared = restored; cleared.clearContents()
         try check(cleared.state.isEmpty && cleared.generation > restored.generation && cleared.engineState == restored.engineState,
                   "clearing the zone's rows invalidates cached snapshots")
+
+        // An atomic save rejects every record; the message must name the rejected one, not "batch request failed".
+        let batch = CKError(.batchRequestFailed), rejected = CKError(.serverRejectedRequest)
+        try check((CloudKitRecordTransport.rootFailure([batch, rejected, batch]) as? CKError)?.code == .serverRejectedRequest
+                  && (CloudKitRecordTransport.rootFailure([batch]) as? CKError)?.code == .batchRequestFailed
+                  && CloudKitRecordTransport.rootFailure([]) == nil, "a failed upload reports the record that was rejected")
+        let partial = CKError(.partialFailure, userInfo: [CKPartialErrorsByItemIDKey: ["a": batch, "b": rejected]])
+        try check(CloudSync.message(partial) == CloudSync.message(rejected) && CloudSync.message(rejected).contains(L("拒绝", "rejected")),
+                  "a server rejection inside a partial failure gets the rejection message")
 
         print("CLOUD RECORD PASS: \(count) checks")
         return count
