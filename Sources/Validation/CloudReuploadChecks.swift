@@ -47,6 +47,32 @@ import Foundation
             }
         }
 
+        for _ in 0..<3 {
+            let retired = CloudMigration.LegacyState(digest: "retired", committed: false, superseded: true)
+            let unfinished = CloudCommitProtocol.Head(commit: UUID(), round: 0, pages: [],
+                migration: .init(previousRound: 0, hadHead: false, legacyDigest: "retired"), legacyDigest: "retired")
+            let approved = try CloudMigration.reuploadHead(existing: unfinished, legacyDigest: "retired", retiredLegacy: retired)
+            try check(approved.migration?.reupload == true && approved.commit != unfinished.commit,
+                "confirmation replaces an obsolete seed with a fresh authorized checkpoint")
+            try check(try CloudMigration.reuploadHead(existing: approved, legacyDigest: "retired", retiredLegacy: retired) == approved,
+                "retired-source recovery resumes the same checkpoint after restart")
+            for unproven in [CloudMigration.LegacyState(digest: "retired", committed: false, superseded: false),
+                             .init(digest: "another-source", committed: false, superseded: true)] {
+                try await rejects("only a matching retired source can authorize replacing an unfinished seed") {
+                    _ = try CloudMigration.reuploadHead(existing: unfinished, legacyDigest: "retired", retiredLegacy: unproven)
+                }
+            }
+            var established = unfinished; established.round = 4
+            established.migration = .init(previousRound: 4, hadHead: true, legacyDigest: "retired")
+            try await rejects("retirement does not authorize replacing existing current rows") {
+                _ = try CloudMigration.reuploadHead(existing: established, legacyDigest: "retired", retiredLegacy: retired)
+            }
+            established.migration = nil
+            try await rejects("retirement does not authorize replacing another device's published head") {
+                _ = try CloudMigration.reuploadHead(existing: established, legacyDigest: "retired", retiredLegacy: retired)
+            }
+        }
+
         let items = try CloudRecordCodec.items(sample)
         for repetition in 0..<3 {
             for digest in digests {

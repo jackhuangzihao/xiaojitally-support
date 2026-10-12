@@ -123,7 +123,30 @@ import SwiftData
             try check(record["supersededBy"] as? String == marker, "sealing preserves existing supersession evidence")
             try check(record["formatVersion"] as? Int64 == 2 && record["snapshot"] as? Data == Data("asset remains unchanged".utf8),
                 "compatibility fence retains the asset")
+            let legacy = try CloudMigration.legacyState(record)
+            try check(legacy.superseded == (marker != nil), "both old supersession markers survive sealing and restart")
+            try check(legacy.requiresReuploadConfirmation(for: nil) == (marker != nil),
+                "a retired snapshot cannot rebuild a missing current head without confirmation")
+            var staging = CloudCommitProtocol.Head(commit: UUID(), round: 0, pages: [],
+                migration: .init(previousRound: 0, hadHead: false, legacyDigest: "retained"), legacyDigest: "retained")
+            try check(legacy.requiresReuploadConfirmation(for: staging) == (marker != nil),
+                "an old format-14 empty staging head is not proof of a current source")
+            staging.migration?.reupload = true
+            try check(!legacy.requiresReuploadConfirmation(for: staging), "a confirmed re-upload checkpoint resumes")
+            staging.round = 7; staging.migration = .init(previousRound: 7, hadHead: true, legacyDigest: "retained")
+            try check(!legacy.requiresReuploadConfirmation(for: staging), "existing completed protocol-13 rows remain migration sources")
+            staging.migration = nil
+            try check(!legacy.requiresReuploadConfirmation(for: staging), "a published immutable head remains authoritative")
+            record["migrationState"] = "committed"
+            try check(try CloudMigration.legacyState(record).requiresReuploadConfirmation(for: nil),
+                "completion still protects a removed zone even without supersededBy")
+            record["migrationState"] = "sealed"; record["digest"] = nil
+            try check(try !CloudMigration.legacyState(record).requiresReuploadConfirmation(for: nil),
+                "an unused format-14 compatibility marker contains no old snapshot to revive")
         }
+        let malformed = CKRecord(recordType: "TallySnapshot", recordID: CloudMigration.legacyID)
+        malformed["formatVersion"] = Int64(2); malformed["migrationState"] = "unexpected"
+        try rejects("unrecognized legacy marker cannot authorize recovery") { _ = try CloudMigration.legacyState(malformed) }
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("migration-history-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

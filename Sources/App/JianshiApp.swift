@@ -168,13 +168,19 @@ final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
 private struct StoreWindow: View {
     let container: ModelContainer
     @State private var drafts = EditorDrafts()
+    @State private var syncSceneID = UUID()
     @Environment(\.scenePhase) private var phase
     var body: some View {
         ContentView(drafts: drafts, recoveryGeneration: Store.recovery.generation)
             .modelContainer(Store.recovery.container ?? container)
             .environment(drafts)
             .id(Store.recovery.generation)
+            .onChange(of: phase, initial: true) { _, phase in
+                CloudSync.shared.setSceneActive(phase == .active, id: syncSceneID)
+            }
+            .onDisappear { CloudSync.shared.setSceneActive(false, id: syncSceneID) }
             .task(id: Store.recovery.generation) {
+                CloudSync.shared.cancelMaintenance()
                 let context = (Store.recovery.container ?? container).mainContext
                 do { try await SyncChanges.prepareHistory(in: context) }
                 catch is CancellationError { return }

@@ -6,19 +6,39 @@ import OSLog
 enum CloudMigration {
     static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.jianshi.personal", category: "CloudMigration")
     static let legacyID = CKRecord.ID(recordName: "tally-personal-v1")
-    struct LegacyState: Sendable { let digest: String?; let committed: Bool }
+    struct LegacyState: Sendable {
+        let digest: String?
+        let committed: Bool
+        let superseded: Bool
 
-    static func validateReuploadHead(_ head: CloudCommitProtocol.Head) throws {
+        func requiresReuploadConfirmation(for head: CloudCommitProtocol.Head?) -> Bool {
+            guard let head else { return committed || (superseded && digest != nil) }
+            // Format 14 could seal a removed format-13 source before creating this empty checkpoint.
+            return superseded && digest != nil && head.migration?.hadHead == false && head.migration?.reupload != true
+        }
+    }
+
+    static func legacyState(_ record: CKRecord) throws -> LegacyState {
+        guard record.recordID == legacyID, record["formatVersion"] as? Int64 == 2,
+              let status = record["migrationState"] as? String, ["sealed", "committed"].contains(status) else {
+            throw CloudRecordError.inconsistentCloud("Unrecognized legacy migration marker")
+        }
+        return .init(digest: record["digest"] as? String, committed: status == "committed",
+                     superseded: record["supersededBy"] as? String != nil)
+    }
+
+    static func validateReuploadHead(_ head: CloudCommitProtocol.Head, retiredLegacy: LegacyState? = nil) throws {
         try CloudCommitProtocol.validate(head)
         guard head.round == 0, let migration = head.migration, !migration.hadHead,
-              migration.reupload == true || head.legacyDigest == nil else {
+              migration.reupload == true || head.legacyDigest == nil
+                || (retiredLegacy?.digest == head.legacyDigest && retiredLegacy?.requiresReuploadConfirmation(for: head) == true) else {
             throw CloudRecordError.changedElsewhere
         }
     }
 
-    static func reuploadHead(existing: CloudCommitProtocol.Head?, legacyDigest: String?) throws -> CloudCommitProtocol.Head {
+    static func reuploadHead(existing: CloudCommitProtocol.Head?, legacyDigest: String?, retiredLegacy: LegacyState? = nil) throws -> CloudCommitProtocol.Head {
         if let existing {
-            try validateReuploadHead(existing)
+            try validateReuploadHead(existing, retiredLegacy: retiredLegacy)
             guard existing.legacyDigest == legacyDigest else { throw CloudRecordError.changedElsewhere }
             // A lost response must resume the same authorized checkpoint, not start another migration.
             if existing.migration?.reupload == true { return existing }
@@ -36,10 +56,7 @@ enum CloudMigration {
             header = try value.get()
         } catch let error as CKError where error.code == .unknownItem { header = nil }
         if let header, header["formatVersion"] as? Int64 == 2 {
-            guard let status = header["migrationState"] as? String, ["sealed", "committed"].contains(status) else {
-                throw CloudRecordError.inconsistentCloud("Unrecognized legacy migration marker")
-            }
-            return LegacyState(digest: header["digest"] as? String, committed: status == "committed")
+            return try legacyState(header)
         }
         if let header, header["formatVersion"] as? Int64 != 1 { throw CloudRecordError.unsupportedFormat(Int(header["formatVersion"] as? Int64 ?? -1)) }
         let record: CKRecord
@@ -61,7 +78,7 @@ enum CloudMigration {
         do { _ = try result.get() }
         catch let error as CKError where error.code == .serverRecordChanged { throw CloudRecordError.changedElsewhere }
         log.notice("Legacy cloud address sealed; retained snapshot: \(digest != nil, privacy: .public)")
-        return LegacyState(digest: digest, committed: false)
+        return try legacyState(record)
     }
 
     /// Mutates only the compatibility header. The retained asset and its business data are untouched.
@@ -74,9 +91,10 @@ enum CloudMigration {
         record["digest"] = digest
     }
 
-    static func legacySnapshot(in database: CKDatabase, expectedDigest: String?, account: String) async throws -> TaskBackup? {
+    static func legacySnapshot(in database: CKDatabase, expectedDigest: String?, account: String, migration: CloudCommitProtocol.Head? = nil) async throws -> TaskBackup? {
         let record = try await database.record(for: legacyID)
         guard record["formatVersion"] as? Int64 == 2, record["digest"] as? String == expectedDigest else { throw CloudRecordError.changedElsewhere }
+        if let migration, try legacyState(record).requiresReuploadConfirmation(for: migration) { throw CloudRecordError.cloudRemoved }
         guard let expectedDigest else {
             guard record["snapshot"] == nil else { throw CloudRecordError.inconsistentCloud("Unexpected legacy asset") }
             return nil

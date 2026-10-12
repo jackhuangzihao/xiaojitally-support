@@ -13,6 +13,7 @@ actor CloudKitRecordTransport: CloudRecordTransport {
         coordinator = CloudCommitTransport(store: CloudKitCommitStore(container: container, account: account), cacheURL: cache)
     }
     func fetch() async throws -> CloudState { try await coordinator.fetch() }
+    func performMaintenance() async { await coordinator.performMaintenance() }
     func allowReupload() async throws { try await coordinator.allowReupload() }
     func recoverMigration(with snapshot: TaskBackup, prepared: @Sendable (TaskBackup) async throws -> Void) async throws -> CloudState {
         try await coordinator.recoverMigration(with: snapshot, prepared: prepared)
@@ -43,6 +44,7 @@ actor CloudKitCommitStore: CloudCommitStore {
         if let head, [Int64(14), Int64(CloudCommitProtocol.format)].contains(head["format"] as? Int64 ?? -1) {
             let cursor = try Self.cursor(head)
             guard cursor.head.legacyDigest == legacy.digest else { throw CloudRecordError.inconsistentCloud("Legacy migration marker changed") }
+            if legacy.requiresReuploadConfirmation(for: cursor.head) { throw CloudRecordError.cloudRemoved }
             if head["format"] as? Int64 == 14 {
                 // Even an interrupted format-14 migration can upgrade; its seed is checked separately.
                 var value = cursor.head; value.maintenance = UUID()
@@ -55,7 +57,7 @@ actor CloudKitCommitStore: CloudCommitStore {
             return cursor
         }
         if let head, head["format"] as? Int64 != Int64(CloudRecordCodec.format) { throw CloudRecordError.unsupportedFormat(Int(head["format"] as? Int64 ?? -1)) }
-        if legacy.committed { throw CloudRecordError.cloudRemoved }
+        if legacy.committed || (head == nil && legacy.requiresReuploadConfirmation(for: nil)) { throw CloudRecordError.cloudRemoved }
         let round = head?["round"] as? Int64 ?? 0
         guard round >= 0, round < Int64.max else { throw CloudRecordError.inconsistentCloud("Invalid legacy round") }
         if head == nil {
@@ -82,7 +84,7 @@ actor CloudKitCommitStore: CloudCommitStore {
         guard let migration = cursor.head.migration else { throw CloudRecordError.inconsistentCloud("No migration source") }
         try await requireAccount()
         if migration.reupload == true { return .init(items: [:], exists: false) }
-        let legacy = try await CloudMigration.legacySnapshot(in: database, expectedDigest: migration.legacyDigest, account: account)
+        let legacy = try await CloudMigration.legacySnapshot(in: database, expectedDigest: migration.legacyDigest, account: account, migration: cursor.head)
         let rows = try await CloudLegacyReader(database: database).read()
         let current = try CloudMigration.completedRows(rows, previousRound: migration.previousRound, hadHead: migration.hadHead)
         if let current { try await CloudMigration.protect(current, account: account, source: "records") }
@@ -96,16 +98,15 @@ actor CloudKitCommitStore: CloudCommitStore {
     func prepareReupload() async throws {
         try await requireAccount()
         let existing = try await record(Self.headID)
-        if let existing {
-            try CloudMigration.validateReuploadHead(Self.cursor(existing).head)
-        } else {
+        let existingHead = try existing.map { try Self.cursor($0).head }
+        if existing == nil {
             let zone = CKRecordZone(zoneID: CloudKitRecordTransport.zoneID)
             let result = try await database.modifyRecordZones(saving: [zone], deleting: [])
             guard let saved = result.saveResults[zone.zoneID] else { throw CloudRecordError.inconsistentCloud("Missing zone result") }
             _ = try saved.get()
         }
         let legacy = try await CloudMigration.sealLegacy(in: database, account: account, authorize: { try await self.requireAccount() })
-        let value = try CloudMigration.reuploadHead(existing: existing.map { try Self.cursor($0).head }, legacyDigest: legacy.digest)
+        let value = try CloudMigration.reuploadHead(existing: existingHead, legacyDigest: legacy.digest, retiredLegacy: legacy)
         let head = try Self.setting(value, on: existing ?? CKRecord(recordType: "TallyHead", recordID: Self.headID))
         try await requireAccount()
         let result = try await database.modifyRecords(saving: [head], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)

@@ -27,7 +27,7 @@ enum CloudRecordError: LocalizedError, Equatable {
         case .migrationReview:
             L("新旧云端副本存在无法自动确认的差异，双方已保留。可先导出迁移副本核对；确认本机内容完整后，可在下方用本机副本完成升级。", "The cloud copies differ in ways that cannot be resolved automatically. Both are retained. Export the migration copies to review them; if this device has the complete data, use its copy below to finish the upgrade.")
         case .cloudRemoved:
-            L("已迁移的云端数据被移除，同步已暂停。本地数据已保留；请先备份并联系支持。", "Migrated cloud data was removed. Sync paused and local data is retained. Back up your data and contact support.")
+            L("无法确认当前云端副本，已暂停自动恢复。本地数据已保留；请先备份并核对本机内容，再用下方“用本机数据重新上传”恢复。", "The current cloud copy could not be confirmed, so automatic recovery is paused. Local data is retained. Back up and review this device’s contents, then use Re-upload local data below.")
         case .missingBlob:
             L("云端版本已变化，稍后会重新读取。未合并不完整数据，本机内容已保留。", "The cloud version changed and will be fetched again shortly. No incomplete data was merged; local data is retained.")
         case .changedElsewhere:
@@ -47,6 +47,8 @@ enum CloudRecordError: LocalizedError, Equatable {
 protocol CloudRecordTransport: Sendable {
     /// Downloads what changed since the last fetch and returns the complete cloud state.
     func fetch() async throws -> CloudState
+    /// Optional bounded upkeep; callers schedule it only after the local sync transaction completes.
+    func performMaintenance() async
     /// Called only after the user confirms replacing a removed cloud copy with this device's data.
     func allowReupload() async throws
     /// Only after explicit confirmation: replace a protected, unresolved migration with this device's contents.

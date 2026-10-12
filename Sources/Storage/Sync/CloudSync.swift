@@ -93,6 +93,9 @@ struct AutomaticSyncSummary: Equatable {
     @ObservationIgnored private var remoteCache: RemoteCache?
     /// One transport per iCloud account; its mirror file is keyed by a hash of the account.
     @ObservationIgnored private var transport: (account: String, value: any CloudRecordTransport)?
+    @ObservationIgnored private var maintenanceTask: Task<Void, Never>?
+    @ObservationIgnored private var maintenanceID: UUID?
+    @ObservationIgnored private var activeScenes = Set<UUID>()
     private var context: ModelContext? { (Store.recovery.container ?? originalContainer)?.mainContext }
     var summary: String {
         if !enabled { return L("仅保存在本机", "Stored on this device") }
@@ -104,10 +107,11 @@ struct AutomaticSyncSummary: Equatable {
     }
     func editing(_ began: Bool) {
         editors = max(0, editors + (began ? 1 : -1))
-        if began { generation += 1 }
+        if began { generation += 1; cancelMaintenance() }
         else if editors == 0 { localSaved() }
     }
     func attach(_ container: ModelContainer) {
+        cancelMaintenance()
         generation += 1; snapshotCache = nil; remoteCache = nil; automaticSummary = nil; clearReview()
         if let observer { NotificationCenter.default.removeObserver(observer) }
         originalContainer = container
@@ -120,6 +124,7 @@ struct AutomaticSyncSummary: Equatable {
         observer = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
+                self.cancelMaintenance()
                 self.generation += 1; self.snapshotCache = nil; self.remoteCache = nil; self.automaticSummary = nil; self.clearReview()
                 self.localSaved()
             }
@@ -133,6 +138,7 @@ struct AutomaticSyncSummary: Equatable {
     }
     func setEnabled(_ value: Bool) {
         guard let context else { return }
+        cancelMaintenance()
         do {
             try Store.recovery.requireWritable(context)
             let state = try state(context); state.enabled = value
@@ -145,6 +151,7 @@ struct AutomaticSyncSummary: Equatable {
     }
     func localSaved() {
         guard enabled, !applying else { return }
+        cancelMaintenance()
         if conflict, let snapshotCache, snapshotCache.revision != Store.revision {
             clearReview()
         }
@@ -154,6 +161,28 @@ struct AutomaticSyncSummary: Equatable {
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
             await sync()
+        }
+    }
+    func cancelMaintenance() {
+        maintenanceTask?.cancel()
+        maintenanceTask = nil
+        maintenanceID = nil
+    }
+    func setSceneActive(_ active: Bool, id: UUID) {
+        if active { activeScenes.insert(id) }
+        else { activeScenes.remove(id) }
+        if activeScenes.isEmpty { cancelMaintenance() }
+    }
+    private func scheduleMaintenance(using transport: any CloudRecordTransport) {
+        guard enabled, !activeScenes.isEmpty, !pendingSave, editors == 0,
+              Store.recovery.failure == nil, maintenanceTask == nil else { return }
+        let id = UUID()
+        maintenanceID = id
+        maintenanceTask = Task(priority: .utility) { [weak self] in
+            await transport.performMaintenance()
+            guard let self, self.maintenanceID == id else { return }
+            self.maintenanceTask = nil
+            self.maintenanceID = nil
         }
     }
     private func clearReview() {
@@ -252,8 +281,9 @@ struct AutomaticSyncSummary: Equatable {
             guard canContinue(ticket, in: context) else { return }
             // Only a complete committed cloud snapshot is eligible for the unchanged fast path.
             if cloudState.head != nil && localBytes == baseline && localBytes == remoteBytes && capturedRevision == Store.revision {
-                lastSync = Date(); detail = ""; clearReview()
+                lastSync = Date(); detail = ""; cloudRemoved = false; clearReview()
                 resolutionResult = "succeeded"
+                scheduleMaintenance(using: transport)
                 return
             }
             // A pending review must still observe another device's progress. Unchanged inputs keep the same sheet token.
@@ -336,6 +366,7 @@ struct AutomaticSyncSummary: Equatable {
             syncLog.notice("Sync committed; automatic field decisions: \(automaticTotal, privacy: .public)")
             resolutionResult = "succeeded"
             if finalBytes != localResultBytes { pendingSave = true; detail = L("新修改等待上传。", "New edits are waiting to upload.") }
+            scheduleMaintenance(using: transport)
         } catch is CancellationError {
             // Leaving the scene or replacing its store cancels work; it is not a sync failure.
             resolutionResult = "cancelled"
@@ -387,6 +418,7 @@ struct AutomaticSyncSummary: Equatable {
     /// and uploads this device's data as the new cloud copy. Other devices then merge into it as usual.
     func reuploadLocalData() async {
         guard enabled, cloudRemoved, !running, editors == 0, let context, !context.hasChanges else { return }
+        cancelMaintenance()
         let ticket = generation
         do {
             running = true
@@ -429,6 +461,7 @@ struct AutomaticSyncSummary: Equatable {
     /// The adapter protects both cloud sources and conditionally publishes against the reviewed migration head.
     func recoverMigrationWithLocalData() async {
         guard enabled, migrationReview, !running, editors == 0, let context, !context.hasChanges else { return }
+        cancelMaintenance()
         let ticket = generation
         running = true
         defer {

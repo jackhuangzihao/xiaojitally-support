@@ -161,11 +161,13 @@ actor CloudCommitTransport: CloudRecordTransport {
     private var cacheLoaded = false
     private var blobs: [String: Data] = [:]
     private var nextMaintenanceAttempt: ContinuousClock.Instant?
+    private var maintenanceTask: Task<CloudCommitProtocol.Cursor, Error>?
     private struct Cache: Codable { let format: Int; let blobs: [String: Data] }
 
     init(store: any CloudCommitStore, cacheURL: URL? = nil) { self.store = store; self.cacheURL = cacheURL }
 
     func allowReupload() async throws {
+        maintenanceTask?.cancel()
         guard !busy else { throw CloudRecordError.changedElsewhere }
         busy = true; defer { busy = false }
         try await store.prepareReupload()
@@ -174,6 +176,7 @@ actor CloudCommitTransport: CloudRecordTransport {
     }
 
     func recoverMigration(with local: TaskBackup, prepared: @Sendable (TaskBackup) async throws -> Void) async throws -> CloudState {
+        maintenanceTask?.cancel()
         guard !busy else { throw CloudRecordError.changedElsewhere }
         busy = true; defer { busy = false }
         let (expected, seed) = try await store.prepareMigrationRecovery(local)
@@ -226,7 +229,6 @@ actor CloudCommitTransport: CloudRecordTransport {
         }
         if cursor?.head == next.head, state.head != nil {
             cursor = next
-            await maintainCloud()
             return state
         }
         try await load(next.head.pages)
@@ -242,11 +244,11 @@ actor CloudCommitTransport: CloudRecordTransport {
         let retained = Set(next.head.pages).union(references.map(\.blob))
         blobs = blobs.filter { retained.contains($0.key) }
         persistCache()
-        await maintainCloud()
         return state
     }
 
     func save(_ changes: [String: CloudItem], round: Int64) async throws -> CloudState {
+        maintenanceTask?.cancel()
         guard !busy, let expected = cursor else { throw CloudRecordError.changedElsewhere }
         busy = true; defer { busy = false }
         guard expected.head.round < Int64.max, round == expected.head.round + 1 else { throw CloudRecordError.changedElsewhere }
@@ -258,21 +260,35 @@ actor CloudCommitTransport: CloudRecordTransport {
         cursor = saved
         state = CloudState(items: target, head: CloudHead(round: round, format: CloudCommitProtocol.format), generation: state.generation + 1)
         blobs = plan.blobs; persistCache()
-        await maintainCloud()
         return state
     }
 
-    private func maintainCloud() async {
+    func performMaintenance() async {
         let now = Date()
         let retryClock = ContinuousClock().now
-        guard let expected = cursor, CloudRetention.isDue(expected.head, now: now),
+        guard !Task.isCancelled, !busy, maintenanceTask == nil,
+              let expected = cursor, CloudRetention.isDue(expected.head, now: now),
               nextMaintenanceAttempt.map({ retryClock >= $0 }) ?? true else { return }
         nextMaintenanceAttempt = retryClock.advanced(by: .seconds(300))
+        let store = self.store
+        // Reads may overlap inventory scans; edits cancel maintenance without waiting for it.
+        let work = Task { try await CloudRetention.collect(store: store, cursor: expected) }
+        maintenanceTask = work
+        defer { maintenanceTask = nil }
         do {
-            cursor = try await CloudRetention.collect(store: store, cursor: expected)
-            nextMaintenanceAttempt = nil
+            let updated = try await withTaskCancellationHandler {
+                try await work.value
+            } onCancel: { work.cancel() }
+            // A late completion must never restore a cursor superseded by a foreground fetch or save.
+            guard !Task.isCancelled, !work.isCancelled, !busy, cursor == expected else { return }
+            cursor = updated
+            nextMaintenanceAttempt = CloudRetention.isDue(updated.head)
+                ? ContinuousClock().now.advanced(by: .seconds(30)) : nil
         }
-        catch { // A published business save stays successful even if optional maintenance fails.
+        catch is CancellationError {
+            CloudMigration.log.debug("Cloud collection yielded to editing or an inactive scene")
+        }
+        catch {
             CloudMigration.log.notice("Cloud collection deferred; local and committed data retained")
         }
     }

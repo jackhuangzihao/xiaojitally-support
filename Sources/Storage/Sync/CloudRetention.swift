@@ -13,9 +13,9 @@ enum CloudRetention {
         return now.timeIntervalSince(date) >= 86_400 || date.timeIntervalSince(now) > 300
     }
 
-    static func collect(store: any CloudCommitStore, cursor: CloudCommitProtocol.Cursor) async throws -> CloudCommitProtocol.Cursor {
+    static func collect(store: any CloudCommitStore, cursor: CloudCommitProtocol.Cursor, maximumBatches: Int = 2) async throws -> CloudCommitProtocol.Cursor {
         try CloudCommitProtocol.validate(cursor.head)
-        guard cursor.head.migration == nil else { throw CloudRecordError.changedElsewhere }
+        guard cursor.head.migration == nil, maximumBatches > 0 else { throw CloudRecordError.changedElsewhere }
         let roots = [cursor.head.pages] + (cursor.head.history ?? [])
         let pages = Set(roots.flatMap { $0 }).sorted()
         var data: [String: Data] = [:]
@@ -39,16 +39,19 @@ enum CloudRetention {
             .filter { CloudCommitProtocol.validName($0) && !retained.contains($0) }.sorted()
         var expected = cursor
         let batchSize = CloudCommitProtocol.batchSize - 1 // One slot is reserved for the head CAS.
-        for offset in stride(from: 0, to: candidates.count, by: batchSize) {
+        var removed = 0
+        for (batch, offset) in stride(from: 0, to: candidates.count, by: batchSize).enumerated() {
+            guard batch < maximumBatches else { break }
             try Task.checkCancellation()
             let names = Array(candidates.dropFirst(offset).prefix(batchSize))
             expected = try await store.collect(names, replacing: expected, finishing: offset + names.count == candidates.count)
+            removed += names.count
         }
         if candidates.isEmpty {
             try Task.checkCancellation()
             expected = try await store.collect([], replacing: expected, finishing: true)
         }
-        CloudMigration.log.notice("Cloud collection completed; retired records: \(candidates.count, privacy: .public)")
+        CloudMigration.log.notice("Cloud collection pass; retired records: \(removed, privacy: .public), remaining candidates: \(candidates.count - removed, privacy: .public)")
         return expected
     }
 
