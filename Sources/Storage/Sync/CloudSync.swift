@@ -56,6 +56,7 @@ struct AutomaticSyncSummary: Equatable {
     private(set) var accountChanged = false
     /// The cloud copy this device synced with is gone (e.g. deleted in iCloud settings). Sync waits for the user.
     private(set) var cloudRemoved = false
+    private(set) var migrationReview = false
     private var originalContainer: ModelContainer?
     private var debounce: Task<Void, Never>?
     private var generation = 0
@@ -97,6 +98,7 @@ struct AutomaticSyncSummary: Equatable {
         if !enabled { return L("仅保存在本机", "Stored on this device") }
         if running { return L("正在同步 iCloud…", "Syncing with iCloud…") }
         if conflict { return L("iCloud · 需要处理同步冲突", "iCloud · Review sync conflicts") }
+        if migrationReview { return L("iCloud · 需要核对升级副本", "iCloud · Review upgrade copies") }
         if !detail.isEmpty { return L("iCloud · 等待同步", "iCloud · Sync pending") }
         return L("iCloud 同步已开启", "iCloud sync enabled")
     }
@@ -155,6 +157,7 @@ struct AutomaticSyncSummary: Equatable {
         }
     }
     private func clearReview() {
+        migrationReview = false
         conflict = false; conflictLocal = nil; conflictCloud = nil; conflictBaseline = nil; conflictEvaluationDate = nil
         conflictItems = []; conflictWarning = nil; conflictSelections = [:]
     }
@@ -341,6 +344,7 @@ struct AutomaticSyncSummary: Equatable {
             if ticket == generation && !Task.isCancelled {
                 resolutionResult = "failed"
                 if error as? CloudRecordError == .cloudRemoved { cloudRemoved = true }
+                if error as? CloudRecordError == .migrationReview { migrationReview = true }
                 retryAfter = Self.retryDate(error)
                 detail = Self.message(error)
                 // Another device saved first: merge its changes again soon instead of waiting for the next poll.
@@ -421,6 +425,63 @@ struct AutomaticSyncSummary: Equatable {
             throw TaskBackup.invalid(L("尚无迁移恢复副本。", "No migration recovery copy yet."))
         }
         return try await Task.detached { try CloudMigration.recoveryCopy(account: account, source: source) }.value
+    }
+    /// The adapter protects both cloud sources and conditionally publishes against the reviewed migration head.
+    func recoverMigrationWithLocalData() async {
+        guard enabled, migrationReview, !running, editors == 0, let context, !context.hasChanges else { return }
+        let ticket = generation
+        running = true
+        defer {
+            running = false
+            if pendingSave { pendingSave = false; localSaved() }
+        }
+        do {
+            try Store.recovery.requireWritable(context)
+            try await SyncChanges.prepareHistory(in: context)
+            guard canContinue(ticket, in: context) else { return }
+            let state = try state(context), account = state.account
+            guard !account.isEmpty else { throw CloudRecordError.changedElsewhere }
+            let local = try TaskBackup.capture(context), revision = Store.revision, contextID = ObjectIdentifier(context)
+            let container = CKContainer(identifier: Self.containerID)
+            guard try await container.userRecordID().recordName == account else { throw CloudRecordError.changedElsewhere }
+            guard canContinue(ticket, in: context), revision == Store.revision else { return }
+            _ = try await recordTransport(in: container, account: account).recoverMigration(with: local) { [weak self] recovered in
+                guard let self else { throw CancellationError() }
+                try await self.confirmMigrationHistory(recovered, matching: local, ticket: ticket,
+                    account: account, revision: revision, contextID: contextID)
+            }
+            // Later edits already descend from the confirmation. Normal sync advances the baseline without replacing them.
+            pendingSave = true
+            if context === self.context, state.account == account {
+                detail = ""; migrationReview = false; remoteCache = nil; retryAfter = nil
+            }
+            syncLog.notice("Cloud migration recovered with the confirmed local copy")
+        } catch {
+            if ticket == generation && !Task.isCancelled {
+                detail = Self.message(error)
+                if error as? CloudRecordError == .changedElsewhere { pendingSave = true }
+            }
+        }
+    }
+    private func confirmMigrationHistory(_ recovered: TaskBackup, matching local: TaskBackup, ticket: Int,
+                                         account: String, revision: Int, contextID: ObjectIdentifier) throws {
+        guard let context, ObjectIdentifier(context) == contextID, canContinue(ticket, in: context),
+              try state(context).account == account else { throw CloudRecordError.changedElsewhere }
+        applying = true
+        defer { applying = false }
+        try Self.prepareMigrationHistory(recovered, matching: local, revision: revision, in: context)
+        snapshotCache = nil; remoteCache = nil
+    }
+    /// Commit the user's choice before upload so subsequent edits inherit it, including after a crash or lost response.
+    static func prepareMigrationHistory(_ recovered: TaskBackup, matching local: TaskBackup, revision: Int, in context: ModelContext) throws {
+        guard revision == Store.revision, !context.hasChanges else { throw CloudRecordError.changedElsewhere }
+        guard try SyncChanges.fingerprints(recovered) == SyncChanges.fingerprints(local) else {
+            throw CloudRecordError.inconsistentCloud("Recovery changed local business contents")
+        }
+        try Store.discardingOnFailure(context) {
+            try SyncChanges.stage(recovered.syncChanges, in: context)
+            try Store.save(context, trackSyncChanges: false)
+        }
     }
     static func recoveryDirectory() throws -> URL {
         try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)

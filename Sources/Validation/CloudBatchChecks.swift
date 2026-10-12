@@ -17,6 +17,11 @@ private actor LimitedCommitStore: CloudCommitStore {
     func readHead() async throws -> CloudCommitProtocol.Cursor { await backing.readHead() }
     func prepareReupload() async throws { try await backing.prepareReupload() }
     func migrationSeed(_ cursor: CloudCommitProtocol.Cursor) async throws -> CloudCommitProtocol.Seed { try await backing.migrationSeed(cursor) }
+    func prepareMigrationRecovery(_ local: TaskBackup) async throws -> (CloudCommitProtocol.Cursor, CloudCommitProtocol.Seed) { try await backing.prepareMigrationRecovery(local) }
+    func immutableRecordNames() async throws -> [String] { await backing.immutableRecordNames() }
+    func collect(_ names: [String], replacing cursor: CloudCommitProtocol.Cursor, finishing: Bool) async throws -> CloudCommitProtocol.Cursor {
+        try await backing.collect(names, replacing: cursor, finishing: finishing)
+    }
     func readBlobs(_ names: [String]) async throws -> [String: Data] { try await backing.readBlobs(names) }
     func publish(_ value: CloudCommitProtocol.Head, replacing cursor: CloudCommitProtocol.Cursor) async throws -> CloudCommitProtocol.Cursor {
         try await backing.publish(value, replacing: cursor)

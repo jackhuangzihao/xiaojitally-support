@@ -14,6 +14,7 @@ enum CloudRecordError: LocalizedError, Equatable {
     case migrationIncomplete
     case migrationReview
     case cloudRemoved
+    case missingBlob
     /// Finished rounds that do not form a valid whole; usually another device's retry repairs it.
     case inconsistentCloud(String)
     case itemTooLarge(String)
@@ -24,9 +25,11 @@ enum CloudRecordError: LocalizedError, Equatable {
         case .migrationIncomplete:
             L("旧版云端上传尚未完成，已暂停迁移并保留本地数据。请先保留各设备备份并联系支持，不要清空数据。", "An old cloud upload is incomplete. Migration paused and local data is retained. Keep backups from each device and contact support; do not erase data.")
         case .migrationReview:
-            L("新旧云端副本存在差异，已保留迁移恢复副本，未覆盖任何一方。请在下方导出两份副本并联系支持。", "The old and new cloud copies differ. Migration recovery copies are retained; neither was overwritten. Export both copies below and contact support.")
+            L("新旧云端副本存在无法自动确认的差异，双方已保留。可先导出迁移副本核对；确认本机内容完整后，可在下方用本机副本完成升级。", "The cloud copies differ in ways that cannot be resolved automatically. Both are retained. Export the migration copies to review them; if this device has the complete data, use its copy below to finish the upgrade.")
         case .cloudRemoved:
             L("已迁移的云端数据被移除，同步已暂停。本地数据已保留；请先备份并联系支持。", "Migrated cloud data was removed. Sync paused and local data is retained. Back up your data and contact support.")
+        case .missingBlob:
+            L("云端版本已变化，稍后会重新读取。未合并不完整数据，本机内容已保留。", "The cloud version changed and will be fetched again shortly. No incomplete data was merged; local data is retained.")
         case .changedElsewhere:
             L("另一台设备刚刚更新了数据，稍后会重新合并。", "Another device just updated the data. Sync will merge again shortly.")
         case .inconsistentCloud(let reason):
@@ -46,6 +49,8 @@ protocol CloudRecordTransport: Sendable {
     func fetch() async throws -> CloudState
     /// Called only after the user confirms replacing a removed cloud copy with this device's data.
     func allowReupload() async throws
+    /// Only after explicit confirmation: replace a protected, unresolved migration with this device's contents.
+    func recoverMigration(with snapshot: TaskBackup, prepared: @Sendable (TaskBackup) async throws -> Void) async throws -> CloudState
     /// Prepares immutable versions, then conditionally publishes their complete manifest.
     /// Throws `CloudRecordError.changedElsewhere` if another device saved any of these records, or the head, first.
     func save(_ changes: [String: CloudItem], round: Int64) async throws -> CloudState

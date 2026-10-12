@@ -88,6 +88,9 @@ import CloudKit
         count += try await CloudCommitChecks.run(sample: sample)
         count += try await CloudBatchChecks.run(sample: sample)
         count += try await CloudReuploadChecks.run(sample: sample)
+        count += try CloudMigrationChecks.run(sample: sample)
+        count += try await CloudCommitChecks.recovery(sample: sample)
+        count += try await CloudRetentionChecks.run(sample: sample)
 
         // An atomic save rejects every record; the message must name the rejected one, not "batch request failed".
         let batch = CKError(.batchRequestFailed), rejected = CKError(.serverRejectedRequest)

@@ -11,11 +11,24 @@ actor FaultingCommitStore: CloudCommitStore {
     private var seed = CloudCommitProtocol.Seed(items: [:], exists: false)
     private var headExists = true
     private var legacyDigest: String?
+    private var migrationRecords: TaskBackup?
+    private var migrationLegacy: TaskBackup?
+    private(set) var preparations = 0
+    private(set) var preparedSnapshot: TaskBackup?
     private(set) var batches = 0
     private(set) var uploaded = 0
     private(set) var publications = 0
     func configure(_ value: Fault?) { fault = value; batches = 0; uploaded = 0 }
     func setSeed(_ value: CloudCommitProtocol.Seed) { seed = value }
+    func setMigrationSources(records: TaskBackup, legacy: TaskBackup) {
+        migrationRecords = records; migrationLegacy = legacy
+        head = .init(commit: UUID(), round: 1, pages: [], migration: .init(previousRound: 1, hadHead: true, legacyDigest: nil))
+        tag += 1
+    }
+    func recordPreparation(_ snapshot: TaskBackup) throws {
+        guard batches == 0 else { throw CloudRecordError.inconsistentCloud("Preparation happened after upload") }
+        preparations += 1; preparedSnapshot = snapshot
+    }
     func readHead() -> CloudCommitProtocol.Cursor { .init(head: head, tag: Data(String(tag).utf8)) }
     func prepareReupload() throws {
         let value = try CloudMigration.reuploadHead(existing: headExists ? head : nil, legacyDigest: legacyDigest)
@@ -24,12 +37,26 @@ actor FaultingCommitStore: CloudCommitStore {
         if case .afterReupload = fault { fault = nil; throw URLError(.networkConnectionLost) }
     }
     func migrationSeed(_ cursor: CloudCommitProtocol.Cursor) throws -> CloudCommitProtocol.Seed {
-        guard cursor == readHead() else { throw CloudRecordError.changedElsewhere }; return seed
+        guard cursor == readHead() else { throw CloudRecordError.changedElsewhere }
+        if let migrationRecords { return try CloudMigration.seed(records: migrationRecords, legacy: migrationLegacy) }
+        return seed
+    }
+    func prepareMigrationRecovery(_ local: TaskBackup) throws -> (CloudCommitProtocol.Cursor, CloudCommitProtocol.Seed) {
+        guard head.migration != nil else { throw CloudRecordError.changedElsewhere }
+        let records = try migrationRecords ?? CloudRecordCodec.snapshot(seed.items)
+        return (readHead(), try CloudMigration.recoverySeed(local: local, records: records, legacy: migrationLegacy))
+    }
+    func immutableRecordNames() -> [String] { Array(blobs.keys) }
+    func collect(_ names: [String], replacing cursor: CloudCommitProtocol.Cursor, finishing: Bool) throws -> CloudCommitProtocol.Cursor {
+        guard cursor == readHead() else { throw CloudRecordError.changedElsewhere }
+        head = try CloudRetention.checkpoint(cursor, finishing: finishing); tag += 1
+        for name in names { blobs[name] = nil }
+        return readHead()
     }
     func readBlobs(_ names: [String]) throws -> [String: Data] {
         var result: [String: Data] = [:]
         for name in names {
-            guard let data = blobs[name] else { throw CloudRecordError.inconsistentCloud("Missing test blob") }
+            guard let data = blobs[name] else { throw CloudRecordError.missingBlob }
             result[name] = data
         }
         return result
@@ -109,7 +136,7 @@ actor FaultingCommitStore: CloudCommitStore {
                 try check(empty.isEmpty, "new cloud is empty")
                 _ = try await sender.save(target, round: 1)
                 let reader = CloudCommitTransport(store: store), state = try await reader.fetch()
-                try check(state.items == target && state.head?.format == 14, "complete round trip \(repetition)/\(size)")
+                try check(state.items == target && state.head?.format == CloudCommitProtocol.format, "complete round trip \(repetition)/\(size)")
                 let generation = state.generation
                 try check(try await reader.fetch().generation == generation, "unchanged fetch preserves cache generation")
                 // Editing one item uploads its version and changed manifest pages, not every item again.
@@ -226,6 +253,86 @@ actor FaultingCommitStore: CloudCommitStore {
         let completed = try CloudMigration.completedRows(items.mapValues { ($0, Int64(1)) }, previousRound: 1, hadHead: true)
         try check(try completed.map { try CloudRecordCodec.items($0) } == items, "complete old record snapshot validates")
         print("CLOUD COMMIT PASS: \(count) checks; repeated batches, publication races, migration, corruption")
+        return count
+    }
+}
+
+extension CloudCommitChecks {
+    /// Exercises the real recovery coordinator, including the pre-upload confirmation callback.
+    static func recovery(sample: TaskBackup) async throws -> Int {
+        var count = 0
+        func check(_ value: Bool, _ label: String) throws {
+            guard value else { throw TaskBackup.invalid("CLOUD RECOVERY CHECK: " + label) }; count += 1
+        }
+        func rejects(_ label: String, _ operation: () async throws -> Void) async throws {
+            do { try await operation() } catch { count += 1; return }
+            throw TaskBackup.invalid("CLOUD RECOVERY CHECK: " + label)
+        }
+        func payloads(_ items: [String: CloudItem]) -> [String: Data] { items.compactMapValues(\.payload) }
+        var legacy = sample; legacy.tasks[0].title = "Untracked legacy fork"; legacy.syncChanges = nil
+        let localPayloads = payloads(try CloudRecordCodec.items(sample))
+        func fixture() async -> FaultingCommitStore {
+            let store = FaultingCommitStore()
+            await store.setMigrationSources(records: sample, legacy: legacy)
+            return store
+        }
+        for repetition in 0..<3 {
+            let refused = await fixture(), coordinator = CloudCommitTransport(store: refused)
+            do { _ = try await coordinator.fetch(); throw TaskBackup.invalid("Missing migration review") }
+            catch CloudRecordError.migrationReview { count += 1 }
+            try await rejects("cancelled confirmation uploads nothing") {
+                _ = try await coordinator.recoverMigration(with: sample) { _ in throw CancellationError() }
+            }
+            let rejectedCounts = await (refused.batches, refused.publications)
+            try check(rejectedCounts == (0, 0), "callback rejection has no upload or publication")
+            _ = try await coordinator.recoverMigration(with: sample) { try await refused.recordPreparation($0) }
+            let retriedCounts = await (refused.preparations, refused.publications)
+            try check(retriedCounts == (1, 1), "callback refusal releases coordinator for a successful retry")
+            let confirmed = await refused.preparedSnapshot!
+            try check(payloads(try CloudRecordCodec.items(confirmed)) == localPayloads, "callback confirms unchanged local contents before the first upload")
+
+            for fault in [FaultingCommitStore.Fault.beforeBatch(1), .afterBatch(1), .beforeHead, .cancelled, .denied] {
+                let store = await fixture(), writer = CloudCommitTransport(store: store)
+                await store.configure(fault)
+                try await rejects("interrupted recovery does not report success") {
+                    _ = try await writer.recoverMigration(with: sample) { try await store.recordPreparation($0) }
+                }
+                let interrupted = await (store.readHead().head.migration != nil, store.publications)
+                try check(interrupted == (true, 0), "partial recovery never becomes a readable commit")
+                try check(await store.preparations == 1, "confirmation precedes failing upload")
+                await store.configure(nil)
+                let saved = try await CloudCommitTransport(store: store).recoverMigration(with: sample) { try await store.recordPreparation($0) }
+                try check(payloads(saved.items) == localPayloads, "fresh coordinator retries confirmed local contents after interruption")
+                let fetched = try await CloudCommitTransport(store: store).fetch()
+                try check(fetched.items == saved.items && fetched.head?.round == 2, "cold reader sees the full recovered state")
+            }
+
+            let lost = await fixture()
+            await lost.configure(.afterHead)
+            let saved = try await CloudCommitTransport(store: lost).recoverMigration(with: sample) { try await lost.recordPreparation($0) }
+            let lostCounts = await (lost.publications, lost.preparations)
+            try check(lostCounts == (1, 1), "lost success response does not repeat publication")
+            let reader = CloudCommitTransport(store: lost)
+            try check(try await reader.fetch().items == saved.items, "restart after lost response reads completed recovery")
+            try await rejects("completed recovery cannot be overwritten by a repeated recovery request") {
+                _ = try await reader.recoverMigration(with: sample) { try await lost.recordPreparation($0) }
+            }
+            try check(await lost.publications == 1, "duplicate recovery leaves the committed head intact")
+
+            let racing = await fixture()
+            var other = sample; other.tasks[0].title = "Other confirmed device \(repetition)"
+            let otherCopy = other
+            try await rejects("another device publishes while this device prepares") {
+                _ = try await CloudCommitTransport(store: racing).recoverMigration(with: sample) { snapshot in
+                    try await racing.recordPreparation(snapshot)
+                    _ = try await CloudCommitTransport(store: racing).recoverMigration(with: otherCopy) { try await racing.recordPreparation($0) }
+                }
+            }
+            let winner = try await CloudCommitTransport(store: racing).fetch()
+            try check(payloads(winner.items) == payloads(try CloudRecordCodec.items(otherCopy)), "losing publisher cannot overwrite the winning device")
+            try check(await racing.publications == 1, "concurrent recovery publishes exactly one complete commit")
+        }
+        print("CLOUD RECOVERY PASS: \(count) checks; confirmation, interruption, restart and publication competition")
         return count
     }
 }

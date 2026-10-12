@@ -70,7 +70,8 @@ enum CloudMigration {
             throw CloudRecordError.changedElsewhere
         }
         record["formatVersion"] = Int64(2); record["migrationState"] = "sealed"
-        record["supersededBy"] = "Tally-commit14"; record["digest"] = digest
+        // The format fence blocks old writers; retain the original migration marker as evidence.
+        record["digest"] = digest
     }
 
     static func legacySnapshot(in database: CKDatabase, expectedDigest: String?, account: String) async throws -> TaskBackup? {
@@ -109,12 +110,35 @@ enum CloudMigration {
     static func seed(records: TaskBackup?, legacy: TaskBackup?) throws -> CloudCommitProtocol.Seed {
         if let records, let legacy {
             let current = try CloudRecordCodec.items(records), previous = try CloudRecordCodec.items(legacy)
-            // No shared migration baseline was stored by the old protocol. Do not guess which difference is newer.
-            guard current == previous else { throw CloudRecordError.migrationReview }
-            return .init(items: current, exists: true)
+            if current == previous { return .init(items: current, exists: true) }
+            let history = try SyncChanges.Resolution(local: records, cloud: legacy, base: nil)
+            for (key, old) in previous where old.payload != current[key]?.payload {
+                // A completed row must prove it has seen the old value; dates and supersededBy cannot prove that.
+                guard history.causalChoice(keys: [key]) == .local else { throw CloudRecordError.migrationReview }
+            }
+            var result = records
+            // Preserve equivalent values' histories and tombstones, even if the old source has extra metadata.
+            result.syncChanges = try history.revisions(for: result, acknowledging: true)
+            try result.validate()
+            return .init(items: try CloudRecordCodec.items(result), exists: true)
         }
         if let snapshot = records ?? legacy { return .init(items: try CloudRecordCodec.items(snapshot), exists: true) }
         return .init(items: [:], exists: false)
+    }
+
+    /// An explicit recovery chooses local contents and acknowledges both cloud histories, including removed rows.
+    static func recoverySeed(local: TaskBackup, records: TaskBackup, legacy: TaskBackup?) throws -> CloudCommitProtocol.Seed {
+        try local.validate(); try records.validate(); try legacy?.validate()
+        var result = local
+        for source in [Optional(records), legacy].compactMap({ $0 }) {
+            let history = try SyncChanges.Resolution(local: result, cloud: source, base: nil)
+            let keys = Set(history.local.keys).union(history.cloud.keys)
+                .union(history.localValues.keys).union(history.cloudValues.keys)
+            let confirmations = Dictionary(uniqueKeysWithValues: keys.map { ($0, Set(["*"])) })
+            result.syncChanges = try history.revisions(for: result, acknowledging: true, confirmations: confirmations)
+        }
+        try result.validate()
+        return .init(items: try CloudRecordCodec.items(result), exists: true)
     }
     private static func decode(_ record: CKRecord) async throws -> TaskBackup {
         guard let url = (record["snapshot"] as? CKAsset)?.fileURL else { throw CloudRecordError.inconsistentCloud("Missing legacy snapshot asset") }

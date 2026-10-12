@@ -67,6 +67,7 @@ struct CloudSyncSettings: View {
             if !sync.detail.isEmpty && !sync.conflict { Text(sync.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             if sync.enabled {
                 Button(L("立即同步", "Sync now")) { Task { await sync.sync() } }.disabled(sync.running)
+                if sync.migrationReview { MigrationRecoveryAction(sync: sync) }
                 if sync.cloudRemoved {
                     Button(L("用本机数据重新上传…", "Re-upload this device’s data…")) { confirmReupload = true }
                         .disabled(sync.running)
@@ -85,6 +86,7 @@ struct CloudSyncSettings: View {
                 Divider()
                 Button(L("迁移前的旧快照", "Old snapshot before migration")) { exportMigrationCopy(source: "snapshot") }
                 Button(L("迁移前的记录副本", "Record copy before migration")) { exportMigrationCopy(source: "records") }
+                Button(L("升级恢复前的本机副本", "Local copy before upgrade recovery")) { exportMigrationCopy(source: "local") }
                 Button(L("合并前的本机副本", "Local copy before merge")) { exportCopy(owner: "sync-local") }
                 Button(L("合并前的云端副本", "Cloud copy before merge")) { exportCopy(owner: "sync-cloud") }
             }
@@ -135,6 +137,23 @@ struct CloudSyncSettings: View {
                 document = BackupDocument(data: data); exportError = nil; export = true
             } catch { exportError = error.localizedDescription }
         }
+    }
+}
+
+private struct MigrationRecoveryAction: View {
+    let sync: CloudSync
+    @State private var confirm = false
+
+    var body: some View {
+        Button(L("用本机副本完成升级…", "Finish upgrade using this device…")) { confirm = true }
+            .disabled(sync.running)
+            .confirmationDialog(L("确认本机数据完整？", "Is this device’s data complete?"), isPresented: $confirm, titleVisibility: .visible) {
+                Button(L("保留本机内容并完成升级", "Keep this device’s data and finish upgrade")) {
+                    Task { await sync.recoverMigrationWithLocalData() }
+                }
+            } message: {
+                Text(L("这会将本机的任务、清单和账目作为新的云端副本，另一份副本独有的内容不会自动加入。操作前会保留本机及两份云端恢复副本。若不确定，请先取消并导出迁移副本核对。", "This device’s tasks, lists and finances become the cloud copy. Content found only in the other copies is not added automatically. Local and both cloud recovery copies are saved first. If unsure, cancel and export the migration copies to compare them."))
+            }
     }
 }
 

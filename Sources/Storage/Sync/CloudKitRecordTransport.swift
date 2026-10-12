@@ -9,11 +9,14 @@ actor CloudKitRecordTransport: CloudRecordTransport {
     init(container: CKContainer, account: String) throws {
         let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("JianshiSync", isDirectory: true)
-        let cache = directory.appendingPathComponent(CloudMerge.digest(Data(account.utf8)) + "-commit14.json")
+        let cache = directory.appendingPathComponent(CloudMerge.digest(Data(account.utf8)) + "-commit15.json")
         coordinator = CloudCommitTransport(store: CloudKitCommitStore(container: container, account: account), cacheURL: cache)
     }
     func fetch() async throws -> CloudState { try await coordinator.fetch() }
     func allowReupload() async throws { try await coordinator.allowReupload() }
+    func recoverMigration(with snapshot: TaskBackup, prepared: @Sendable (TaskBackup) async throws -> Void) async throws -> CloudState {
+        try await coordinator.recoverMigration(with: snapshot, prepared: prepared)
+    }
     func save(_ changes: [String: CloudItem], round: Int64) async throws -> CloudState { try await coordinator.save(changes, round: round) }
     static func rootFailure(_ failures: [Error]) -> Error? {
         failures.first { ($0 as? CKError)?.code != .batchRequestFailed } ?? failures.first
@@ -31,15 +34,24 @@ actor CloudKitCommitStore: CloudCommitStore {
         try await requireAccount()
         var head = try await record(Self.headID)
         if let head {
-            guard let format = head["format"] as? Int64, [Int64(CloudRecordCodec.format), Int64(CloudCommitProtocol.format)].contains(format) else {
+            guard let format = head["format"] as? Int64, [Int64(CloudRecordCodec.format), 14, Int64(CloudCommitProtocol.format)].contains(format) else {
                 throw CloudRecordError.unsupportedFormat(Int(head["format"] as? Int64 ?? -1))
             }
         }
         // Seal the legacy address even when a new head exists: supersededBy alone never fenced old clients.
         let legacy = try await CloudMigration.sealLegacy(in: database, account: account, authorize: { try await self.requireAccount() })
-        if let head, (head["format"] as? Int64) == Int64(CloudCommitProtocol.format) {
+        if let head, [Int64(14), Int64(CloudCommitProtocol.format)].contains(head["format"] as? Int64 ?? -1) {
             let cursor = try Self.cursor(head)
-            guard cursor.head.legacyDigest == legacy.digest else { throw CloudRecordError.migrationReview }
+            guard cursor.head.legacyDigest == legacy.digest else { throw CloudRecordError.inconsistentCloud("Legacy migration marker changed") }
+            if head["format"] as? Int64 == 14 {
+                // Even an interrupted format-14 migration can upgrade; its seed is checked separately.
+                var value = cursor.head; value.maintenance = UUID()
+                try await requireAccount()
+                let result = try await database.modifyRecords(saving: [try Self.setting(value, on: head)], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)
+                guard let saved = result.saveResults[Self.headID] else { throw CloudRecordError.inconsistentCloud("Missing protocol upgrade result") }
+                do { return try Self.cursor(saved.get()) }
+                catch let error as CKError where error.code == .serverRecordChanged { throw CloudRecordError.changedElsewhere }
+            }
             return cursor
         }
         if let head, head["format"] as? Int64 != Int64(CloudRecordCodec.format) { throw CloudRecordError.unsupportedFormat(Int(head["format"] as? Int64 ?? -1)) }
@@ -103,13 +115,61 @@ actor CloudKitCommitStore: CloudCommitStore {
         CloudMigration.log.notice("Re-upload checkpoint confirmed; resumed: \(existing != nil, privacy: .public)")
     }
 
+    func prepareMigrationRecovery(_ local: TaskBackup) async throws -> (CloudCommitProtocol.Cursor, CloudCommitProtocol.Seed) {
+        let expected = try await readHead()
+        guard let migration = expected.head.migration, migration.hadHead, migration.reupload != true else {
+            throw CloudRecordError.changedElsewhere
+        }
+        let legacy = try await CloudMigration.legacySnapshot(in: database, expectedDigest: migration.legacyDigest, account: account)
+        let rows = try await CloudLegacyReader(database: database).read()
+        guard let records = try CloudMigration.completedRows(rows, previousRound: migration.previousRound, hadHead: true) else {
+            throw CloudRecordError.migrationIncomplete
+        }
+        try await CloudMigration.protect(local, account: account, source: "local")
+        try await CloudMigration.protect(records, account: account, source: "records")
+        let seed = try CloudMigration.recoverySeed(local: local, records: records, legacy: legacy)
+        try await requireAccount()
+        guard let observed = try await record(Self.headID), try Self.cursor(observed) == expected else { throw CloudRecordError.changedElsewhere }
+        return (expected, seed)
+    }
+
+    func immutableRecordNames() async throws -> [String] {
+        try await requireAccount()
+        let names = try await CloudInventory.immutableRecordNames(in: database, zoneID: CloudKitRecordTransport.zoneID)
+        try await requireAccount()
+        return names
+    }
+
+    func collect(_ names: [String], replacing cursor: CloudCommitProtocol.Cursor, finishing: Bool) async throws -> CloudCommitProtocol.Cursor {
+        guard names.count < CloudCommitProtocol.batchSize, Set(names).count == names.count,
+              names.allSatisfy(CloudCommitProtocol.validName) else { throw CloudRecordError.inconsistentCloud("Invalid collection batch") }
+        let value = try CloudRetention.checkpoint(cursor, finishing: finishing)
+        let head = try Self.setting(value, on: Self.restore(cursor.tag))
+        let ids = names.map { CKRecord.ID(recordName: $0, zoneID: CloudKitRecordTransport.zoneID) }
+        try await requireAccount()
+        do {
+            // The CAS and deletes MUST share one atomic operation; a prior check cannot fence late writers.
+            let result = try await database.modifyRecords(saving: [head], deleting: ids, savePolicy: .ifServerRecordUnchanged, atomically: true)
+            guard let saved = result.saveResults[Self.headID] else { throw CloudRecordError.inconsistentCloud("Missing collection checkpoint") }
+            let next = try Self.cursor(saved.get())
+            for id in ids {
+                guard let deleted = result.deleteResults[id] else { throw CloudRecordError.inconsistentCloud("Missing deletion result") }
+                try deleted.get()
+            }
+            try await requireAccount()
+            return next
+        } catch let error as CKError where error.code == .serverRecordChanged { throw CloudRecordError.changedElsewhere }
+    }
+
     func readBlobs(_ names: [String]) async throws -> [String: Data] {
         let ids = names.map { CKRecord.ID(recordName: $0, zoneID: CloudKitRecordTransport.zoneID) }
         let records = try await database.records(for: ids, desiredKeys: ["bytes"])
         var values: [String: Data] = [:]
         for id in ids {
             guard let result = records[id] else { throw CloudRecordError.inconsistentCloud("Missing fetch result") }
-            let record = try result.get()
+            let record: CKRecord
+            do { record = try result.get() }
+            catch let error as CKError where error.code == .unknownItem { throw CloudRecordError.missingBlob }
             guard record.recordType == "TallyImmutable", let data = record.encryptedValues["bytes"] as? Data else {
                 throw CloudRecordError.inconsistentCloud("Invalid immutable record type")
             }
@@ -177,16 +237,20 @@ actor CloudKitCommitStore: CloudCommitStore {
         catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound { return nil }
     }
     private static func setting(_ value: CloudCommitProtocol.Head, on record: CKRecord) throws -> CKRecord {
+        try CloudCommitProtocol.validate(value)
+        let bytes = try CloudCommitProtocol.encode(value)
+        guard bytes.count <= CloudCommitProtocol.maximumBlobBytes else { throw CloudRecordError.itemTooLarge("manifest root") }
         record["format"] = Int64(CloudCommitProtocol.format); record["round"] = value.round
-        record.encryptedValues["commit"] = try CloudCommitProtocol.encode(value)
+        record.encryptedValues["commit"] = bytes
         return record
     }
     static func cursor(_ record: CKRecord) throws -> CloudCommitProtocol.Cursor {
-        guard record.recordID == headID, record.recordType == "TallyHead", record["format"] as? Int64 == Int64(CloudCommitProtocol.format),
+        guard record.recordID == headID, record.recordType == "TallyHead", [Int64(14), Int64(CloudCommitProtocol.format)].contains(record["format"] as? Int64 ?? -1),
               let data = record.encryptedValues["commit"] as? Data, data.count <= CloudCommitProtocol.maximumBlobBytes else {
             throw CloudRecordError.inconsistentCloud("Missing commit header")
         }
         let value = try JSONDecoder().decode(CloudCommitProtocol.Head.self, from: data)
+        try CloudCommitProtocol.validate(value)
         guard value.round >= 0, value.round < Int64.max, value.round == record["round"] as? Int64 else { throw CloudRecordError.inconsistentCloud("Invalid head round") }
         let coder = NSKeyedArchiver(requiringSecureCoding: true); record.encodeSystemFields(with: coder); coder.finishEncoding()
         return .init(head: value, tag: coder.encodedData)
