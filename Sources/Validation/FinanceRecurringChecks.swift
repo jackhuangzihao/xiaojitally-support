@@ -19,6 +19,69 @@ import Foundation
                     "a bill keeps the day of month and needs no planned amounts in the base currency")
         try ledger.addRecurring(bill)
 
+        for _ in 0..<3 {
+            var preview = ledger.recurringPreviews[0]
+            preview.amount = 3210; preview.accountAmount = 3210; preview.baseAmount = 3210
+            preview.notes = "Kept after recovery"
+            let occurrence = RecurringOccurrence(billID: bill.id, scheduled: bill.nextDate)
+            let draft = FinanceDraft(ledger: ledger, entry: preview, expected: nil, amount: "3210", actual: "3210",
+                received: "", fee: "", converted: "3210", convertedFee: "", balance: 0,
+                confirmingPending: true, occurrence: occurrence)
+            let request = draft.request
+            try require(request.occurrence?.billID == bill.id && request.occurrence?.scheduled == bill.nextDate
+                        && request.confirmingPending && request.expected == nil,
+                        "restoring a recurring editor preserves its occurrence and confirmation intent")
+            var restored = ledger
+            try request.apply(request.entry, to: &restored, baseCurrency: ledger.baseCurrency)
+            try require(restored.entries.count == 1 && restored.entries[0].amount == 3210
+                        && restored.entries[0].notes == preview.notes && !restored.entries[0].isPending
+                        && restored.recurringBill(bill.id)?.nextDate == day(2, 28),
+                        "a recovered recurring draft posts once with edits and advances exactly one period")
+            let once = restored
+            try rejects("repeating a recovered confirmation does not advance a second period") {
+                try request.apply(request.entry, to: &restored, baseCurrency: ledger.baseCurrency)
+            }
+            try require(restored == once, "duplicate confirmation leaves ledger unchanged")
+            for stopped in [false, true] {
+                var changed = ledger
+                if stopped { changed.stopRecurring(bill.id) }
+                else {
+                    var moved = bill; moved.reschedule(to: day(2, 10))
+                    try changed.updateRecurring(moved, expected: bill)
+                }
+                let before = changed
+                try rejects("a recovered draft refuses a removed or rescheduled rule") {
+                    try request.apply(request.entry, to: &changed, baseCurrency: ledger.baseCurrency)
+                }
+                try require(changed == before, "stale recurring drafts cannot create stray one-off entries")
+            }
+            var future = ledger
+            var futureBill = bill; futureBill.reschedule(to: day(1, 31, year: 2035))
+            try future.updateRecurring(futureBill, expected: bill)
+            var futureDraft = draft
+            futureDraft.entry = future.recurringPreviews[0]
+            futureDraft.occurrence = .init(billID: bill.id, scheduled: futureBill.nextDate)
+            try futureDraft.request.apply(futureDraft.entry, to: &future, baseCurrency: ledger.baseCurrency)
+            try require(future.entries.count == 1 && future.recurringBill(bill.id)?.nextDate == day(2, 28, year: 2035),
+                        "recovering an early confirmation keeps the explicitly chosen future occurrence")
+
+            var ordinary = ledger
+            var oneOff = rent; oneOff.pending = true
+            let create = EntryRequest(entry: oneOff, expected: nil)
+            try create.apply(oneOff, to: &ordinary, baseCurrency: ledger.baseCurrency)
+            let stored = ordinary.entries[0]
+            var ordinaryDraft = draft
+            ordinaryDraft.entry = stored; ordinaryDraft.expected = stored; ordinaryDraft.occurrence = nil
+            try ordinaryDraft.request.apply(stored, to: &ordinary, baseCurrency: ledger.baseCurrency)
+            try require(ordinary.entries.count == 1 && !ordinary.entries[0].isPending && ordinary.recurringBill(bill.id) == bill,
+                        "a recovered ordinary pending entry confirms without advancing an unrelated recurring bill")
+            var changedEntry = ordinary.entries[0]; changedEntry.title = "Edited receipt"
+            let edit = EntryRequest(entry: changedEntry, expected: ordinary.entries[0])
+            try edit.apply(changedEntry, to: &ordinary, baseCurrency: ledger.baseCurrency)
+            try require(ordinary.entries[0].title == "Edited receipt" && ordinary.entries.count == 1,
+                        "the shared request keeps normal existing-entry edits unchanged")
+        }
+
         // Only the rule is stored; the next occurrence is a preview.
         try require(ledger.entries.isEmpty, "creating a bill stores no entry")
         let preview = ledger.recurringPreviews.first

@@ -110,8 +110,12 @@ struct SyncVersion: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case clock, winner }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let counters = try? container.decode([String: UInt64].self, forKey: .clock), !counters.isEmpty { throw LegacyCounterFormat() }
-        clock = try container.decode([String: SyncStamp].self, forKey: .clock)
+        // Current histories contain this value on every field; avoid a failed legacy decode for each one.
+        do { clock = try container.decode([String: SyncStamp].self, forKey: .clock) }
+        catch {
+            if let counters = try? container.decode([String: UInt64].self, forKey: .clock), !counters.isEmpty { throw LegacyCounterFormat() }
+            throw error
+        }
         winner = try container.decode(Dot.self, forKey: .winner)
     }
 }

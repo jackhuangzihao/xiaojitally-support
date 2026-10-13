@@ -45,6 +45,7 @@ struct TaskEditor: View {
     @State var suggestionsClosedFor: String?
     @State var openPanel: Panel?
     @State var isSaving = false
+    @State var saveTask: Task<Void, Never>?
     @State var didFinishSaving = false
     @State var clockNow = Date()
     @State private var discardPrompt = false
@@ -253,6 +254,8 @@ struct TaskEditor: View {
                 Button(L("知道了", "OK"), role: .cancel) {}
             } message: { Text(errorMessage ?? "") }
         }
+        .overlay { if isSaving { ProgressView(L("正在保存…", "Saving…")).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+        .onDisappear { saveTask?.cancel() }
         .modifier(SaveRecoveryGuard())
         .modifier(CloudSyncEditingGuard())
         .environment(\.locale, UISettings.locale)

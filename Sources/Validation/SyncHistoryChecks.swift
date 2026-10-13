@@ -214,6 +214,99 @@ import CryptoKit
             try SyncChanges.stage(edited, in: context)
             try check(try state.changeHistory == encoder.encode(edited), "prepared legacy fragments encode the next edit correctly")
             context.rollback()
+
+            try evict()
+            var saves = 0
+            let returned = try await SyncChanges.withPreparedHistory(in: context) {
+                saves += 1
+                try SyncChanges.stage(edited, in: context)
+                try Store.save(context, trackSyncChanges: false)
+                return "committed"
+            }
+            try check(saves == 1 && returned == "committed" && !context.hasChanges && SyncChanges.read(context) == edited,
+                      "a cold user save prepares off actor and commits once with the same history")
+
+            try evict()
+            let cancelledSave = Task { try await SyncChanges.withPreparedHistory(in: context) { saves += 1 } }
+            cancelledSave.cancel()
+            do { try await cancelledSave.value } catch is CancellationError { }
+            try check(saves == 1 && SyncChanges.read(context) == edited, "cancelling a pending save never runs its commit")
+
+            try evict()
+            var beganSaving = false
+            let dismissedSave = Task {
+                beganSaving = true
+                try await SyncChanges.withPreparedHistory(in: context) { saves += 1 }
+            }
+            while !beganSaving { await Task.yield() }
+            dismissedSave.cancel()
+            do { try await dismissedSave.value } catch is CancellationError { }
+            try check(saves == 1 && SyncChanges.read(context) == edited,
+                      "dismissal while cold preparation is running cannot commit later")
+
+            try evict()
+            let saving = Task {
+                try await SyncChanges.withPreparedHistory(in: context) {
+                    let latest = try SyncChanges.read(context)
+                    try check(latest == revisions, "a concurrent change is rechecked before committing")
+                    saves += 1
+                }
+            }
+            await Task.yield()
+            try SyncChanges.stage(revisions, in: context); try Store.save(context, trackSyncChanges: false)
+            try await saving.value
+            try check(saves == 2 && SyncChanges.read(context) == revisions, "a stale preparation cannot overwrite a newer transaction")
+
+            try evict()
+            var saveFailed = false
+            do {
+                try await SyncChanges.withPreparedHistory(in: context) { throw TaskBackup.invalid("Injected commit failure") }
+            } catch { saveFailed = true }
+            try check(saveFailed && !context.hasChanges && SyncChanges.read(context) == revisions,
+                      "commit errors propagate without the preparation committing anything")
+
+            state.changeHistory = Data("{".utf8)
+            var corruptSaveFailed = false
+            do { try await SyncChanges.withPreparedHistory(in: context) { saves += 1 } }
+            catch { corruptSaveFailed = true }
+            try check(corruptSaveFailed && saves == 2, "corrupt history blocks a prepared save before its first mutation")
+            context.rollback()
+
+            var ledger = FinanceData.initial
+            var entry = ledger.newEntry(preferredBook: nil)
+            entry.title = "Original"; entry.amount = 10; entry.baseAmount = 10; entry.bookID = ledger.books[0].id
+            ledger.entries = [entry]
+            try FinanceStore.stage(ledger, in: context); try Store.save(context)
+            try evict()
+            var beganEditing = false
+            var proposed = entry; proposed.title = "Old editor"
+            let staleEditor = Task {
+                beganEditing = true
+                try await SyncChanges.withPreparedHistory(in: context) {
+                    try FinanceStore.put(proposed, expected: entry, baseCurrency: ledger.baseCurrency, in: context)
+                }
+            }
+            while !beganEditing { await Task.yield() }
+            try FinanceStore.update(context) { $0.entries[0].title = "Other window" }
+            var staleRejected = false
+            do { try await staleEditor.value } catch { staleRejected = true }
+            try check(staleRejected && FinanceStore.read(context)?.entries[0].title == "Other window" && !context.hasChanges,
+                      "a finance editor rechecks its original entry after waiting and preserves the other window's edit")
+
+            try evict()
+            var beganRecoverySave = false
+            let oldEditor = Task {
+                beganRecoverySave = true
+                try await SyncChanges.withPreparedHistory(in: context) { saves += 1 }
+            }
+            while !beganRecoverySave { await Task.yield() }
+            Store.recovery.failed(TaskBackup.invalid("Injected recovery while preparing"), in: context)
+            try check(Store.recovery.reload(), "the isolated store reopens after the injected failure")
+            var oldEditorRejected = false
+            do { try await oldEditor.value } catch { oldEditorRejected = true }
+            try check(oldEditorRejected && saves == 2, "recovery retires the waiting editor before it can commit")
+            try await SyncChanges.withPreparedHistory(in: Store.recovery.container!.mainContext) { saves += 1 }
+            try check(saves == 3, "the replacement context remains writable after recovery")
         }
         let empty = try Store.make(url: root.appendingPathComponent("empty.store"))
         try check(try await !SyncChanges.prepareHistory(in: empty.mainContext), "an empty store needs no preparation")

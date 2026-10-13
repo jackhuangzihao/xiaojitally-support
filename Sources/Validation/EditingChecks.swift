@@ -296,6 +296,49 @@ import AppKit
         try require(short.open.map(\.title) == ["Yesterday", "Today", "Tomorrow"] && short.done.map(\.title) == ["Done today"] && short.hidden == 3,
                     "The short link list keeps the tasks nearest today in date order and counts the rest")
         try require(TaskLinkOptions.shortList(([], []), now: now).hidden == 0, "An empty link list has nothing to show more of")
+        // The UI recovers the complete request after the old context is discarded.
+        let recoveryRoot = FileManager.default.temporaryDirectory.appendingPathComponent("Tally-RecurringDraft-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: recoveryRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: recoveryRoot) }
+        for round in 0..<3 {
+            let url = recoveryRoot.appendingPathComponent("draft-\(round).store")
+            let db = try Store.make(url: url), context = db.mainContext
+            var value = FinanceData.initial
+            let bank = MoneyAccount(name: "Recovery card", opening: 1000)
+            value.accounts = [bank]
+            var entry = value.newEntry(preferredBook: nil); entry.title = "Recurring recovery"; entry.amount = 10
+            entry.accountID = bank.id; entry.accountAmount = 10; entry.baseAmount = 10
+            entry.bookID = value.books[0].id
+            let bill = MoneyRecurring(repeating: entry, rule: "monthly", until: nil, in: value)
+            try value.addRecurring(bill)
+            try FinanceStore.stage(value, in: context); try Store.save(context)
+            let preview = value.recurringPreviews[0]
+            let kept = FinanceDraft(ledger: value, entry: preview, expected: nil, amount: "10", actual: "10", received: "",
+                fee: "", converted: "10", convertedFee: "", balance: 1000, confirmingPending: true,
+                occurrence: .init(billID: bill.id, scheduled: bill.nextDate))
+            try rejects("an interrupted recurring confirmation is reported") {
+                try Store.discardingOnFailure(context) {
+                    var proposed = try FinanceStore.read(context)!
+                    try kept.request.apply(kept.entry, to: &proposed, baseCurrency: kept.ledger.baseCurrency)
+                    try FinanceStore.stage(proposed, in: context)
+                    throw TaskBackup.invalid("Injected failure before committing occurrence and next date")
+                }
+            }
+            let reopened = try Store.make(url: url), fresh = reopened.mainContext
+            try require(FinanceStore.read(fresh) == value && !context.hasChanges,
+                        "failed staging leaves both ledger and next occurrence unchanged on disk")
+            try FinanceStore.update(fresh) {
+                try kept.request.apply(kept.entry, to: &$0, baseCurrency: kept.ledger.baseCurrency)
+            }
+            let verified = try Store.make(url: url)
+            let saved = try FinanceStore.read(verified.mainContext)!
+            try require(saved.entries.count == 1 && !saved.entries[0].isPending && saved.balance(bank.id) == 990
+                        && saved.recurringBill(bill.id)?.nextDate == bill.followingDate,
+                        "restored draft confirms once, advances the rule and persists the correct balance")
+            let snapshot = try TaskBackup.capture(verified.mainContext)
+            try require(try TaskBackup.decode(snapshot.encoded()).finance == saved,
+                        "recovered occurrence and next period survive the existing backup format")
+        }
         print("Editor checks passed: \(checks)")
         return checks
     }

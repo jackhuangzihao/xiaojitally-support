@@ -232,6 +232,20 @@ import SwiftData
                       "counter-vector versions from format 10 decode as unknown history")
             let empty = try JSONDecoder().decode(SyncVersion.self, from: Data(#"{"clock":{},"winner":{"actor":"x","stamp":[0,1]}}"#.utf8))
             try check(!empty.isValid, "an empty clock is never mistaken for a legacy counter version")
+            for clock in [
+                #"{"\#(a.uuidString)":[0,0],"\#(b.uuidString)":3}"#,
+                #"{"\#(a.uuidString)":[]}"#,
+                #"{"\#(a.uuidString)":[0,0,1]}"#,
+                #"{"\#(a.uuidString)":-1}"#,
+                #"{"\#(a.uuidString)":"invalid"}"#,
+                "null"
+            ] {
+                let json = #"{"date":0,"fingerprint":"\#(hash)","version":{"clock":\#(clock),"winner":{"actor":"\#(a.uuidString)","stamp":[0,0]}}}"#
+                var rejected = false
+                do { _ = try JSONDecoder().decode(SyncChanges.Revision.self, from: Data(json.utf8)) }
+                catch { rejected = true }
+                try check(rejected, "current-first decoding never drops a malformed or mixed version as legacy history")
+            }
         }
         // The review session's reference time must remain fixed across a delayed user confirmation.
         var original = TaskBackup.TaskRecord(TaskItem(title: "Legacy original")); original.createdAt = now

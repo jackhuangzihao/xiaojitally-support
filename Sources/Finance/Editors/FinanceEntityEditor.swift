@@ -37,6 +37,8 @@ struct FinanceEntityEditor: View {
     @State private var ready = false
     /// Set once a save has gone through and the sheet is closing; a second click in that moment must not save again.
     @State private var didSave = false
+    @State private var isSaving = false
+    @State private var saveTask: Task<Void, Never>?
     @FocusState private var textFocused: Bool
     let kind: FinanceEntityKind
     let id: UUID?
@@ -288,7 +290,13 @@ struct FinanceEntityEditor: View {
         .onChange(of: income) { _, _ in
             if let parentID, original.category(parentID)?.isIncome != income { self.parentID = nil }
         }
-        .onDisappear { if generation == Store.recovery.generation && Store.recovery.failure == nil { drafts.financeEntity = nil } }
+        .disabled(isSaving)
+        .interactiveDismissDisabled(isSaving)
+        .overlay { if isSaving { ProgressView(L("正在保存…", "Saving…")).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+        .onDisappear {
+            saveTask?.cancel()
+            if generation == Store.recovery.generation && Store.recovery.failure == nil { drafts.financeEntity = nil }
+        }
         .modifier(SaveRecoveryGuard())
         .modifier(CloudSyncEditingGuard())
     }
@@ -311,7 +319,19 @@ struct FinanceEntityEditor: View {
         } catch { self.error = error.localizedDescription }
     }
     private func save(confirmedOpening: Bool = false) {
-        guard !didSave else { return }
+        guard !didSave, !isSaving else { return }
+        keepEntityDraft()
+        isSaving = true
+        saveTask = Task { @MainActor in
+            defer { isSaving = false; saveTask = nil }
+            do {
+                try await SyncChanges.withPreparedHistory(in: context) { persist(confirmedOpening: confirmedOpening) }
+            } catch is CancellationError {
+                // A closed or replaced editor must not commit later.
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+    private func persist(confirmedOpening: Bool) {
         do {
             keepEntityDraft()
             let title = name.trimmingCharacters(in: .whitespacesAndNewlines)

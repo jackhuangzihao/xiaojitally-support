@@ -67,7 +67,7 @@ extension TaskEditor {
     func save() {
         guard !isSaving, !didFinishSaving else { return }
         isSaving = true
-        Task { await persist(); if !didFinishSaving { isSaving = false } }
+        saveTask = Task { await persist(); if !didFinishSaving { isSaving = false }; saveTask = nil }
     }
 
     @MainActor private func persist() async {
@@ -110,7 +110,16 @@ extension TaskEditor {
                 }
             } catch { errorMessage = error.localizedDescription; return }
         }
-        guard (try? Store.recovery.requireWritable(context)) != nil else { return }
+        do {
+            try await SyncChanges.withPreparedHistory(in: context) {
+                commit(cleanTitle: cleanTitle, cleanSubtasks: cleanSubtasks, reminderAt: reminderAt)
+            }
+        } catch is CancellationError {
+            // Recovery or dismissal cancels the pending edit.
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func commit(cleanTitle: String, cleanSubtasks: [Subtask], reminderAt: Date?) {
         // Authorizing notifications can suspend this editor while another window saves.
         // Recheck immediately before the first mutation, without an await between check and save.
         let existing: TaskItem?, selectedList: TaskList?

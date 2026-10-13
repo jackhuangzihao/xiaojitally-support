@@ -61,6 +61,33 @@ extension SelfCheck {
         try measure("edit one of 5000 money entries, cold sync-history cache") {
             try FinanceStore.update(context) { $0.entries[0].notes = "Cold cache edit" }
         }
+        for round in 1...3 {
+            try SyncChanges.stage([evictionKey: .init(date: day, fingerprint: try SyncChanges.fingerprint("Evict \(round)"))], in: evictionStore.mainContext)
+            try Store.save(evictionStore.mainContext, trackSyncChanges: false)
+            var ticks = 0, maximumGap = 0.0
+            let heartbeat = Task { @MainActor in
+                var previous = ProcessInfo.processInfo.systemUptime
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .milliseconds(5)) } catch { return }
+                    let now = ProcessInfo.processInfo.systemUptime
+                    maximumGap = max(maximumGap, now - previous); previous = now; ticks += 1
+                }
+            }
+            let start = ProcessInfo.processInfo.systemUptime
+            try await SyncChanges.withPreparedHistory(in: context) {
+                try measure("prepared foreground commit, round \(round)") {
+                    try FinanceStore.update(context) { $0.entries[0].notes = "Responsive cold save \(round)" }
+                }
+            }
+            let elapsed = ProcessInfo.processInfo.systemUptime - start
+            try await Task.sleep(for: .milliseconds(10))
+            heartbeat.cancel(); await heartbeat.value
+            guard ticks > 1, try FinanceStore.read(context)?.entries[0].notes == "Responsive cold save \(round)" else {
+                throw TaskBackup.invalid("Cold save blocked the main actor or lost the edit")
+            }
+            print(String(format: "PERF prepared cold save round %d: total %.1f ms; main-actor maximum gap %.1f ms; heartbeat %d ticks",
+                         round, elapsed * 1000, maximumGap * 1000, ticks))
+        }
         try SyncChanges.stage([evictionKey: .init(date: day, fingerprint: try SyncChanges.fingerprint("Second cache eviction"))], in: evictionStore.mainContext)
         try Store.save(evictionStore.mainContext, trackSyncChanges: false)
         let preparationStart = ProcessInfo.processInfo.systemUptime

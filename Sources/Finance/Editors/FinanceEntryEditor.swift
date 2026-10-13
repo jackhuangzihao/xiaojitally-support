@@ -16,6 +16,15 @@ struct EntryRequest: Identifiable {
     /// Set when confirming a recurring bill's occurrence, which is not stored until it is confirmed.
     var occurrence: RecurringOccurrence? = nil
     var id: UUID { entry.id }
+
+    func apply(_ value: MoneyEntry, to ledger: inout FinanceData, baseCurrency: String, referenceRates: [MoneyRate] = []) throws {
+        if let occurrence {
+            try ledger.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, entry: value)
+        } else {
+            try ledger.updateEntry(value, expected: expected, baseCurrency: baseCurrency, referenceRates: referenceRates)
+            if confirmingPending { try ledger.confirmPending(value) }
+        }
+    }
 }
 
 struct FinanceDraft {
@@ -26,8 +35,13 @@ struct FinanceDraft {
     var balance: Decimal
     var expression: String? = nil
     var confirmingPending = false
+    var occurrence: RecurringOccurrence? = nil
     var repeatRule = "none"
     var repeatUntil: Date? = nil
+
+    var request: EntryRequest {
+        EntryRequest(entry: entry, expected: expected, confirmingPending: confirmingPending, occurrence: occurrence)
+    }
 }
 
 /// Native amount editing, with an optional calculator and contextual advanced fields.
@@ -65,6 +79,8 @@ struct FinanceEntryEditor: View {
     @State private var error: String?
     /// Set once a save has gone through and the sheet is closing; a second click in that moment must not save again.
     @State private var didSave = false
+    @State private var isSaving = false
+    @State private var saveTask: Task<Void, Never>?
     @State private var notice: String?
     @State private var rates: [MoneyRate] = []
     @AppStorage("moneyAutoRates") private var automaticRates = true
@@ -196,7 +212,9 @@ struct FinanceEntryEditor: View {
         #if os(macOS)
         .defaultFocus($focus, .amount)
         #endif
-        .interactiveDismissDisabled(dirty)
+        .disabled(isSaving)
+        .overlay { if isSaving { ProgressView(L("正在保存…", "Saving…")).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+        .interactiveDismissDisabled(dirty || isSaving)
         .confirmationDialog(L("放弃未保存的修改？", "Discard unsaved changes?"), isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button(L("放弃修改", "Discard changes"), role: .destructive) { dismiss() }
             Button(L("继续编辑", "Keep editing"), role: .cancel) {}
@@ -224,7 +242,10 @@ struct FinanceEntryEditor: View {
         }
         .onChange(of: records.first?.payload) { _, _ in reload() }
         .onChange(of: fingerprint) { _, _ in if loaded { keepDraft() } }
-        .onDisappear { if generation == Store.recovery.generation && Store.recovery.failure == nil { drafts.finance = nil } }
+        .onDisappear {
+            saveTask?.cancel()
+            if generation == Store.recovery.generation && Store.recovery.failure == nil { drafts.finance = nil }
+        }
         .task(id: rateQuery) {
             if loaded && (expected == nil || confirmingPending) && needsRate && automaticRates { await fetchAndFillRates() }
         }
@@ -790,7 +811,7 @@ struct FinanceEntryEditor: View {
     }
     private func keepDraft() {
         drafts.finance = FinanceDraft(ledger: ledger, entry: draft, expected: expected, amount: amount, actual: actual, received: received, fee: fee, converted: converted, convertedFee: convertedFee, balance: initialBalance, expression: expression, confirmingPending: confirmingPending,
-                                     repeatRule: repeatRule, repeatUntil: repeatUntil)
+                                     occurrence: occurrence, repeatRule: repeatRule, repeatUntil: repeatUntil)
     }
     private func preparedEntry() throws -> MoneyEntry {
         guard !amount.isEmpty, (try? Money.parse(amount, currency: draft.currency, signed: signedAmount)).map({ $0 != 0 || draft.kind == .adjustment }) == true else {
@@ -823,43 +844,46 @@ struct FinanceEntryEditor: View {
         return e
     }
     private func save(again: Bool = false) {
-        guard !didSave else { return }
-        do {
-            keepDraft()
-            let e = try preparedEntry()
-            try TaskLinkRule.check(newTaskID: e.taskID, previousTaskID: expected?.taskID) { id in
-                tasks.contains { $0.id == id && $0.deletedAt == nil }
+        guard !didSave, !isSaving else { return }
+        keepDraft()
+        isSaving = true
+        saveTask = Task { @MainActor in
+            defer { isSaving = false; saveTask = nil }
+            do {
+                try await SyncChanges.withPreparedHistory(in: context) { try persist(again: again) }
+            } catch is CancellationError {
+                // Dismissal or recovery cancels the unsaved operation.
+            } catch {
+                Self.postingLog.error("Entry save failed: \(error.localizedDescription, privacy: .private)")
+                self.error = error.localizedDescription; notice = nil
             }
-            if repeating {
-                // Only the rule is saved; its first occurrence (this date) appears in Pending as a preview.
-                let bill = MoneyRecurring(repeating: e, rule: repeatRule, until: repeatUntil, in: ledger)
-                try FinanceStore.update(context) { value in
-                    try value.requireEntryCurrencies(e, from: ledger)
-                    try value.addRecurring(bill)
-                }
-                Self.postingLog.info("Recurring bill created; rule=\(bill.rule, privacy: .public)")
-            } else if let occurrence {
-                try FinanceStore.update(context) { value in
-                    try value.requireEntryCurrencies(e, from: ledger)
-                    try value.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, entry: e)
-                }
-                Self.postingLog.info("Recurring occurrence confirmed with changes")
-            } else {
-                try FinanceStore.update(context) { value in
-                    try value.requireEntryCurrencies(e, from: ledger)
-                    try value.updateEntry(e, expected: expected, baseCurrency: ledger.baseCurrency, referenceRates: rates)
-                    if confirmingPending { try value.confirmPending(e) }
-                }
-                Self.postingLog.info("Entry save completed; pending=\(e.isPending && !confirmingPending), confirmation=\(confirmingPending)")
-            }
-            if let id = e.bookID { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyBook") }
-            if e.kind == .expense || e.kind == .income { UserDefaults.standard.set(e.accountID?.uuidString ?? "none", forKey: "lastMoneyAccount") }
-            if let id = e.categoryID, e.kind == .expense || e.kind == .income { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyCategory." + (e.kind == .income ? "income" : "expense")) }
-            if again { startAnother(after: e) } else { didSave = true; dismiss() }
-        } catch {
-            Self.postingLog.error("Entry save failed: \(error.localizedDescription, privacy: .private)")
-            self.error = error.localizedDescription; notice = nil
         }
+    }
+    private func persist(again: Bool) throws {
+        let e = try preparedEntry()
+        try TaskLinkRule.check(newTaskID: e.taskID, previousTaskID: expected?.taskID) { id in
+            tasks.contains { $0.id == id && $0.deletedAt == nil }
+        }
+        if repeating {
+            // Only the rule is saved; its first occurrence (this date) appears in Pending as a preview.
+            let bill = MoneyRecurring(repeating: e, rule: repeatRule, until: repeatUntil, in: ledger)
+            try FinanceStore.update(context) { value in
+                try value.requireEntryCurrencies(e, from: ledger)
+                try value.addRecurring(bill)
+            }
+            Self.postingLog.info("Recurring bill created; rule=\(bill.rule, privacy: .public)")
+        } else {
+            let request = EntryRequest(entry: draft, expected: expected, confirmingPending: confirmingPending, occurrence: occurrence)
+            try FinanceStore.update(context) { value in
+                try value.requireEntryCurrencies(e, from: ledger)
+                try request.apply(e, to: &value, baseCurrency: ledger.baseCurrency, referenceRates: rates)
+            }
+            Self.postingLog.info("Entry save completed; pending=\(e.isPending && !confirmingPending), confirmation=\(confirmingPending), recurring=\(occurrence != nil)")
+        }
+        if let id = e.bookID { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyBook") }
+        if e.kind == .expense || e.kind == .income { UserDefaults.standard.set(e.accountID?.uuidString ?? "none", forKey: "lastMoneyAccount") }
+        if let id = e.categoryID, e.kind == .expense || e.kind == .income { UserDefaults.standard.set(id.uuidString, forKey: "lastMoneyCategory." + (e.kind == .income ? "income" : "expense")) }
+        if again { startAnother(after: e) } else { didSave = true; dismiss() }
     }
     /// Keeps kind, category, account, book, currency and day, so a run of receipts is only amounts.
     private func startAnother(after saved: MoneyEntry) {

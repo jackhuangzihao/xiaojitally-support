@@ -288,7 +288,7 @@ struct FinanceHome: View {
         #endif
         .task(id: records.first?.payload) { reload() }
         .onAppear {
-            if let kept = drafts.finance { editor = EntryRequest(entry: kept.entry, expected: kept.expected, confirmingPending: kept.confirmingPending) }
+            if let kept = drafts.finance { editor = kept.request }
             else if let kept = drafts.financeEntity { entity = EntityRequest(kind: kept.kind, existingID: kept.id, income: kept.income) }
         }
         .onChange(of: presentationActive, initial: true) { _, active in

@@ -65,7 +65,28 @@ extension SyncChanges {
         if let preparation, preparation.contextID != ObjectIdentifier(context) { cancelHistoryPreparation() }
     }
 
-    /// Only copied bytes cross the actor boundary. Editing never waits for this optional preparation.
+    /// Wait off the main actor for cold decoding, then check and commit without another suspension.
+    /// A concurrent edit or recovery must never force a cold synchronous fallback or save stale data.
+    @MainActor static func withPreparedHistory<T>(in context: ModelContext, _ save: () throws -> T) async throws -> T {
+        for _ in 0..<3 {
+            try Task.checkCancellation()
+            try Store.recovery.requireWritable(context)
+            do { try await prepareHistory(in: context) }
+            catch is CancellationError {
+                try Task.checkCancellation()
+                continue // Another context superseded the optional worker, not this save.
+            }
+            try Task.checkCancellation()
+            try Store.recovery.requireWritable(context)
+            if let data = try state(context, create: false)?.changeHistory,
+               cached?.data != data || cached?.records == nil { continue }
+            return try save()
+        }
+        historyLog.notice("Save preparation changed repeatedly; kept the unsaved draft")
+        throw TaskBackup.invalid(L("数据仍在更新，修改尚未保存，请稍后再试。", "Data is still updating. Your changes have not been saved; try again shortly."))
+    }
+
+    /// Only copied bytes cross the actor boundary; startup warming and pending saves share this work.
     @MainActor @discardableResult static func prepareHistory(in context: ModelContext) async throws -> Bool {
         try Task.checkCancellation()
         invalidatePreparation(for: context)
