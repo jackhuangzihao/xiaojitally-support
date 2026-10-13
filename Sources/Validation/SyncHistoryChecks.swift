@@ -1,6 +1,9 @@
 import Foundation
 import SwiftData
 import CryptoKit
+#if os(macOS)
+import AppKit
+#endif
 
 @MainActor enum SyncHistoryChecks {
     static func run() throws -> Int {
@@ -111,6 +114,102 @@ import CryptoKit
             context.rollback()
             try check(try SyncChanges.read(context) == edited, "rollback after clearing restores committed records")
         }
+        return count
+    }
+
+    static func editorSaveLifecycle() async throws -> Int {
+        var count = 0
+        func check(_ value: Bool, _ label: String) throws {
+            guard value else { throw TaskBackup.invalid("EDITOR SAVE LIFECYCLE: " + label) }; count += 1
+        }
+        for _ in 0..<3 {
+            let saves = PendingEditorSaves()
+            try check(await saves.waitForCompletion(), "no saves require no wait")
+            let first = saves.begin(), second = saves.begin()
+            var started = false, finished = false
+            let waiter = Task { started = true; let result = await saves.waitForCompletion(); finished = true; return result }
+            while !started { await Task.yield() }
+            saves.finish(first, saved: true)
+            await Task.yield()
+            try check(!finished && saves.hasPending, "multiple windows wait until every save completes")
+            saves.finish(second, saved: false)
+            try check(await !waiter.value && !saves.hasPending, "failure or cancellation cancels the waiting quit")
+            let failed = saves.failureCount
+            saves.finish(second, saved: false)
+            try check(saves.failureCount == failed, "duplicate finish does not invent failures")
+            let retry = saves.begin()
+            started = false
+            let retryWaiter = Task { started = true; return await saves.waitForCompletion() }
+            while !started { await Task.yield() }
+            saves.finish(retry, saved: true)
+            // A new save starts before the suspended quit gets the main actor back.
+            let extra = saves.begin()
+            await Task.yield()
+            try check(saves.hasPending, "new saves join the same quit attempt")
+            saves.finish(extra, saved: true)
+            try check(await retryWaiter.value, "a successful retry is not poisoned by an earlier failed quit")
+            #if os(macOS)
+            let shared = PendingEditorSaves.shared
+            try check(!shared.hasPending, "termination probe begins without real saves")
+            try check(BackupTerminationDelegate().applicationShouldTerminate(NSApplication.shared) == .terminateNow,
+                      "the system-created delegate keeps normal idle termination")
+            var replies: [Bool] = []
+            let delegate = BackupTerminationDelegate(reply: { replies.append($0) })
+            let pending = shared.begin()
+            try check(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater,
+                      "normal quit waits even before the editor task starts")
+            try check(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater,
+                      "repeated quit requests do not create competing termination tasks")
+            await Task.yield()
+            try check(replies.isEmpty, "quit is not approved while save is pending")
+            shared.finish(pending, saved: false)
+            for _ in 0..<1000 where replies.isEmpty { await Task.yield() }
+            try check(replies == [false], "failed save keeps the app open exactly once")
+            let successful = shared.begin()
+            try check(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater, "quit can be retried")
+            await Task.yield()
+            shared.finish(successful, saved: true)
+            for _ in 0..<1000 where replies.count < 2 { await Task.yield() }
+            try check(replies == [false, true], "successful save permits quit after completion")
+            try check(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow, "idle app retains normal immediate quit")
+            let fastFailure = shared.begin()
+            try check(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater, "fast save still registers before quit")
+            shared.finish(fastFailure, saved: false)
+            for _ in 0..<1000 where replies.count < 3 { await Task.yield() }
+            try check(replies == [false, true, false], "a failure before the quit task starts still cancels termination")
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("Jianshi-Quit-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            for cancel in [false, true] {
+                let url = root.appendingPathComponent(cancel ? "cancel.store" : "commit.store")
+                let db = try Store.make(url: url), context = db.mainContext
+                let saveID = shared.begin()
+                var committed = false
+                let save = Task { @MainActor in
+                    defer { shared.finish(saveID, saved: committed) }
+                    try await SyncChanges.withPreparedHistory(in: context) {
+                        context.insert(TaskItem(title: "Quit boundary"))
+                        try Store.save(context)
+                        committed = true
+                    }
+                }
+                var approval: Bool?
+                let actual = BackupTerminationDelegate(reply: { approval = $0 })
+                try check(actual.applicationShouldTerminate(NSApplication.shared) == .terminateLater,
+                          "quit waits for an actual prepared database save")
+                if cancel { save.cancel() }
+                do { try await save.value }
+                catch is CancellationError { try check(cancel, "only the intentionally cancelled save throws cancellation") }
+                for _ in 0..<1000 where approval == nil { await Task.yield() }
+                try check(approval == !cancel && committed == !cancel, "quit approval follows the actual save result")
+                let reopened = try Store.make(url: url)
+                try check(try reopened.mainContext.fetchCount(FetchDescriptor<TaskItem>()) == (cancel ? 0 : 1),
+                          "reopening finds the complete save, or no change when interrupted before saving")
+            }
+
+            #endif
+        }
+        print("EDITOR SAVE LIFECYCLE PASS: \(count) checks")
         return count
     }
 
@@ -312,6 +411,42 @@ import CryptoKit
         try check(try await !SyncChanges.prepareHistory(in: empty.mainContext), "an empty store needs no preparation")
         try check(try empty.mainContext.fetch(FetchDescriptor<CloudSyncState>()).isEmpty && !empty.mainContext.hasChanges,
                   "preparation does not create a sync state in an empty store")
+        for round in 0..<3 {
+            let url = root.appendingPathComponent("save-failure-\(round).store")
+            let db = try Store.make(url: url), ctx = db.mainContext
+            var ledger = FinanceData.initial
+            let bank = MoneyAccount(name: "Recovery card", opening: 1000); ledger.accounts = [bank]
+            var seed = ledger.newEntry(preferredBook: nil)
+            seed.title = "Recovery monthly"; seed.amount = 10; seed.accountAmount = 10; seed.baseAmount = 10; seed.accountID = bank.id
+            seed.bookID = ledger.books[0].id
+            let bill = MoneyRecurring(repeating: seed, rule: "monthly", until: nil, in: ledger)
+            try ledger.addRecurring(bill)
+            try FinanceStore.stage(ledger, in: ctx); try Store.save(ctx)
+            let request = EntryRequest(entry: ledger.recurringPreviews[0], expected: nil, confirmingPending: true,
+                occurrence: .init(billID: bill.id, scheduled: bill.nextDate))
+            var proposed = ledger
+            try request.apply(request.entry, to: &proposed, baseCurrency: ledger.baseCurrency)
+            try FinanceStore.stage(proposed, in: ctx)
+            // Force a real Store.save error after staging: invalid history + a model change.
+            let state = try ctx.fetch(FetchDescriptor<CloudSyncState>()).first!
+            state.changeHistory = Data("{".utf8)
+            ctx.insert(TaskItem(title: "Injected failure trigger"))
+            var rejected = false
+            do { try Store.save(ctx) } catch { rejected = true }
+            try check(rejected && Store.recovery.failure != nil && !ctx.hasChanges, "real save error rolls back staged occurrence and history")
+            try check(Store.recovery.reload(), "failed store reopens")
+            let fresh = Store.recovery.container!.mainContext
+            try check(try FinanceStore.read(fresh) == ledger, "disk contains neither partial occurrence nor advanced date")
+            try await SyncChanges.withPreparedHistory(in: fresh) {
+                try FinanceStore.update(fresh) { try request.apply(request.entry, to: &$0, baseCurrency: ledger.baseCurrency) }
+            }
+            let reopened = try Store.make(url: url)
+            let saved = try FinanceStore.read(reopened.mainContext)!
+            try check(saved.entries.count == 1 && saved.balance(bank.id) == 990 && saved.recurringBill(bill.id)?.nextDate == bill.followingDate,
+                "failed save, recovery, retry and reopen produce one debit")
+            print("SAVE FAILURE RECOVERY PASS: round \(round + 1)")
+        }
+        _ = try await editorSaveLifecycle()
         print("BACKGROUND HISTORY PASS: \(count) checks")
         return count
     }

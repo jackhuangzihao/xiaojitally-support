@@ -67,7 +67,15 @@ extension TaskEditor {
     func save() {
         guard !isSaving, !didFinishSaving else { return }
         isSaving = true
-        saveTask = Task { await persist(); if !didFinishSaving { isSaving = false }; saveTask = nil }
+        let saveID = PendingEditorSaves.shared.begin()
+        saveTask = Task {
+            defer {
+                PendingEditorSaves.shared.finish(saveID, saved: didFinishSaving)
+                if !didFinishSaving { isSaving = false }
+                saveTask = nil
+            }
+            await persist()
+        }
     }
 
     @MainActor private func persist() async {

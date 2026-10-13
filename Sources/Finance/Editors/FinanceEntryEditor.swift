@@ -847,10 +847,16 @@ struct FinanceEntryEditor: View {
         guard !didSave, !isSaving else { return }
         keepDraft()
         isSaving = true
+        let saveID = PendingEditorSaves.shared.begin()
         saveTask = Task { @MainActor in
-            defer { isSaving = false; saveTask = nil }
+            var saved = false
+            defer {
+                PendingEditorSaves.shared.finish(saveID, saved: saved)
+                isSaving = false; saveTask = nil
+            }
             do {
                 try await SyncChanges.withPreparedHistory(in: context) { try persist(again: again) }
+                saved = true
             } catch is CancellationError {
                 // Dismissal or recovery cancels the unsaved operation.
             } catch {

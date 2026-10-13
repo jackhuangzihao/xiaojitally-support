@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import Observation
+import OSLog
 
 @MainActor @Observable final class EditorDrafts {
     var financeEntity: FinanceEntityDraft?
@@ -63,4 +64,31 @@ struct ListRequest: Identifiable {
     let id = UUID()
     var list: TaskList?
     var parentID: UUID?
+}
+
+/// Register before scheduling an editor task so normal quit cannot race its first suspension.
+@MainActor final class PendingEditorSaves {
+    static let shared = PendingEditorSaves()
+    private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tally", category: "EditorSave")
+    private var active: Set<UUID> = []
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var failureCount: UInt64 = 0
+    var hasPending: Bool { !active.isEmpty }
+
+    func begin() -> UUID {
+        let id = UUID(); active.insert(id)
+        return id
+    }
+    func finish(_ id: UUID, saved: Bool) {
+        guard active.remove(id) != nil else { return }
+        if !saved { failureCount &+= 1; log.notice("Editor save did not commit; keep the app open if quitting") }
+        guard active.isEmpty else { return }
+        let waiting = waiters; waiters.removeAll()
+        for waiter in waiting { waiter.resume() }
+    }
+    func waitForCompletion() async -> Bool {
+        let failures = failureCount
+        while hasPending { await withCheckedContinuation { waiters.append($0) } }
+        return failures == failureCount
+    }
 }

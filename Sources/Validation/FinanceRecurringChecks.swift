@@ -55,6 +55,48 @@ import Foundation
                 }
                 try require(changed == before, "stale recurring drafts cannot create stray one-off entries")
             }
+            // Occurrence IDs include time, so a same-day reschedule invalidates old confirmations and skips.
+            for seconds in [1.0, 3600.0, -3600.0] {
+                var changed = ledger
+                var moved = bill; moved.reschedule(to: bill.nextDate.addingTimeInterval(seconds))
+                try changed.updateRecurring(moved, expected: bill)
+                let before = changed
+                try rejects("same-day rescheduling invalidates a recovered confirmation") {
+                    try request.apply(request.entry, to: &changed, baseCurrency: ledger.baseCurrency)
+                }
+                try rejects("same-day rescheduling invalidates an old skip") {
+                    try changed.skipOccurrence(of: bill.id, scheduled: bill.nextDate)
+                }
+                try require(changed == before, "stale confirmation and skip preserve the new period and all entries")
+                try changed.postOccurrence(of: bill.id, scheduled: moved.nextDate)
+                try require(changed.entries.count == 1 && changed.entries[0].id == moved.entryID(for: moved.nextDate)
+                    && changed.entries[0].date == moved.nextDate, "fresh confirmation keeps occurrence identity and date consistent")
+            }
+            var fractional = ledger
+            try fractional.postOccurrence(of: bill.id, scheduled: bill.nextDate.addingTimeInterval(0.4))
+            try require(fractional.entries.count == 1, "subsecond rounding agrees with existing occurrence identity")
+            let baseline = TaskBackup(finance: ledger, lists: [], tasks: [])
+            var local = ledger, remote = ledger
+            try request.apply(request.entry, to: &local, baseCurrency: ledger.baseCurrency)
+            try request.apply(request.entry, to: &remote, baseCurrency: ledger.baseCurrency)
+            let left = TaskBackup(finance: local, lists: [], tasks: [])
+            var right = TaskBackup(finance: remote, lists: [], tasks: [])
+            let merged = try CloudMerge.merge(local: left, cloud: right, base: baseline)
+            try require(merged.finance?.entries.count == 1 && merged.finance?.balance(card.id) == -3210
+                && merged.finance?.recurringBill(bill.id)?.nextDate == bill.followingDate,
+                "two devices confirming a recovered occurrence merge into one debit and one period advance")
+            remote = ledger
+            var otherAmount = request.entry; otherAmount.amount = 3300; otherAmount.accountAmount = 3300; otherAmount.baseAmount = 3300
+            try request.apply(otherAmount, to: &remote, baseCurrency: ledger.baseCurrency)
+            right = TaskBackup(finance: remote, lists: [], tasks: [])
+            try rejects("different simultaneous occurrence amounts require review") {
+                _ = try CloudMerge.merge(local: left, cloud: right, base: baseline)
+            }
+            for choice in [CloudMerge.Choice.local, .cloud] {
+                let selected = try CloudMerge.merge(local: left, cloud: right, base: baseline, choice: choice)
+                try require(selected.finance?.entries.count == 1 && selected.finance?.balance(card.id) == (choice == .local ? -3210 : -3300),
+                    "either conflict choice retains exactly one posting")
+            }
             var future = ledger
             var futureBill = bill; futureBill.reschedule(to: day(1, 31, year: 2035))
             try future.updateRecurring(futureBill, expected: bill)

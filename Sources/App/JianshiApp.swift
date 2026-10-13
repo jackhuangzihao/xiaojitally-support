@@ -4,14 +4,41 @@ import UserNotifications
 import UniformTypeIdentifiers
 
 #if os(macOS)
-final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
+    private var waitingForTermination = false
+    private let reply: @MainActor (Bool) -> Void
+    override init() {
+        reply = { NSApp.reply(toApplicationShouldTerminate: $0) }
+        super.init()
+    }
+    init(reply: @escaping @MainActor (Bool) -> Void) {
+        self.reply = reply
+        super.init()
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard AutomaticBackup.shared.pendingWrites > 0 || ReminderScheduler.shared.hasPendingRefresh || WidgetBridge.pendingWrites > 0 else { return .terminateNow }
+        if waitingForTermination { return .terminateLater }
+        let saves = PendingEditorSaves.shared
+        guard saves.hasPending || AutomaticBackup.shared.pendingWrites > 0 || ReminderScheduler.shared.hasPendingRefresh || WidgetBridge.pendingWrites > 0 else { return .terminateNow }
+        waitingForTermination = true
+        let failures = saves.failureCount
         Task { @MainActor in
-            await ReminderScheduler.shared.finishPendingRefresh()
-            await WidgetBridge.finishPublish()
+            repeat {
+                guard await saves.waitForCompletion() else {
+                    waitingForTermination = false
+                    reply(false)
+                    return
+                }
+                await ReminderScheduler.shared.finishPendingRefresh()
+                await WidgetBridge.finishPublish()
+            } while saves.hasPending
+            // A second editor may have failed while the save's follow-up work was finishing.
+            guard saves.failureCount == failures else {
+                waitingForTermination = false
+                reply(false)
+                return
+            }
             if AutomaticBackup.shared.pendingWrites > 0 { AutomaticBackup.shared.finishBeforeQuit() }
-            else { sender.reply(toApplicationShouldTerminate: true) }
+            else { waitingForTermination = false; reply(true) }
         }
         return .terminateLater
     }

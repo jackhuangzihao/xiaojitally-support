@@ -322,8 +322,12 @@ struct FinanceEntityEditor: View {
         guard !didSave, !isSaving else { return }
         keepEntityDraft()
         isSaving = true
+        let saveID = PendingEditorSaves.shared.begin()
         saveTask = Task { @MainActor in
-            defer { isSaving = false; saveTask = nil }
+            defer {
+                PendingEditorSaves.shared.finish(saveID, saved: didSave)
+                isSaving = false; saveTask = nil
+            }
             do {
                 try await SyncChanges.withPreparedHistory(in: context) { persist(confirmedOpening: confirmedOpening) }
             } catch is CancellationError {

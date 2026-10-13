@@ -291,7 +291,7 @@ extension FinanceData {
     /// Records the occurrence scheduled on `scheduled` and moves the bill to its next date. `entry` carries the
     /// user's changes when confirmed through the editor; `postedOn` records it on another day (e.g. today).
     mutating func postOccurrence(of billID: UUID, scheduled: Date, entry: MoneyEntry? = nil, postedOn: Date? = nil) throws {
-        guard var bill = recurringBill(billID), Dates.sameDay(bill.nextDate, scheduled) else {
+        guard var bill = recurringBill(billID), MoneyEntry.timestamp(bill.nextDate) == MoneyEntry.timestamp(scheduled) else {
             throw TaskBackup.invalid(L("周期账单已改变，请刷新后重试。", "This recurring bill changed. Refresh and try again."))
         }
         // Without the user's changes the bill's own book, account and category must still be usable.
@@ -315,7 +315,7 @@ extension FinanceData {
 
     /// Skips the occurrence scheduled on `scheduled` without recording anything.
     mutating func skipOccurrence(of billID: UUID, scheduled: Date) throws {
-        guard var bill = recurringBill(billID), Dates.sameDay(bill.nextDate, scheduled) else {
+        guard var bill = recurringBill(billID), MoneyEntry.timestamp(bill.nextDate) == MoneyEntry.timestamp(scheduled) else {
             throw TaskBackup.invalid(L("周期账单已改变，请刷新后重试。", "This recurring bill changed. Refresh and try again."))
         }
         if let next = bill.followingDate { bill.nextDate = MoneyEntry.timestamp(next); replaceBill(bill) } else { removeBill(billID) }
