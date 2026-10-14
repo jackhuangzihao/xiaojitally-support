@@ -143,6 +143,7 @@
 		22E4EE6F00DCE8575E6BC36B /* CloudInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA087AE06B510CCCE7DAEFEB /* CloudInventory.swift */; };
 		60253A8BDF090CC4D7CD426F /* CloudMigrationChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07537F887011D556714C6781 /* CloudMigrationChecks.swift */; };
 		B76423EE50474FACA82A7819 /* CloudRetentionChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B7DF32BA4BEF1FAED630CB /* CloudRetentionChecks.swift */; };
+		D81014000000000000000001 /* RecurrenceTimeZoneChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = D81014000000000000000002 /* RecurrenceTimeZoneChecks.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -283,6 +284,7 @@
 		FA087AE06B510CCCE7DAEFEB /* CloudInventory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudInventory.swift; sourceTree = "<group>"; };
 		07537F887011D556714C6781 /* CloudMigrationChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudMigrationChecks.swift; sourceTree = "<group>"; };
 		53B7DF32BA4BEF1FAED630CB /* CloudRetentionChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRetentionChecks.swift; sourceTree = "<group>"; };
+		D81014000000000000000002 /* RecurrenceTimeZoneChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurrenceTimeZoneChecks.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -426,6 +428,7 @@
 				C97CB8082C083478226324B4 /* PerformanceChecks.swift */,
 				37BA96BCB4184ABA11F2F9F0 /* SandboxChecks.swift */,
 				947DDE6F11D0E1FF1D48198C /* SelfCheck.swift */,
+				D81014000000000000000002 /* RecurrenceTimeZoneChecks.swift */,
 				84C9D751F6DBA738D278EA05 /* StorageChecks.swift */,
 				FA29FB861CBF0DB252C1B7F3 /* SyncChecks.swift */,
 				AD9CF1800BC14F20AEDD0004 /* SyncConflictChecks.swift */,
@@ -742,6 +745,7 @@
 				3647594D772B55D604E073CC /* CalendarGridChecks.swift in Sources */,
 				8E11CD5899C7C57D8DBBD689 /* FinanceChecks.swift in Sources */,
 				16D36CC4DECF212943F94B04 /* SelfCheck.swift in Sources */,
+				D81014000000000000000001 /* RecurrenceTimeZoneChecks.swift in Sources */,
 				68F768962DD1FF89F2D98C0C /* MoveFeedback.swift in Sources */,
 				4D7CCD0FD550F458AB31AFE7 /* SidebarListViews.swift in Sources */,
 				57960F12EBB1E4A0D884772C /* CalendarDropGeometry.swift in Sources */,

@@ -245,6 +245,7 @@ extension PlanBlock {
     private var records: [TaskBackup.TaskRecord] = []
     private var interval: DateInterval?
     private var minute: Int?
+    private var timeZoneID: String?
     private var result: [TaskItem] = []
 
     func items(_ tasks: [TaskItem], in range: DateInterval, now: Date = Date()) -> [TaskItem] {
@@ -255,15 +256,15 @@ extension PlanBlock {
         }
         let key = roots.map(TaskBackup.TaskRecord.init)
         let tick = Int(now.timeIntervalSince1970 / 60)
-        if records == key && interval == range && minute == tick { return result }
-        records = key; interval = range; minute = tick
+        let zone = Dates.calendar.timeZone.identifier
+        if records == key && interval == range && minute == tick && timeZoneID == zone { return result }
+        records = key; interval = range; minute = tick; timeZoneID = zone
         result = roots.flatMap { task -> [TaskItem] in
             var items: [TaskItem] = []
             var after = max(now, range.start.addingTimeInterval(-(task.duration ?? 0) - 1))
             // ponytail: at most 64 projections per series/window; wider future views can page this later.
             for _ in 0..<64 {
-                guard let next = Dates.nextRepeat(task.calendarDate!, rule: task.repeatRule,
-                    anchorDay: task.repeatAnchorDay, after: after, until: task.repeatUntil), next < range.end else { break }
+                guard let next = task.nextRepeat(after: after), next < range.end else { break }
                 if next <= after { break }
                 let item = task.occurrence(at: next, preview: true)
                 if item.overlaps(range) { items.append(item) }

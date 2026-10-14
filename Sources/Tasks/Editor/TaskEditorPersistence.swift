@@ -14,15 +14,58 @@ extension TaskEditor {
         let subtasks: [Subtask]
         var original: TaskBackup.TaskRecord? = nil
         var finance: TaskFinanceDraft? = nil
+        var repeatTimeZoneID: String? = nil
+        var normalizedScheduledDate: Date? = nil
+        var normalizedDueDate: Date? = nil
+    }
+    /// The input stays available to the date picker; its saved day survives recovery in another zone.
+    struct AllDayDraftDate: Equatable {
+        let input: Date
+        let normalized: Date
+
+        init?(input: Date?, normalized: Date?, timed: Bool) {
+            guard !timed, let input, let normalized else { return nil }
+            self.input = input; self.normalized = normalized
+        }
+
+        func value(for date: Date, timed: Bool) -> Date? {
+            !timed && input == date ? normalized : nil
+        }
     }
     var draftState: DraftState {
         DraftState(title: title, notes: notes, pending: newSubtask, repeating: repeatRule, repeatUntil: repeatRule == "none" ? nil : repeatUntil,
                    end: effectiveEnd, scheduled: hasDate ? date : nil, due: hasDue ? due : nil, reminder: effectiveReminder,
                    timed: hasTime, dueTimed: dueHasTime, preset: reminderPreset, listID: listID, priority: priority, subtasks: subtasks, original: original,
-                   finance: linkedFinance)
+                   finance: linkedFinance, repeatTimeZoneID: repeatTimeZoneID,
+                   normalizedScheduledDate: hasTime ? nil : savedScheduledDate,
+                   normalizedDueDate: dueHasTime ? nil : savedDueDate)
     }
     var effectiveEnd: Date? { hasDate && hasTime && hasEnd ? end : nil }
+    var savedScheduledDate: Date? {
+        guard hasDate else { return nil }
+        if let restored = restoredScheduledDate?.value(for: date, timed: hasTime) { return restored }
+        // Editing unrelated fields abroad must not replace a stored all-day instant with local midnight.
+        if !hasTime, original?.hasTime == false, original?.scheduledAt == date { return date }
+        return hasTime ? date : Dates.calendar.startOfDay(for: date)
+    }
+    var savedDueDate: Date? {
+        guard hasDue else { return nil }
+        if let restored = restoredDueDate?.value(for: due, timed: dueHasTime) { return restored }
+        if !dueHasTime, original?.dueHasTime == false, original?.dueAt == due { return due }
+        return dueHasTime ? due : Dates.calendar.startOfDay(for: due)
+    }
+    var savedRepeatUntil: Date? {
+        guard repeatRule != "none", let repeatUntil else { return nil }
+        if original?.repeatUntil == repeatUntil { return repeatUntil }
+        return repeatCalendar?.startOfDay(for: repeatUntil)
+    }
     var hasChanges: Bool { recoveredDraft || (initialDraft.map { $0 != draftState } ?? false) }
+    func draftChanged(from old: DraftState, to new: DraftState) {
+        if old.scheduled != new.scheduled || old.timed != new.timed { restoredScheduledDate = nil }
+        if old.due != new.due || old.dueTimed != new.dueTimed { restoredDueDate = nil }
+        if old.repeating == "none", new.repeating != "none" { repeatTimeZoneID = Dates.calendar.timeZone.identifier }
+        keepDraft()
+    }
     func keepDraft() {
         guard (try? Store.recovery.requireWritable(context)) != nil else { return }
         drafts.taskID = original?.id
@@ -97,7 +140,10 @@ extension TaskEditor {
         guard repeatRule == "none" || hasDate || hasDue else {
             errorMessage = L("重复任务需要安排日期或截止日期。", "A repeating task needs a scheduled date or deadline."); return
         }
-        if repeatRule != "none", let until = repeatUntil, until < repeatStartDay {
+        guard repeatCalendar != nil else {
+            errorMessage = L("重复时区无效，请恢复有效的备份后重试。", "The repeat timezone is invalid. Restore a valid backup and try again."); return
+        }
+        if repeatRule != "none", let until = savedRepeatUntil, until < repeatStartDay {
             errorMessage = L("重复的结束日期不能早于开始日期。", "The repeat can't end before it starts."); return
         }
         guard deadlineValid else {
@@ -147,18 +193,22 @@ extension TaskEditor {
         do {
             if existing == nil { context.insert(task) }
             task.title = cleanTitle; task.notes = notes
-            task.scheduledAt = hasDate ? (hasTime ? date : Dates.calendar.startOfDay(for: date)) : nil
+            task.scheduledAt = savedScheduledDate
             task.hasTime = hasDate && hasTime
             task.endAt = effectiveEnd
-            task.dueAt = hasDue ? (dueHasTime ? due : Dates.calendar.startOfDay(for: due)) : nil
+            task.dueAt = savedDueDate
             task.dueHasTime = hasDue && dueHasTime
             task.priority = priority
             task.reminderAt = reminderAt
             task.reminderKind = reminderPreset.rawValue
-            task.reminderNeedsAttention = task.reminderRequiresAttention()
             task.repeatRule = repeatRule
-            task.repeatUntil = repeatRule == "none" ? nil : repeatUntil.map { Dates.calendar.startOfDay(for: $0) }
-            if let base = task.calendarDate, task.repeatAnchorDay == 0 || oldRule != repeatRule || oldBase.map({ !Dates.sameDay($0, base) }) == true { task.repeatAnchorDay = Dates.calendar.component(.day, from: base) }
+            task.repeatTimeZoneID = repeatRule == "none" ? nil : repeatTimeZoneID
+            task.repeatUntil = savedRepeatUntil
+            if let base = task.calendarDate, let calendar = task.recurrenceCalendar,
+               task.repeatAnchorDay == 0 || oldRule != repeatRule || oldBase.map({ !calendar.isDate($0, inSameDayAs: base) }) == true {
+                task.repeatAnchorDay = calendar.component(.day, from: base)
+            }
+            task.reminderNeedsAttention = task.reminderRequiresAttention()
             task.list = selectedList
             task.subtasks = cleanSubtasks
             task.deletedAt = nil

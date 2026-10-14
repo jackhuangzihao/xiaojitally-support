@@ -35,18 +35,18 @@ actor CloudKitCommitStore: CloudCommitStore {
         try await requireAccount()
         var head = try await record(Self.headID)
         if let head {
-            guard let format = head["format"] as? Int64, [Int64(CloudRecordCodec.format), 14, Int64(CloudCommitProtocol.format)].contains(format) else {
+            guard let format = head["format"] as? Int64, [Int64(CloudRecordCodec.format), 14, 15, Int64(CloudCommitProtocol.format)].contains(format) else {
                 throw CloudRecordError.unsupportedFormat(Int(head["format"] as? Int64 ?? -1))
             }
         }
         // Seal the legacy address even when a new head exists: supersededBy alone never fenced old clients.
         let legacy = try await CloudMigration.sealLegacy(in: database, account: account, authorize: { try await self.requireAccount() })
-        if let head, [Int64(14), Int64(CloudCommitProtocol.format)].contains(head["format"] as? Int64 ?? -1) {
+        if let head, [Int64(14), 15, Int64(CloudCommitProtocol.format)].contains(head["format"] as? Int64 ?? -1) {
             let cursor = try Self.cursor(head)
             guard cursor.head.legacyDigest == legacy.digest else { throw CloudRecordError.inconsistentCloud("Legacy migration marker changed") }
             if legacy.requiresReuploadConfirmation(for: cursor.head) { throw CloudRecordError.cloudRemoved }
-            if head["format"] as? Int64 == 14 {
-                // Even an interrupted format-14 migration can upgrade; its seed is checked separately.
+            if (head["format"] as? Int64 ?? 0) < Int64(CloudCommitProtocol.format) {
+                // Fence old writers before accepting rows with metadata they do not understand.
                 var value = cursor.head; value.maintenance = UUID()
                 try await requireAccount()
                 let result = try await database.modifyRecords(saving: [try Self.setting(value, on: head)], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)
@@ -246,7 +246,7 @@ actor CloudKitCommitStore: CloudCommitStore {
         return record
     }
     static func cursor(_ record: CKRecord) throws -> CloudCommitProtocol.Cursor {
-        guard record.recordID == headID, record.recordType == "TallyHead", [Int64(14), Int64(CloudCommitProtocol.format)].contains(record["format"] as? Int64 ?? -1),
+        guard record.recordID == headID, record.recordType == "TallyHead", [Int64(14), 15, Int64(CloudCommitProtocol.format)].contains(record["format"] as? Int64 ?? -1),
               let data = record.encryptedValues["commit"] as? Data, data.count <= CloudCommitProtocol.maximumBlobBytes else {
             throw CloudRecordError.inconsistentCloud("Missing commit header")
         }

@@ -38,6 +38,7 @@ struct FinanceDraft {
     var occurrence: RecurringOccurrence? = nil
     var repeatRule = "none"
     var repeatUntil: Date? = nil
+    var repeatTimeZoneID: String? = nil
 
     var request: EntryRequest {
         EntryRequest(entry: entry, expected: expected, confirmingPending: confirmingPending, occurrence: occurrence)
@@ -98,6 +99,7 @@ struct FinanceEntryEditor: View {
     @State private var restoringDraft = false
     @State private var repeatRule = "none"
     @State private var repeatUntil: Date?
+    @State private var repeatTimeZoneID: String? = Dates.calendar.timeZone.identifier
     @State private var titleIndex = MoneyTitleIndex()
     /// Fields the user chose in this editor; a typed name never overrides them.
     @State private var chosenByUser: Set<SuggestedField> = []
@@ -118,7 +120,7 @@ struct FinanceEntryEditor: View {
     }
     private var account: MoneyAccount? { ledger.accounts.first { $0.id == draft.accountID } }
     private var destination: MoneyAccount? { ledger.accounts.first { $0.id == draft.destinationID } }
-    private var fingerprint: String { String(describing: draft) + [expression, amount, actual, received, fee, converted, convertedFee, repeatRule, String(describing: repeatUntil)].joined(separator: "|") }
+    private var fingerprint: String { String(describing: draft) + [expression, amount, actual, received, fee, converted, convertedFee, repeatRule, String(describing: repeatUntil), repeatTimeZoneID ?? ""].joined(separator: "|") }
     /// Repeat sits under "pending": only a new, ordinary income or expense saved as pending can start a recurring bill.
     private var canRepeat: Bool {
         expected == nil && !confirmingPending && (draft.kind == .expense || draft.kind == .income) && draft.taskID == nil
@@ -228,7 +230,7 @@ struct FinanceEntryEditor: View {
                 if let kept = drafts.finance, kept.entry.id == draft.id {
                     restoringDraft = true
                     draft = kept.entry; amount = kept.amount; actual = kept.actual; received = kept.received
-                    repeatRule = kept.repeatRule; repeatUntil = kept.repeatUntil
+                    repeatRule = kept.repeatRule; repeatUntil = kept.repeatUntil; repeatTimeZoneID = kept.repeatTimeZoneID
                     fee = kept.fee; converted = kept.converted; convertedFee = kept.convertedFee; initialBalance = kept.balance
                     expression = kept.expression ?? kept.amount.replacingOccurrences(of: "-", with: "−")
                 } else {
@@ -464,7 +466,7 @@ struct FinanceEntryEditor: View {
     private var repeatSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(L("重复", "Repeat"), systemImage: "repeat").font(.callout.weight(.medium))
-            RecurringScheduleControls(rule: $repeatRule, until: $repeatUntil, start: draft.date)
+            RecurringScheduleControls(rule: $repeatRule, until: $repeatUntil, start: draft.date, repeatTimeZoneID: repeatTimeZoneID)
             Text(repeating
                  ? L("保存为周期账单：上面的日期是第一期。每一期到日期后出现在待入账里，确认后才计入余额和统计。",
                      "Saved as a recurring bill with the date above as its first occurrence. Each one appears in Pending when due and counts after you confirm it.")
@@ -811,7 +813,7 @@ struct FinanceEntryEditor: View {
     }
     private func keepDraft() {
         drafts.finance = FinanceDraft(ledger: ledger, entry: draft, expected: expected, amount: amount, actual: actual, received: received, fee: fee, converted: converted, convertedFee: convertedFee, balance: initialBalance, expression: expression, confirmingPending: confirmingPending,
-                                     occurrence: occurrence, repeatRule: repeatRule, repeatUntil: repeatUntil)
+                                     occurrence: occurrence, repeatRule: repeatRule, repeatUntil: repeatUntil, repeatTimeZoneID: repeatTimeZoneID)
     }
     private func preparedEntry() throws -> MoneyEntry {
         guard !amount.isEmpty, (try? Money.parse(amount, currency: draft.currency, signed: signedAmount)).map({ $0 != 0 || draft.kind == .adjustment }) == true else {
@@ -872,7 +874,7 @@ struct FinanceEntryEditor: View {
         }
         if repeating {
             // Only the rule is saved; its first occurrence (this date) appears in Pending as a preview.
-            let bill = MoneyRecurring(repeating: e, rule: repeatRule, until: repeatUntil, in: ledger)
+            let bill = MoneyRecurring(repeating: e, rule: repeatRule, until: repeatUntil, in: ledger, repeatTimeZoneID: repeatTimeZoneID)
             try FinanceStore.update(context) { value in
                 try value.requireEntryCurrencies(e, from: ledger)
                 try value.addRecurring(bill)

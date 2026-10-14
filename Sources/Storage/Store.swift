@@ -121,8 +121,8 @@ private let storeLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.
 /// This is a local rollback artifact, not a sync queue or a replacement for portable JSON backups.
 enum StoreUpgradeSnapshot {
     // Bump for a persisted-schema or stored-format change, not for every app build. Keep prior generations.
-    // v3: per-record sync and recurring bills stored as rules (backup/sync format 13).
-    static let generation = "schema-v3"
+    // v4: optional recurrence time zone; legacy dates are retained without binding a zone.
+    static let generation = "schema-v4"
     static func prepare(_ source: URL, generation: String = StoreUpgradeSnapshot.generation) throws -> URL? {
         guard !generation.isEmpty, generation.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 }) else {
             throw CocoaError(.fileWriteInvalidFileName)

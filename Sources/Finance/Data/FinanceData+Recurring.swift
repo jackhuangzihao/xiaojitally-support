@@ -27,6 +27,8 @@ struct MoneyRecurring: Identifiable, Equatable {
     /// The next occurrence not yet confirmed or skipped; its time of day is kept by later ones.
     var nextDate: Date
     var until: Date?
+    /// Nil means an older rule whose original time zone has not been confirmed.
+    var repeatTimeZoneID: String? = nil
     /// Only on a bill read from an earlier format, until `FinanceData.migrateLegacyRecurring` settles it. Never written.
     var legacy: Legacy? = nil
 
@@ -50,33 +52,41 @@ struct MoneyRecurring: Identifiable, Equatable {
         return TaskItem.syncIdentity("money-recurring:" + id.uuidString + ":" + text)
     }
 
+    var recurrenceCalendar: Calendar? {
+        repeatTimeZoneID == nil ? Dates.calendar : Dates.recurrenceCalendar(timeZoneID: repeatTimeZoneID)
+    }
+
     /// The occurrence after the next one, or nil once the bill has ended.
     var followingDate: Date? {
-        Dates.nextRepeat(nextDate, rule: rule, anchorDay: anchorDay, after: nextDate, until: until)
+        guard let calendar = recurrenceCalendar else { return nil }
+        return Dates.nextRepeat(nextDate, rule: rule, anchorDay: anchorDay, after: nextDate, until: until, calendar: calendar)
     }
 
     /// Whether the next occurrence falls after the end date. Only a sync merge can produce this (one device moved
     /// the end earlier while another confirmed or skipped past it); such a bill has ended and is removed.
     var hasEnded: Bool {
-        until.map { Dates.calendar.startOfDay(for: $0) < Dates.calendar.startOfDay(for: nextDate) } ?? false
+        guard let calendar = recurrenceCalendar else { return false }
+        return until.map { calendar.startOfDay(for: $0) < calendar.startOfDay(for: nextDate) } ?? false
     }
 
     /// Moves the next occurrence; monthly and yearly rules then keep its day of month (a 31st stays at month end).
     mutating func reschedule(to date: Date) {
+        guard let calendar = recurrenceCalendar else { return }
         nextDate = MoneyEntry.timestamp(date)
-        anchorDay = Dates.calendar.component(.day, from: date)
+        anchorDay = calendar.component(.day, from: date)
     }
 
     /// "每月 9 日", "每年 10月9日", "每周四", "每 2 周的周四", or the rule's own label for other patterns.
     var scheduleLabel: String {
-        Self.scheduleLabel(rule: rule, anchorDay: anchorDay, date: nextDate)
+        guard let calendar = recurrenceCalendar else { return Dates.repeatLabel(rule) }
+        return Self.scheduleLabel(rule: rule, anchorDay: anchorDay, date: nextDate, calendar: calendar)
     }
-    static func scheduleLabel(rule: String, anchorDay: Int, date: Date) -> String {
+    static func scheduleLabel(rule: String, anchorDay: Int, date: Date, calendar: Calendar = Dates.calendar) -> String {
         guard let parsed = RepeatRule(rule) else { return L("不重复", "Never") }
-        let weekday = RepeatRule.weekdayName(Dates.calendar.component(.weekday, from: date))
+        let weekday = RepeatRule.weekdayName(calendar.component(.weekday, from: date))
         switch parsed.unit {
         case .month where parsed.interval == 1: return L("每月 \(anchorDay) 日", "Monthly on day \(anchorDay)")
-        case .year where parsed.interval == 1: return L("每年 ", "Yearly on ") + Dates.label(date, pattern: "M月d日")
+        case .year where parsed.interval == 1: return L("每年 ", "Yearly on ") + Dates.label(date, pattern: "M月d日", calendar: calendar)
         case .week where parsed.weekdays.isEmpty:
             return parsed.interval == 1 ? L("每周", "Weekly on ") + weekday : parsed.label + L("的周", " on ") + weekday
         default: return parsed.label
@@ -115,10 +125,13 @@ struct MoneyRecurring: Identifiable, Equatable {
         try check(bookID.map { id in ledger.books.contains { $0.id == id } } ?? false, "请为周期账单选择账本。", "Choose a book for the recurring bill.")
         try check(categoryID.map { id in ledger.categories.contains { $0.id == id } } ?? true, "周期账单的分类不存在。", "The recurring bill's category is missing.")
         try check(RepeatRule(rule) != nil && (1...31).contains(anchorDay), "重复规则无效。", "Invalid repeat rule.")
+        guard let calendar = recurrenceCalendar else {
+            throw TaskBackup.invalid(L("周期账单的重复时区无效。", "The recurring bill has an invalid repeat time zone."))
+        }
         let dates = [nextDate] + (until.map { [$0] } ?? [])
         try check(dates.allSatisfy { $0.timeIntervalSince1970.isFinite && (-62135596800...253402300799).contains($0.timeIntervalSince1970) },
                   "周期账单日期无效。", "Invalid recurring bill dates.")
-        try check(until.map { Dates.calendar.startOfDay(for: $0) >= Dates.calendar.startOfDay(for: nextDate) } ?? true,
+        try check(until.map { calendar.startOfDay(for: $0) >= calendar.startOfDay(for: nextDate) } ?? true,
                   "结束日期不能早于下一期。", "The end date cannot be before the next occurrence.")
     }
 }
@@ -127,7 +140,7 @@ struct MoneyRecurring: Identifiable, Equatable {
 
 extension MoneyRecurring: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, kind, title, amount, currency, accountID, accountAmount, baseAmount, bookID, categoryID, notes, tags, rule, anchorDay, nextDate, until
+        case id, kind, title, amount, currency, accountID, accountAmount, baseAmount, bookID, categoryID, notes, tags, rule, anchorDay, nextDate, until, repeatTimeZoneID
     }
     /// Keys written by earlier builds, which stored every occurrence as an entry and could pause a bill.
     private enum LegacyKeys: String, CodingKey { case start, activeFrom }
@@ -142,6 +155,7 @@ extension MoneyRecurring: Codable {
         notes = try c.decode(String.self, forKey: .notes); tags = try c.decode(String.self, forKey: .tags)
         rule = try c.decode(String.self, forKey: .rule); anchorDay = try c.decode(Int.self, forKey: .anchorDay)
         until = try c.decodeIfPresent(Date.self, forKey: .until)
+        repeatTimeZoneID = try c.decodeIfPresent(String.self, forKey: .repeatTimeZoneID)
         if let next = try c.decodeIfPresent(Date.self, forKey: .nextDate) {
             nextDate = next
         } else {
@@ -150,7 +164,7 @@ extension MoneyRecurring: Codable {
             nextDate = start
             legacy = Legacy(start: start, activeFrom: try old.decode(Date.self, forKey: .activeFrom))
         }
-        if !(1...31).contains(anchorDay) { anchorDay = Dates.calendar.component(.day, from: nextDate) }
+        if !(1...31).contains(anchorDay), let calendar = recurrenceCalendar { anchorDay = calendar.component(.day, from: nextDate) }
     }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -161,19 +175,23 @@ extension MoneyRecurring: Codable {
         try c.encodeIfPresent(categoryID, forKey: .categoryID); try c.encode(notes, forKey: .notes); try c.encode(tags, forKey: .tags)
         try c.encode(rule, forKey: .rule); try c.encode(anchorDay, forKey: .anchorDay); try c.encode(nextDate, forKey: .nextDate)
         try c.encodeIfPresent(until, forKey: .until)
+        try c.encodeIfPresent(repeatTimeZoneID, forKey: .repeatTimeZoneID)
     }
 }
 
 extension MoneyRecurring {
     /// A bill that repeats `entry` with the entry's date as its first occurrence. Planned amounts are kept only
     /// where the entry needed them.
-    init(repeating entry: MoneyEntry, rule: String, until: Date?, in ledger: FinanceData) {
+    init(repeating entry: MoneyEntry, rule: String, until: Date?, in ledger: FinanceData,
+         repeatTimeZoneID: String? = Dates.calendar.timeZone.identifier) {
         let account = entry.accountID.flatMap { id in ledger.accounts.first { $0.id == id } }
+        let calendar = repeatTimeZoneID == nil ? Dates.calendar : Dates.recurrenceCalendar(timeZoneID: repeatTimeZoneID)
         self.init(kind: entry.kind, title: entry.title, amount: entry.amount, currency: entry.currency, accountID: account?.id,
                   accountAmount: account.map { $0.currency == entry.currency ? 0 : entry.accountAmount } ?? 0,
                   baseAmount: entry.currency != ledger.baseCurrency && account?.currency != ledger.baseCurrency ? entry.baseAmount : nil,
                   bookID: entry.bookID, categoryID: entry.categoryID, notes: entry.notes, tags: entry.tags,
-                  rule: rule, anchorDay: Dates.calendar.component(.day, from: entry.date), nextDate: MoneyEntry.timestamp(entry.date), until: until)
+                  rule: rule, anchorDay: calendar?.component(.day, from: entry.date) ?? 0,
+                  nextDate: MoneyEntry.timestamp(entry.date), until: until, repeatTimeZoneID: repeatTimeZoneID)
     }
 }
 
@@ -198,6 +216,7 @@ extension FinanceData {
         }
         try bill.validate(in: self)
         recurring = recurringBills + [bill]
+        if bill.repeatTimeZoneID != nil { version = max(version, 3) }
     }
 
     /// Editing a bill edits its rule only: the pending list follows immediately and confirmed entries never change.
@@ -207,6 +226,7 @@ extension FinanceData {
         }
         try bill.validate(in: self)
         replaceBill(bill)
+        if bill.repeatTimeZoneID != nil { version = max(version, 3) }
     }
 
     /// Turns an existing income or expense into the first, already recorded occurrence of a new bill.
@@ -225,7 +245,10 @@ extension FinanceData {
         let series = entry.recurringID.map { id in entries.filter { $0.recurringID == id && $0.deletedAt == nil }.map(\.date) } ?? []
         var bill = MoneyRecurring(repeating: entry, rule: MoneyRecurring.inferredRule(from: series.isEmpty ? [entry.date] : series), until: nil, in: self)
         let latest = max(series.max() ?? entry.date, entry.date)
-        if let next = Dates.nextRepeat(bill.nextDate, rule: bill.rule, anchorDay: bill.anchorDay, after: latest) { bill.nextDate = MoneyEntry.timestamp(next) }
+        if let calendar = bill.recurrenceCalendar,
+           let next = Dates.nextRepeat(bill.nextDate, rule: bill.rule, anchorDay: bill.anchorDay, after: latest, calendar: calendar) {
+            bill.nextDate = MoneyEntry.timestamp(next)
+        }
         return bill
     }
 
@@ -235,6 +258,9 @@ extension FinanceData {
     /// Why an occurrence cannot be recorded as the bill stands: an archived book, account or category. Shown on the
     /// pending card so the bill can be fixed, instead of a generic error when confirming.
     func recurringIssue(_ bill: MoneyRecurring) -> String? {
+        guard bill.recurrenceCalendar != nil else {
+            return L("周期账单的重复时区无效，请从备份恢复。", "This recurring bill has an invalid repeat time zone. Restore a backup.")
+        }
         guard let book = books.first(where: { $0.id == bill.bookID }) else {
             return L("账本已不存在，请修改周期账单。", "Its book no longer exists. Edit the recurring bill.")
         }
@@ -294,6 +320,7 @@ extension FinanceData {
         guard var bill = recurringBill(billID), MoneyEntry.timestamp(bill.nextDate) == MoneyEntry.timestamp(scheduled) else {
             throw TaskBackup.invalid(L("周期账单已改变，请刷新后重试。", "This recurring bill changed. Refresh and try again."))
         }
+        try requireRecurrenceCalendar(bill)
         // Without the user's changes the bill's own book, account and category must still be usable.
         if entry == nil, let issue = recurringIssue(bill) { throw TaskBackup.invalid(issue) }
         guard var posted = entry ?? occurrenceEntry(bill, on: bill.nextDate) else {
@@ -318,7 +345,14 @@ extension FinanceData {
         guard var bill = recurringBill(billID), MoneyEntry.timestamp(bill.nextDate) == MoneyEntry.timestamp(scheduled) else {
             throw TaskBackup.invalid(L("周期账单已改变，请刷新后重试。", "This recurring bill changed. Refresh and try again."))
         }
+        try requireRecurrenceCalendar(bill)
         if let next = bill.followingDate { bill.nextDate = MoneyEntry.timestamp(next); replaceBill(bill) } else { removeBill(billID) }
+    }
+
+    private func requireRecurrenceCalendar(_ bill: MoneyRecurring) throws {
+        guard bill.recurrenceCalendar != nil else {
+            throw TaskBackup.invalid(L("周期账单的重复时区无效。", "The recurring bill has an invalid repeat time zone."))
+        }
     }
 
     /// Converts bills from builds that stored every occurrence as a pending entry. Untouched stored occurrences are
@@ -344,7 +378,7 @@ extension FinanceData {
                 let latest = entries.filter { $0.recurringID == bill.id }.map(\.date).max()
                 let lower = max(legacy.activeFrom, latest.flatMap { calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: $0)) } ?? legacy.start)
                 let next = legacy.start >= lower ? legacy.start
-                    : Dates.nextRepeat(legacy.start, rule: bill.rule, anchorDay: bill.anchorDay, after: lower.addingTimeInterval(-0.001), until: bill.until)
+                    : Dates.nextRepeat(legacy.start, rule: bill.rule, anchorDay: bill.anchorDay, after: lower.addingTimeInterval(-0.001), until: bill.until, calendar: calendar)
                 guard let next else { removeBill(bill.id); continue }
                 bill.nextDate = MoneyEntry.timestamp(next)
             }

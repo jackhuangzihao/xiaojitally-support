@@ -84,6 +84,8 @@ struct Subtask: Codable, Identifiable, Equatable {
     var reminderNeedsAttention: Bool = false
     var repeatRule: String = "none"
     var repeatAnchorDay: Int = 0
+    /// Nil is an older rule awaiting an explicitly approved timezone migration.
+    var repeatTimeZoneID: String?
     /// The last day a repeating task may come back; nil repeats without end.
     var repeatUntil: Date?
     var nextOccurrenceID: UUID?
@@ -158,7 +160,7 @@ struct Subtask: Codable, Identifiable, Equatable {
         let preset = resolvedReminderPreset
         scheduledAt = moment; hasTime = true; endAt = ending
         keepReminder(preset)
-        repeatAnchorDay = Dates.calendar.component(.day, from: moment)
+        repeatAnchorDay = recurrenceCalendar?.component(.day, from: moment) ?? repeatAnchorDay
     }
     /// Drag on a block's lower edge. The deadline still wins: a longer task may not run past it.
     @discardableResult func resize(to newEnd: Date) -> Bool {
@@ -172,7 +174,7 @@ struct Subtask: Codable, Identifiable, Equatable {
         let preset = resolvedReminderPreset
         scheduledAt = Dates.calendar.startOfDay(for: day); hasTime = false; endAt = nil
         keepReminder(preset)
-        repeatAnchorDay = Dates.calendar.component(.day, from: day)
+        repeatAnchorDay = calendarDate.flatMap { recurrenceCalendar?.component(.day, from: $0) } ?? repeatAnchorDay
     }
     /// Dropped on the undated list. A deadline or a repeat rule keeps a task on the calendar, so those are refused.
     @discardableResult func clearSchedule() -> Bool {
@@ -187,14 +189,15 @@ struct Subtask: Codable, Identifiable, Equatable {
         defer { reminderNeedsAttention = reminderRequiresAttention() }
         guard reminderAt != nil, preset != .custom else { return }
         let timed = scheduledAt != nil ? hasTime : dueHasTime
-        if let moved = preset.date(base: calendarDate, timed: timed) { reminderAt = moved }
+        if let calendar = recurrenceCalendar, let moved = preset.date(base: calendarDate, timed: timed, calendar: calendar) { reminderAt = moved }
         else { reminderKind = ReminderPreset.custom.rawValue }
     }
     func reminderRequiresAttention(now: Date = Date()) -> Bool {
         guard !isDone, let reminderAt else { return false }
         if reminderAt <= now { return true }
         guard let day = calendarDate else { return false }
-        let latest = clockDate ?? Dates.calendar.date(byAdding: .day, value: 1, to: Dates.calendar.startOfDay(for: day))!.addingTimeInterval(-1)
+        guard let calendar = recurrenceCalendar else { return true }
+        let latest = clockDate ?? calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: day))!.addingTimeInterval(-1)
         return reminderAt > latest
     }
     var reminderWarning: String? {
@@ -233,7 +236,7 @@ struct Subtask: Codable, Identifiable, Equatable {
         else { scheduledAt = Dates.calendar.startOfDay(for: day) }
         if let length, let scheduledAt { endAt = scheduledAt.addingTimeInterval(length) }
         keepReminder(resolvedReminderPreset)
-        repeatAnchorDay = Dates.calendar.component(.day, from: day)
+        repeatAnchorDay = calendarDate.flatMap { recurrenceCalendar?.component(.day, from: $0) } ?? repeatAnchorDay
     }
 
     func appearsInCalendar(on selected: Date, wholeMonth: Bool) -> Bool {

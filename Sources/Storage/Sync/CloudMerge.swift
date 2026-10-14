@@ -102,7 +102,7 @@ enum CloudMerge {
             if l.listID != r.listID { fields.append(L("所属清单", "list")) }
             if l.deletedAt != r.deletedAt { fields.append(L("删除状态", "deletion")) }
             if l.reminderAt != r.reminderAt || l.reminderKind != r.reminderKind || l.reminderNeedsAttention != r.reminderNeedsAttention { fields.append(L("提醒", "reminder")) }
-            if l.repeatRule != r.repeatRule || l.repeatUntil != r.repeatUntil || l.repeatAnchorDay != r.repeatAnchorDay || l.nextOccurrenceID != r.nextOccurrenceID { fields.append(L("重复设置或后续任务", "recurrence/successor")) }
+            if l.repeatRule != r.repeatRule || l.repeatUntil != r.repeatUntil || l.repeatAnchorDay != r.repeatAnchorDay || l.repeatTimeZoneID != r.repeatTimeZoneID || l.nextOccurrenceID != r.nextOccurrenceID { fields.append(L("重复设置或后续任务", "recurrence/successor")) }
         }
         return L("本机：", "Local: ") + taskDescription(local) + "\n" + L("云端：", "Cloud: ") + taskDescription(cloud) +
             (fields.isEmpty ? "" : "\n" + L("差异：", "Differences: ") + fields.joined(separator: "、"))
@@ -386,10 +386,11 @@ enum CloudMerge {
         syncLog.debug("Validated sync merge; manual conflict choice: \(choice != nil || !choices.isEmpty, privacy: .public)")
         return MergeResult(snapshot: result, automaticFieldCount: review.automaticCount)
     }
-    static func bytes(_ snapshot: TaskBackup) throws -> Data {
+    static func bytes(_ snapshot: TaskBackup, legacyMigrationFormat: Bool = false) throws -> Data {
         var stable = snapshot
-        stable.version = 13
-        stable.finance?.version = 2
+        // Sealed migration assets keep the canonical digest written before recurrence time zones existed.
+        stable.version = legacyMigrationFormat ? 13 : 14
+        stable.finance?.version = legacyMigrationFormat ? 2 : 3
         stable.createdAt = Date(timeIntervalSince1970: 0)
         stable.lists.sort { $0.id.uuidString < $1.id.uuidString }
         stable.tasks.sort { $0.id.uuidString < $1.id.uuidString }

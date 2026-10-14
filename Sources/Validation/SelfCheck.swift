@@ -79,6 +79,7 @@ import AppKit
         checkCount += try CalendarGridChecks.run()
         checkCount += try EditingChecks.run()
         checkCount += try FinanceChecks.run()
+        checkCount += try RecurrenceTimeZoneChecks.run()
         checkCount += try CloudMerge.check()
         print("PASS: \(checkCount) checks — calendar, boundaries, persistent reload, subtasks, edit, completion, deletion, restore, rollback")
     }

@@ -142,15 +142,18 @@ struct TaskSchedule: Equatable {
     let reminderKind: String
     let reminderNeedsAttention: Bool
     let repeatAnchorDay: Int
+    let repeatTimeZoneID: String?
     init(_ task: TaskItem) {
         scheduledAt = task.scheduledAt; hasTime = task.hasTime; endAt = task.endAt; dueAt = task.dueAt; dueHasTime = task.dueHasTime
         reminderAt = task.reminderAt; reminderKind = task.reminderKind
         reminderNeedsAttention = task.reminderNeedsAttention; repeatAnchorDay = task.repeatAnchorDay
+        repeatTimeZoneID = task.repeatTimeZoneID
     }
     func restore(_ task: TaskItem) {
         task.scheduledAt = scheduledAt; task.hasTime = hasTime; task.endAt = endAt; task.dueAt = dueAt; task.dueHasTime = dueHasTime
         task.reminderAt = reminderAt; task.reminderKind = reminderKind
         task.reminderNeedsAttention = reminderNeedsAttention; task.repeatAnchorDay = repeatAnchorDay
+        task.repeatTimeZoneID = repeatTimeZoneID
     }
 }
 
@@ -236,7 +239,7 @@ struct TaskMove {
             let preset = task.resolvedReminderPreset
             task.scheduledAt = start; task.endAt = end
             task.keepReminder(preset)
-            task.repeatAnchorDay = Dates.calendar.component(.day, from: start)
+            task.repeatAnchorDay = task.recurrenceCalendar?.component(.day, from: start) ?? task.repeatAnchorDay
         case .resizeEnd:
             guard let end else { return false }
             return task.resize(to: end)

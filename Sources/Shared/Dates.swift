@@ -83,13 +83,13 @@ enum Dates {
 
     /// The next time a repeating task comes back after `now`, or nil once that would be past `until` (a whole day).
     /// Missed occurrences are skipped rather than piled up.
-    static func nextRepeat(_ base: Date, rule text: String, anchorDay: Int, after now: Date, until: Date? = nil) -> Date? {
-        guard let rule = RepeatRule(text), let next = nextOccurrence(base, rule: rule, anchorDay: anchorDay, after: now) else { return nil }
+    static func nextRepeat(_ base: Date, rule text: String, anchorDay: Int, after now: Date, until: Date? = nil, calendar: Calendar = Dates.calendar) -> Date? {
+        guard let rule = RepeatRule(text), let next = nextOccurrence(base, rule: rule, anchorDay: anchorDay, after: now, calendar: calendar) else { return nil }
         if let until, calendar.startOfDay(for: next) > calendar.startOfDay(for: until) { return nil }
         return next
     }
 
-    private static func nextOccurrence(_ base: Date, rule: RepeatRule, anchorDay: Int, after now: Date) -> Date? {
+    private static func nextOccurrence(_ base: Date, rule: RepeatRule, anchorDay: Int, after now: Date, calendar: Calendar) -> Date? {
         let cal = calendar, n = rule.interval
         switch rule.unit {
         case .day, .week:
@@ -100,7 +100,7 @@ enum Dates {
                 for _ in 0..<(7 * n + 14) {
                     if let week = cal.dateInterval(of: .weekOfYear, for: day)?.start {
                         let weeks = (cal.dateComponents([.day], from: baseWeek, to: week).day ?? 0) / 7
-                        let candidate = replacingDay(of: base, with: day)
+                        let candidate = replacingDay(of: base, with: day, calendar: cal)
                         if weeks >= 0, weeks % n == 0, rule.weekdays.contains(cal.component(.weekday, from: day)), candidate > now, candidate > base {
                             return candidate
                         }
@@ -116,9 +116,9 @@ enum Dates {
             guard let candidate = cal.date(byAdding: .day, value: steps * step, to: base) else { return nil }
             return candidate > now ? candidate : cal.date(byAdding: .day, value: step, to: candidate)
         case .month:
-            let months = max(n, (cal.dateComponents([.month], from: monthStart(base), to: monthStart(now)).month ?? n) / n * n)
+            let months = max(n, (cal.dateComponents([.month], from: monthStart(base, calendar: cal), to: monthStart(now, calendar: cal)).month ?? n) / n * n)
             func candidate(_ offset: Int) -> Date? {
-                let month = shiftMonth(base, by: offset)
+                let month = shiftMonth(base, by: offset, calendar: cal)
                 let last = cal.range(of: .day, in: .month, for: month)!.count
                 var parts = cal.dateComponents([.year, .month], from: month)
                 parts.day = min(max(1, anchorDay > 0 ? anchorDay : cal.component(.day, from: base)), last)
@@ -189,7 +189,15 @@ enum Dates {
         return calendar
     }
 
-    static func monthStart(_ date: Date) -> Date {
+    /// Missing legacy metadata is handled by callers; invalid stored zones never become the device zone.
+    static func recurrenceCalendar(timeZoneID: String?) -> Calendar? {
+        guard let timeZoneID, !timeZoneID.isEmpty, let zone = TimeZone(identifier: timeZoneID) else { return nil }
+        var result = calendar
+        result.timeZone = zone
+        return result
+    }
+
+    static func monthStart(_ date: Date, calendar: Calendar = Dates.calendar) -> Date {
         calendar.dateInterval(of: .month, for: date)!.start
     }
 
@@ -201,8 +209,8 @@ enum Dates {
         return (0..<count).map { calendar.date(byAdding: .day, value: $0 - offset, to: start)! }
     }
 
-    static func shiftMonth(_ date: Date, by amount: Int) -> Date {
-        calendar.date(byAdding: .month, value: amount, to: monthStart(date))!
+    static func shiftMonth(_ date: Date, by amount: Int, calendar: Calendar = Dates.calendar) -> Date {
+        calendar.date(byAdding: .month, value: amount, to: monthStart(date, calendar: calendar))!
     }
 
     static func weekCells(_ date: Date) -> [Date] {
@@ -211,7 +219,7 @@ enum Dates {
         return (0..<7).map { calendar.date(byAdding: .day, value: $0 - offset, to: start)! }
     }
 
-    static func replacingDay(of date: Date, with day: Date) -> Date {
+    static func replacingDay(of date: Date, with day: Date, calendar: Calendar = Dates.calendar) -> Date {
         var parts = calendar.dateComponents([.year, .month, .day], from: day)
         let time = calendar.dateComponents([.hour, .minute], from: date)
         parts.hour = time.hour; parts.minute = time.minute
@@ -220,7 +228,7 @@ enum Dates {
 
     static func sameDay(_ a: Date, _ b: Date) -> Bool { calendar.isDate(a, inSameDayAs: b) }
 
-    static func label(_ date: Date, pattern: String = "M月d日 EEEE") -> String {
+    static func label(_ date: Date, pattern: String = "M月d日 EEEE", calendar: Calendar = Dates.calendar) -> String {
         let cal = calendar, locale = UISettings.locale
         let format = formatPattern(pattern, language: UISettings.language)
         let key = locale.identifier + "|" + cal.timeZone.identifier + "|" + format
@@ -229,7 +237,7 @@ enum Dates {
         var cache = storage["Tally.dateFormatters"] as? [String: DateFormatter] ?? [:]
         if let formatter = cache[key] { return formatter.string(from: date) }
         let formatter = DateFormatter()
-        formatter.calendar = cal; formatter.locale = locale; formatter.dateFormat = format
+        formatter.calendar = cal; formatter.timeZone = cal.timeZone; formatter.locale = locale; formatter.dateFormat = format
         if cache.count >= 32 { cache.removeAll() }
         cache[key] = formatter; storage["Tally.dateFormatters"] = cache
         return formatter.string(from: date)

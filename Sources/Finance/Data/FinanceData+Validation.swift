@@ -5,8 +5,9 @@ extension FinanceData {
         func check(_ valid: Bool, _ zh: String, _ en: String) throws { if !valid { throw TaskBackup.invalid(L(zh, en)) } }
         func unique<T: Identifiable>(_ items: [T]) -> Bool where T.ID: Hashable { Set(items.map(\.id)).count == items.count }
         try check(entries.count <= 100_000 && accounts.count <= 1000 && books.count <= 1000 && categories.count <= 1000, "记账数据超过当前支持的大小。", "Ledger exceeds supported size.")
-        try check((1...2).contains(version) && Money.currencies.contains(baseCurrency), "记账数据版本或本位币无效。", "Invalid ledger version or base currency.")
+        try check((1...3).contains(version) && Money.currencies.contains(baseCurrency), "记账数据版本或本位币无效。", "Invalid ledger version or base currency.")
         try check(version >= 2 || !entries.contains(where: \.isPending), "待入账账单需要新版记账数据格式。", "Pending entries require the newer ledger format.")
+        try check(version >= 3 || !recurringBills.contains { $0.repeatTimeZoneID != nil }, "重复时区需要新版记账数据格式。", "Repeat time zones require the newer ledger format.")
         try check(unique(accounts) && unique(books) && unique(categories) && unique(entries), "记账数据含重复编号。", "Duplicate ledger identifiers.")
         try validateCategoryHierarchy()
         let accountMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })

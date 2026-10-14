@@ -142,8 +142,10 @@ struct FinanceRecurringEditor: View {
     /// The next date as a whole day picker; its time of day is kept.
     private var nextDay: Binding<Date> {
         Binding(get: { bill.nextDate }, set: { day in
-            let time = Dates.calendar.dateComponents([.hour, .minute], from: bill.nextDate)
-            bill.reschedule(to: Dates.calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day) ?? day)
+            guard let calendar = bill.recurrenceCalendar else { return }
+            let time = calendar.dateComponents([.hour, .minute], from: bill.nextDate)
+            guard let date = calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day) else { return }
+            bill.reschedule(to: date)
         })
     }
     private var foreignAccount: Bool { account.map { $0.currency != bill.currency } ?? false }
@@ -189,8 +191,11 @@ struct FinanceRecurringEditor: View {
                 }
                 Section {
                     DatePicker(L("下一期日期", "Next date"), selection: nextDay, displayedComponents: .date)
+                        .environment(\.calendar, bill.recurrenceCalendar ?? Dates.calendar)
+                        .environment(\.timeZone, (bill.recurrenceCalendar ?? Dates.calendar).timeZone)
+                        .disabled(bill.recurrenceCalendar == nil)
                         .accessibilityHint(L("每月几号、每周几都跟着这一天", "The day of month or week follows this date"))
-                    RecurringScheduleControls(rule: $bill.rule, until: $bill.until, start: bill.nextDate, allowsNone: false)
+                    RecurringScheduleControls(rule: $bill.rule, until: $bill.until, start: bill.nextDate, allowsNone: false, repeatTimeZoneID: bill.repeatTimeZoneID)
                 } header: { Text(L("重复", "Repeat")) } footer: {
                     Text(footer).font(.caption).foregroundStyle(.secondary)
                 }

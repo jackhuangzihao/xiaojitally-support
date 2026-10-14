@@ -21,18 +21,21 @@ struct TaskEditor: View {
     @State var notes: String
     @State var hasDate: Bool
     @State var date: Date
+    @State var restoredScheduledDate: AllDayDraftDate?
     @State var hasEnd: Bool
 
     @State var end: Date
     @State var hasTime: Bool
     @State var hasDue: Bool
     @State var due: Date
+    @State var restoredDueDate: AllDayDraftDate?
     @State var dueHasTime: Bool
     @State var priority: Int
     @State var reminderPreset: ReminderPreset
     @State var reminder: Date
     @State var lastRelativeReminder: Date?
     @State var repeatRule: String
+    @State var repeatTimeZoneID: String?
     /// The last day a repeating task comes back; nil repeats without end.
     @State var repeatUntil: Date?
     /// Showing the custom repeat controls (every n days/weeks/months/years, chosen weekdays).
@@ -80,6 +83,8 @@ struct TaskEditor: View {
         _reminderPreset = State(initialValue: task?.resolvedReminderPreset ?? .none)
         _reminder = State(initialValue: task?.reminderAt ?? TaskEditor.defaultCustomReminder(for: task?.scheduledAt ?? request.date))
         _repeatRule = State(initialValue: task?.repeatRule ?? "none")
+        _repeatTimeZoneID = State(initialValue: task == nil || task?.repeatRule == "none"
+            ? Dates.calendar.timeZone.identifier : task?.repeatTimeZoneID)
         _repeatUntil = State(initialValue: task?.repeatUntil)
         _customRepeat = State(initialValue: Self.isCustomRepeat(task?.repeatRule))
         _listID = State(initialValue: task?.list?.id ?? request.listID)
@@ -92,8 +97,13 @@ struct TaskEditor: View {
             _end = State(initialValue: draft.end ?? (draft.scheduled ?? Date()).addingTimeInterval(3600))
             _hasDue = State(initialValue: draft.due != nil); _due = State(initialValue: draft.due ?? Date())
             _dueHasTime = State(initialValue: draft.dueTimed); _priority = State(initialValue: draft.priority)
+            _restoredScheduledDate = State(initialValue: AllDayDraftDate(input: draft.scheduled,
+                normalized: draft.normalizedScheduledDate, timed: draft.timed))
+            _restoredDueDate = State(initialValue: AllDayDraftDate(input: draft.due,
+                normalized: draft.normalizedDueDate, timed: draft.dueTimed))
             _listID = State(initialValue: draft.listID); _repeatRule = State(initialValue: draft.repeating)
             _repeatUntil = State(initialValue: draft.repeatUntil)
+            _repeatTimeZoneID = State(initialValue: draft.repeatTimeZoneID)
             _customRepeat = State(initialValue: Self.isCustomRepeat(draft.repeating))
             _reminderPreset = State(initialValue: draft.preset)
             _reminder = State(initialValue: draft.reminder ?? Self.defaultCustomReminder(for: draft.scheduled))
@@ -209,10 +219,10 @@ struct TaskEditor: View {
             .onChange(of: reminderPreset) { old, new in
                 guard new == .custom else { templateReminder = nil; return }
                 if let copied = templateReminder { reminder = copied; templateReminder = nil; return }
-                if let previous = old.date(base: reminderBase, timed: reminderTimed) ?? lastRelativeReminder { reminder = previous }
+                if let previous = old.date(base: reminderBase, timed: reminderTimed, calendar: repeatCalendar ?? Dates.calendar) ?? lastRelativeReminder { reminder = previous }
                 if let reminderLatest, reminder > reminderLatest { reminder = reminderLatest }
             }
-            .onChange(of: draftState) { _, _ in keepDraft() }
+            .onChange(of: draftState) { old, new in draftChanged(from: old, to: new) }
             .onChange(of: title) { _, _ in suggestionIndex = 0 }
             .onChange(of: notes) { _, _ in suggestionsClosedFor = title }
             .onChange(of: newSubtask) { _, _ in suggestionsClosedFor = title }
@@ -226,7 +236,7 @@ struct TaskEditor: View {
             .task {
                 // New tasks start typing in the title; existing ones open without a selected title that a keystroke could replace.
                 try? await Task.sleep(for: .milliseconds(80))
-                focus = request.task == nil ? .title : .sheet
+                focus = request.task == nil ? TaskEditor.Focus.title : TaskEditor.Focus.sheet
             }
             .interactiveDismissDisabled(isSaving || hasChanges)
             .navigationTitle(original == nil ? L("新建任务", "New task") : L("任务详情", "Task details"))

@@ -100,9 +100,16 @@ enum CloudMigration {
             return nil
         }
         let snapshot = try await decode(record)
-        let actual = try await protect(snapshot, account: account, source: "snapshot")
-        guard actual == expectedDigest else { throw CloudRecordError.inconsistentCloud("Legacy snapshot digest mismatch") }
+        try await protect(snapshot, account: account, source: "snapshot")
+        guard try matchesLegacyDigest(expectedDigest, snapshot: snapshot) else { throw CloudRecordError.inconsistentCloud("Legacy snapshot digest mismatch") }
         return snapshot
+    }
+
+    /// A sealed format-14/15 migration may retain a digest produced by the previous canonical encoder.
+    static func matchesLegacyDigest(_ expected: String, snapshot: TaskBackup) throws -> Bool {
+        if try CloudMerge.digest(CloudMerge.bytes(snapshot)) == expected { return true }
+        guard snapshot.version <= 13, (snapshot.finance?.version ?? 1) <= 2 else { return false }
+        return try CloudMerge.digest(CloudMerge.bytes(snapshot, legacyMigrationFormat: true)) == expected
     }
 
     static func markCommitted(in database: CKDatabase, digest: String?, authorize: @Sendable () async throws -> Void) async throws {

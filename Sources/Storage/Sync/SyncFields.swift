@@ -12,18 +12,21 @@ enum SyncFields {
         var reminderKind: String
         var reminderNeedsAttention: Bool
         var repeatAnchorDay: Int
+        var repeatTimeZoneID: String?
 
         init(_ task: TaskBackup.TaskRecord) {
             scheduledAt = task.scheduledAt; hasTime = task.hasTime; endAt = task.endAt
             dueAt = task.dueAt; dueHasTime = task.dueHasTime; reminderAt = task.reminderAt
             reminderKind = task.reminderKind; reminderNeedsAttention = task.reminderNeedsAttention
             repeatAnchorDay = task.repeatAnchorDay
+            repeatTimeZoneID = task.repeatTimeZoneID
         }
         func apply(to task: inout TaskBackup.TaskRecord) {
             task.scheduledAt = scheduledAt; task.hasTime = hasTime; task.endAt = endAt
             task.dueAt = dueAt; task.dueHasTime = dueHasTime; task.reminderAt = reminderAt
             task.reminderKind = reminderKind; task.reminderNeedsAttention = reminderNeedsAttention
             task.repeatAnchorDay = repeatAnchorDay
+            task.repeatTimeZoneID = repeatTimeZoneID
         }
     }
 

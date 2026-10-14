@@ -8,11 +8,15 @@ struct RecurringScheduleControls: View {
     let start: Date
     /// New entries offer "Never"; an existing bill always repeats.
     var allowsNone = true
+    var repeatTimeZoneID: String? = nil
     @State private var custom = false
 
     private static let presets = ["daily", "weekly", "monthly", "yearly"]
-    private var baseWeekday: Int { Dates.calendar.component(.weekday, from: start) }
-    private var startDay: Date { Dates.calendar.startOfDay(for: start) }
+    private var recurrenceCalendar: Calendar? {
+        repeatTimeZoneID == nil ? Dates.calendar : Dates.recurrenceCalendar(timeZoneID: repeatTimeZoneID)
+    }
+    private var baseWeekday: Int { recurrenceCalendar?.component(.weekday, from: start) ?? 1 }
+    private var startDay: Date { recurrenceCalendar?.startOfDay(for: start) ?? start }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -40,14 +44,16 @@ struct RecurringScheduleControls: View {
                     Spacer()
                     SelectPill(title: L("永不", "Never"), selected: until == nil) { until = nil }
                     SelectPill(title: L("到某天为止", "On a date"), selected: until != nil) {
-                        if until == nil { until = Dates.calendar.date(byAdding: .year, value: 1, to: startDay) }
+                        if until == nil { until = recurrenceCalendar?.date(byAdding: .year, value: 1, to: startDay) }
                     }
                 }
-                if let until {
+                if let until, let calendar = recurrenceCalendar {
                     DatePicker(L("最后一次不晚于", "Last time on or before"),
-                               selection: Binding(get: { until }, set: { self.until = Dates.calendar.startOfDay(for: $0) }),
+                               selection: Binding(get: { until }, set: { self.until = calendar.startOfDay(for: $0) }),
                                in: startDay..., displayedComponents: .date)
                         .datePickerStyle(.compact).font(.callout)
+                        .environment(\.calendar, calendar)
+                        .environment(\.timeZone, calendar.timeZone)
                 }
             }
         }
@@ -55,7 +61,9 @@ struct RecurringScheduleControls: View {
         .frame(minWidth: 0, idealWidth: 360, maxWidth: .infinity, alignment: .leading)
         .onAppear { custom = rule != "none" && !Self.presets.contains(rule) }
         // An end before the next occurrence would end the bill before it starts.
-        .onChange(of: startDay) { _, day in if let until, until < day { self.until = day } }
+        .onChange(of: startDay) { _, day in
+            if let calendar = recurrenceCalendar, let until, calendar.startOfDay(for: until) < day { self.until = day }
+        }
     }
 
     private func label(for preset: String) -> String {
@@ -68,7 +76,8 @@ struct RecurringScheduleControls: View {
     }
     /// "每周五", "每月 9 日", "每年 10月9日" or a custom rule's own wording, from the first occurrence.
     private var scheduleText: String {
-        MoneyRecurring.scheduleLabel(rule: rule, anchorDay: Dates.calendar.component(.day, from: start), date: start)
+        guard let calendar = recurrenceCalendar else { return Dates.repeatLabel(rule) }
+        return MoneyRecurring.scheduleLabel(rule: rule, anchorDay: calendar.component(.day, from: start), date: start, calendar: calendar)
     }
 }
 

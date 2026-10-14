@@ -1,9 +1,9 @@
 import Foundation
 import OSLog
 
-/// Wire format is independent of business data. Format 15 fences publishers unaware of cloud collection.
+/// Format 16 fences publishers that would discard recurrence time zones; immutable storage is unchanged.
 enum CloudCommitProtocol {
-    static let format = 15
+    static let format = 16
     static let maximumBlobBytes = 900 * 1024
     static let manifestPageBytes = 16 * 1024
     static let batchSize = 200 // Includes headroom below CloudKit's per-request limit.

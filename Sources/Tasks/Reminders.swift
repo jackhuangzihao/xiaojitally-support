@@ -39,7 +39,7 @@ struct ReminderEntry: Equatable {
         var entries: [Self] = []
         for task in tasks where !task.isDone && task.deletedAt == nil && task.previewSourceID == nil {
             if let date = task.reminderAt, date > now {
-                entries.append(Self(id: task.id, title: task.title, date: date, early: isEarly(date, for: task.calendarDate, timed: task.clockDate != nil)))
+                entries.append(Self(id: task.id, title: task.title, date: date, early: isEarly(date, for: task.calendarDate, timed: task.clockDate != nil, calendar: task.recurrenceCalendar ?? Dates.calendar)))
             }
             entries += later(task, now: now)
         }
@@ -49,29 +49,28 @@ struct ReminderEntry: Equatable {
     /// Later times of a repeating task, within the next 60 days (at most 30 of them). Only the newest instance of a
     /// series projects; ticking it off hands the reminders over to the instance it creates, so none is doubled.
     static func later(_ task: TaskItem, now: Date, limit: Int = 30) -> [Self] {
-        guard task.repeatRule != "none", task.nextOccurrenceID == nil, task.reminderAt != nil, let base = task.calendarDate else { return [] }
+        guard task.repeatRule != "none", task.nextOccurrenceID == nil, task.reminderAt != nil, let base = task.calendarDate, let calendar = task.recurrenceCalendar else { return [] }
         let horizon = now.addingTimeInterval(60 * 86_400)
         // Start a month back, so a long-missed series still reaches today without walking years of dates.
         var after = max(base, now.addingTimeInterval(-30 * 86_400))
         var result: [Self] = []
         for _ in 0..<500 {
-            guard result.count < limit, let next = Dates.nextRepeat(base, rule: task.repeatRule, anchorDay: task.repeatAnchorDay,
-                                                                     after: after, until: task.repeatUntil), next > after else { break }
+            guard result.count < limit, let next = task.nextRepeat(after: after), next > after else { break }
             after = next
             guard let date = task.reminderDate(forOccurrenceAt: next) else { break }
             if date > horizon { break }
             if date > now {
                 result.append(Self(id: task.id, title: task.title, date: date, occurrence: next,
-                                   early: isEarly(date, for: next, timed: task.clockDate != nil)))
+                                   early: isEarly(date, for: next, timed: task.clockDate != nil, calendar: calendar)))
             }
         }
         return result
     }
 
     /// A timed task: before its start. An all-day task: before its day.
-    static func isEarly(_ date: Date, for start: Date?, timed: Bool) -> Bool {
+    static func isEarly(_ date: Date, for start: Date?, timed: Bool, calendar: Calendar = Dates.calendar) -> Bool {
         guard let start else { return false }
-        return date < (timed ? start : Dates.calendar.startOfDay(for: start))
+        return date < (timed ? start : calendar.startOfDay(for: start))
     }
 
     var request: UNNotificationRequest {
@@ -119,10 +118,10 @@ enum ReminderPreset: String, CaseIterable, Identifiable {
     }
 
     /// A reminder may not come after the task: its time, or the end of its day when it has no time.
-    static func latest(base: Date?, timed: Bool) -> Date? {
+    static func latest(base: Date?, timed: Bool, calendar: Calendar = Dates.calendar) -> Date? {
         guard let base else { return nil }
         if timed { return base }
-        return Dates.calendar.date(bySettingHour: 23, minute: 59, second: 0, of: base)
+        return calendar.date(bySettingHour: 23, minute: 59, second: 0, of: base)
     }
 
     /// `base` is the task's scheduled moment (or its day when `timed` is false).

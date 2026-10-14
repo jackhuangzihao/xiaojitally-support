@@ -179,13 +179,15 @@ extension TaskEditor {
                             Spacer()
                             SelectPill(title: L("永不", "Never"), selected: repeatUntil == nil) { repeatUntil = nil }
                             SelectPill(title: L("到某天为止", "On a date"), selected: repeatUntil != nil) {
-                                if repeatUntil == nil { repeatUntil = Dates.calendar.date(byAdding: .month, value: 3, to: repeatStartDay) }
+                                if repeatUntil == nil { repeatUntil = repeatCalendar?.date(byAdding: .month, value: 3, to: repeatStartDay) }
                             }
                         }
                         if let until = repeatUntil {
                             DatePicker(L("最后一次不晚于", "Last time on or before"),
-                                       selection: Binding(get: { until }, set: { repeatUntil = Dates.calendar.startOfDay(for: $0) }),
+                                       selection: Binding(get: { until }, set: { repeatUntil = repeatCalendar?.startOfDay(for: $0) }),
                                        in: repeatStartDay..., displayedComponents: .date)
+                                .environment(\.calendar, repeatCalendar ?? Dates.calendar)
+                                .environment(\.timeZone, (repeatCalendar ?? Dates.calendar).timeZone)
                                 .datePickerStyle(.compact).font(.callout)
                         }
                     }
@@ -240,20 +242,24 @@ extension TaskEditor {
 
     /// The moment relative reminders count from: the scheduled date, or the deadline when there is none.
     var reminderBase: Date? {
-        if hasDate { return hasTime ? date : Dates.calendar.startOfDay(for: date) }
-        guard hasDue else { return nil }
-        return dueHasTime ? due : Dates.calendar.startOfDay(for: due)
+        savedScheduledDate ?? savedDueDate
     }
     var reminderTimed: Bool { hasDate ? hasTime : hasDue && dueHasTime }
     var reminderOptions: [ReminderPreset] { ReminderPreset.options(base: reminderBase, timed: reminderTimed) }
-    var reminderLatest: Date? { ReminderPreset.latest(base: reminderBase, timed: reminderTimed) }
+    var reminderLatest: Date? { ReminderPreset.latest(base: reminderBase, timed: reminderTimed, calendar: repeatCalendar ?? Dates.calendar) }
 
     var effectiveReminder: Date? {
-        reminderPreset == .custom ? reminder : reminderPreset.date(base: reminderBase, timed: reminderTimed)
+        if let original, reminderPreset.rawValue == original.reminderKind,
+           reminderPreset != .custom || reminder == original.reminderAt,
+           savedScheduledDate == original.scheduledAt, hasTime == original.hasTime,
+           savedDueDate == original.dueAt, dueHasTime == original.dueHasTime {
+            return original.reminderAt
+        }
+        return reminderPreset == .custom ? reminder : reminderPreset.date(base: reminderBase, timed: reminderTimed, calendar: repeatCalendar ?? Dates.calendar)
     }
 
     func rememberRelativeReminder() {
-        if let value = reminderPreset.date(base: reminderBase, timed: reminderTimed) { lastRelativeReminder = value }
+        if let value = reminderPreset.date(base: reminderBase, timed: reminderTimed, calendar: repeatCalendar ?? Dates.calendar) { lastRelativeReminder = value }
     }
 
     private var dueCountdown: DeadlineCountdown {
@@ -275,9 +281,10 @@ extension TaskEditor {
         guard let base = reminderBase else {
             return L("先设置日期，才能定期重复。", "Set a date first to repeat this task.")
         }
-        let anchor = request.task?.repeatAnchor(for: base, rule: repeatRule) ?? Dates.calendar.component(.day, from: base)
+        guard let calendar = repeatCalendar else { return nil }
+        let anchor = request.task?.repeatAnchor(for: base, rule: repeatRule, calendar: calendar) ?? calendar.component(.day, from: base)
         let start = L("从 \(Dates.label(base, pattern: "M月d日")) 开始。", "Starts \(Dates.label(base, pattern: "MMM d")). ")
-        guard let next = Dates.nextRepeat(base, rule: repeatRule, anchorDay: anchor, after: max(Date(), base), until: repeatUntil) else {
+        guard let next = Dates.nextRepeat(base, rule: repeatRule, anchorDay: anchor, after: max(Date(), base), until: savedRepeatUntil, calendar: calendar) else {
             return start + L("结束日期之前不会再有下一次。", "There is no next time before the end date.")
         }
         let when = Dates.label(next, pattern: "M月d日 E")
@@ -295,15 +302,20 @@ extension TaskEditor {
         return !repeatPresets.contains(rule)
     }
 
-    /// The task's own day: the first time it happens.
-    var repeatStartDay: Date { Dates.calendar.startOfDay(for: reminderBase ?? date) }
-    private var baseWeekday: Int { Dates.calendar.component(.weekday, from: repeatStartDay) }
+    var repeatCalendar: Calendar? {
+        guard repeatRule != "none", let repeatTimeZoneID else { return Dates.calendar }
+        return Dates.recurrenceCalendar(timeZoneID: repeatTimeZoneID)
+    }
+
+    /// The task's own day in the rule's timezone, not the device viewing the editor.
+    var repeatStartDay: Date { (repeatCalendar ?? Dates.calendar).startOfDay(for: reminderBase ?? date) }
+    private var baseWeekday: Int { (repeatCalendar ?? Dates.calendar).component(.weekday, from: repeatStartDay) }
 
     private var repeatText: String {
         guard repeatRule != "none" else { return L("不重复", "Never") }
         let label = Dates.repeatLabel(repeatRule)
         guard let until = repeatUntil else { return label }
-        return label + L("，至 ", ", until ") + Dates.label(until, pattern: "M月d日")
+        return label + L("，至 ", ", until ") + Dates.label(until, pattern: "M月d日", calendar: repeatCalendar ?? Dates.calendar)
     }
 
     /// Every n days, weeks, months or years; weekly can also pick the weekdays.

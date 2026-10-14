@@ -97,6 +97,7 @@ private struct ConflictDetails {
           (L("提醒时间", "Reminder time"), date(row.reminderAt)), (L("提醒方式", "Reminder"), ReminderPreset(rawValue: row.reminderKind)?.title ?? L("自定义", "Custom")),
           (L("提醒待调整", "Reminder needs attention"), yes(row.reminderNeedsAttention)),
           (L("重复", "Repeat"), Dates.repeatLabel(row.repeatRule)), (L("重复截至", "Repeat until"), date(row.repeatUntil)),
+          (L("重复时区", "Repeat time zone"), row.repeatTimeZoneID ?? L("尚未指定", "Not assigned")),
           (L("重复基准日", "Repeat day"), String(row.repeatAnchorDay)),
           (L("后续任务", "Next occurrence"), name(row.nextOccurrenceID, in: tasks, label: { $0.title })), (L("删除时间", "Deleted at"), date(row.deletedAt)) ]
     }
@@ -119,6 +120,7 @@ private struct ConflictDetails {
           (L("账户", "Account"), name(row.accountID, in: accounts, label: { $0.name })), (L("账户计划金额", "Planned account amount"), decimal(row.accountAmount)),
           (L("账本", "Book"), name(row.bookID, in: books, label: { $0.name })), (L("分类", "Category"), name(row.categoryID, in: categories, label: { $0.label })),
           (L("重复", "Repeat"), row.scheduleLabel), (L("下一期", "Next"), date(row.nextDate)), (L("重复截至", "Repeat until"), date(row.until)),
+          (L("重复时区", "Repeat time zone"), row.repeatTimeZoneID ?? L("尚未指定", "Not assigned")),
           (L("备注", "Notes"), row.notes), (L("标签", "Tags"), row.tags) ]
     }
     private func account(_ row: MoneyAccount) -> Fields {

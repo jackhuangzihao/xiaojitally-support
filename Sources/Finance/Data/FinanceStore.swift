@@ -26,7 +26,7 @@ import SwiftData
     static func stage(_ value: FinanceData, in context: ModelContext, trackSyncChanges: Bool = true) throws {
         try value.validate()
         var normalized = value
-        normalized.version = 2
+        normalized.version = 3
         for i in normalized.entries.indices {
             normalized.entries[i].date = MoneyEntry.timestamp(normalized.entries[i].date)
             normalized.entries[i].deletedAt = normalized.entries[i].deletedAt.map(MoneyEntry.timestamp)
