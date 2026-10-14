@@ -114,6 +114,66 @@ import AppKit
             context.rollback()
             try check(try SyncChanges.read(context) == edited, "rollback after clearing restores committed records")
         }
+        return count + (try financeSaveDeltas())
+    }
+
+    private static func financeSaveDeltas() throws -> Int {
+        var count = 0
+        func check(_ value: Bool, _ label: String) throws {
+            guard value else { throw TaskBackup.invalid("FINANCE SAVE DELTA: " + label) }; count += 1
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Tally-FinanceDelta-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for round in 0..<3 {
+            let url = root.appendingPathComponent("delta-\(round).store")
+            let store = try Store.make(url: url), context = store.mainContext
+            var ledger = FinanceData.initial
+            ledger.entries = (0..<40).map { index in
+                var entry = MoneyEntry(); entry.title = "Entry \(index)"; entry.amount = 10; entry.baseAmount = 10
+                entry.bookID = ledger.books[0].id
+                entry.date = Date(timeIntervalSince1970: 1_800_000_000.875 + Double(index))
+                return entry
+            }
+            ledger.entries[1].deletedAt = Date(timeIntervalSince1970: 1_800_001_000.125)
+            try FinanceStore.stage(ledger, in: context); try Store.save(context)
+            let original = try FinanceStore.read(context)!, history = try SyncChanges.read(context)!
+            try check(original.entries[0].date == Date(timeIntervalSince1970: 1_800_000_000)
+                      && original.entries[1].deletedAt == Date(timeIntervalSince1970: 1_800_001_000),
+                      "fractional live and deleted dates still normalize to whole seconds")
+            let removed = original.entries[0], edited = original.entries[2], untouched = original.entries[3]
+            var added = original.entries[4]; added.id = UUID(); added.title = "Inserted"
+            try FinanceStore.update(context) { value in
+                value.entries.removeAll { $0.id == removed.id }
+                value.entries[1].notes = "Updated"
+                value.entries.append(added)
+                value.entries.reverse()
+            }
+            let saved = try FinanceStore.read(context)!, changed = try SyncChanges.read(context)!
+            let removedKey = SyncChanges.key("entry", removed.id), editedKey = SyncChanges.key("entry", edited.id)
+            let addedKey = SyncChanges.key("entry", added.id), untouchedKey = SyncChanges.key("entry", untouched.id)
+            try check(changed[removedKey]?.fingerprint == nil && changed[removedKey]?.version != nil,
+                      "removal records a versioned deletion even when entries also reorder")
+            try check(changed[addedKey]?.fingerprint == SyncChanges.fingerprint(added)
+                      && changed[addedKey]?.fields?["title"]?.version != nil,
+                      "inserted entry retains its content and field history")
+            try check(changed[editedKey]?.fields?["notes"]?.fingerprint == SyncChanges.fingerprint("Updated")
+                      && changed[editedKey]?.fields?["title"] == history[editedKey]?.fields?["title"],
+                      "only the changed field acquires a new revision")
+            try check(changed[untouchedKey] == history[untouchedKey], "unchanged entries keep all revision metadata")
+            try check(saved.entries.count == original.entries.count && !saved.entries.contains { $0.id == removed.id },
+                      "mixed edits preserve entry count and remove only the requested row")
+            try FinanceStore.update(context) { $0.entries.reverse() }
+            try check(try SyncChanges.read(context) == changed, "reordering alone cannot manufacture sync edits")
+            let reordered = try FinanceStore.read(context)!
+            var staged = reordered; staged.entries[0].notes = "Uncommitted"
+            try FinanceStore.stage(staged, in: context); context.rollback()
+            try check(try FinanceStore.read(context) == reordered && SyncChanges.read(context) == changed,
+                      "rollback discards ledger and history caches together")
+            let reopened = try Store.make(url: url)
+            try check(try FinanceStore.read(reopened.mainContext) == reordered && SyncChanges.read(reopened.mainContext) == changed,
+                      "reopening preserves the complete ledger and matching revisions")
+        }
         return count
     }
 

@@ -28,8 +28,11 @@ import SwiftData
         var normalized = value
         normalized.version = 3
         for i in normalized.entries.indices {
-            normalized.entries[i].date = MoneyEntry.timestamp(normalized.entries[i].date)
-            normalized.entries[i].deletedAt = normalized.entries[i].deletedAt.map(MoneyEntry.timestamp)
+            let date = MoneyEntry.timestamp(normalized.entries[i].date)
+            let deletedAt = normalized.entries[i].deletedAt.map(MoneyEntry.timestamp)
+            // Avoid copying the full entries array when its timestamps are already normalized.
+            if normalized.entries[i].date != date { normalized.entries[i].date = date }
+            if normalized.entries[i].deletedAt != deletedAt { normalized.entries[i].deletedAt = deletedAt }
         }
         for i in normalized.rates.indices { normalized.rates[i].fetchedAt = MoneyEntry.timestamp(normalized.rates[i].fetchedAt) }
         if normalized.recurring?.isEmpty == true { normalized.recurring = nil }

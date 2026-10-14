@@ -10,14 +10,15 @@ extension SyncChanges {
 
         static func encode(_ revisions: Revisions, reusing previous: CachedHistory?, cancellable: Bool = false) throws -> CachedHistory {
             // Only previously validated, identical records can bypass validation and encoding.
-            try validate(revisions.filter { previous?.value[$0.key] != $0.value })
+            let changed = revisions.filter { previous?.value[$0.key] != $0.value }
+            try validate(changed)
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             var records: [String: Data] = [:]; records.reserveCapacity(revisions.count)
             var byteCount = 2
             for (key, revision) in revisions {
                 if cancellable { try Task.checkCancellation() }
                 let encoded: Data
-                if previous?.value[key] == revision, let existing = previous?.records?[key] { encoded = existing }
+                if changed[key] == nil, let existing = previous?.records?[key] { encoded = existing }
                 else {
                     var record = try encoder.encode(key); record.append(58)
                     record.append(try encoder.encode(revision)); encoded = record

@@ -221,19 +221,22 @@ enum SyncChanges {
     }
     @MainActor static func trackFinance(from previous: FinanceData?, to next: FinanceData, in context: ModelContext, now: Date = Date()) throws {
         var changes: [String: String?] = [:], previousValues: [String: String] = [:]
-        func collect<T: Encodable & Equatable & Identifiable>(_ before: [T], _ after: [T], kind: String) throws where T.ID == UUID {
+        @discardableResult
+        func collect<T: Encodable & Equatable & Identifiable>(_ before: [T], _ after: [T], kind: String) throws -> Set<UUID> where T.ID == UUID {
             let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
             let new = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
-            for id in Set(old.keys).union(new.keys) where old[id] != new[id] {
+            let changed = Set(old.keys).union(new.keys).filter { old[$0] != new[$0] }
+            for id in changed {
                 if let before = old[id] { previousValues[key(kind, id)] = try fingerprint(before) }
                 if let value = new[id] { changes[key(kind, id)] = try fingerprint(value) }
                 else { changes[key(kind, id)] = .some(nil) }
             }
+            return changed
         }
         try collect(previous?.accounts ?? [], next.accounts, kind: "account")
         try collect(previous?.books ?? [], next.books, kind: "book")
         try collect(previous?.categories ?? [], next.categories, kind: "category")
-        try collect(previous?.entries ?? [], next.entries, kind: "entry")
+        let changedEntryIDs = try collect(previous?.entries ?? [], next.entries, kind: "entry")
         try collect(previous?.recurringBills ?? [], next.recurringBills, kind: "recurring")
         let oldSettings = try financeSettings(previous), newSettings = try financeSettings(next)
         for key in Set(oldSettings.keys).union(newSettings.keys) where oldSettings[key] != newSettings[key] {
@@ -241,9 +244,10 @@ enum SyncChanges {
         }
         guard !changes.isEmpty else { return }
         var revisions = try read(context) ?? [:]
-        let before = try Dictionary(uniqueKeysWithValues: (previous?.entries ?? []).filter { changes[key("entry", $0.id)] != nil }
+        // Compare native IDs while scanning; only changed entries need string keys and field hashes.
+        let before = try Dictionary(uniqueKeysWithValues: (previous?.entries ?? []).filter { changedEntryIDs.contains($0.id) }
             .map { (key("entry", $0.id), try SyncFields.hashes($0)) })
-        let after = try Dictionary(uniqueKeysWithValues: next.entries.filter { changes[key("entry", $0.id)] != nil }
+        let after = try Dictionary(uniqueKeysWithValues: next.entries.filter { changedEntryIDs.contains($0.id) }
             .map { (key("entry", $0.id), try SyncFields.hashes($0)) })
         record(changes, in: &revisions, now: now, fieldFingerprints: after, previousFieldFingerprints: before,
                createdKeys: Set(after.keys).subtracting(before.keys), actor: SyncVersion.deviceID, previousFingerprints: previousValues)
