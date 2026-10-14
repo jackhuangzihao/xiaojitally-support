@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import OSLog
 
 /// Portable, versioned local backup. No settings, credentials or notification permission are imported.
 struct TaskBackup: Codable {
@@ -167,6 +168,19 @@ struct TaskBackup: Codable {
         try Store.discardingOnFailure(context) { try apply(to: context, replace: replace) }
     }
 
+    @MainActor func restoreKeepingCopy(_ context: ModelContext, replace: Bool, directory: URL) throws -> RestoreBackupFiles.WriteResult {
+        try Store.recovery.requireWritable(context)
+        let current = try Self.capture(context)
+        _ = try merging(into: current, replace: replace)
+        let checkpoint: RestoreBackupFiles.WriteResult
+        do { checkpoint = try RestoreBackupFiles.write(current.encoded(), directory: directory) }
+        catch {
+            throw Self.invalid(L("无法保存恢复前副本，未执行恢复：", "Restore was not performed because its safety copy could not be saved: ") + error.localizedDescription)
+        }
+        try restore(context, replace: replace)
+        return checkpoint
+    }
+
     @MainActor private func apply(to context: ModelContext, replace: Bool) throws {
         let original = try Self.capture(context)
         let merged = try merging(into: original, replace: replace)
@@ -200,5 +214,71 @@ struct TaskBackup: Codable {
         let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("JianshiBackups", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent("before-last-restore.json")
+    }
+}
+
+/// Restore checkpoints never share the hourly automatic-backup retention bucket.
+enum RestoreBackupFiles {
+    static let retainedCount = 10
+    private static let prefix = "before-restore-"
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tally", category: "RestoreBackup")
+    struct Copy: Identifiable {
+        let url: URL
+        let date: Date
+        let legacy: Bool
+        var id: String { url.lastPathComponent }
+    }
+    struct WriteResult {
+        let copy: Copy
+        let cleanupFailed: Bool
+    }
+    static func copies(in directory: URL) throws -> [Copy] {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: directory.path) else { return [] }
+        return try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]).compactMap { url -> Copy? in
+            let name = url.lastPathComponent
+            guard name == "before-last-restore.json" || name.hasPrefix(prefix) && url.pathExtension == "json" else { return nil }
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else { return nil }
+            if name == "before-last-restore.json" {
+                return Copy(url: url, date: values.contentModificationDate ?? .distantPast, legacy: true)
+            }
+            let suffix = String(name.dropFirst(prefix.count).dropLast(5))
+            guard suffix.count == 57, suffix.dropFirst(20).first == "-",
+                  let stamp = Double(suffix.prefix(20)), stamp.isFinite,
+                  UUID(uuidString: String(suffix.suffix(36))) != nil else { return nil }
+            return Copy(url: url, date: Date(timeIntervalSince1970: stamp / 1000), legacy: false)
+        }.sorted {
+            if $0.legacy != $1.legacy { return !$0.legacy }
+            return $0.date == $1.date ? $0.id > $1.id : $0.date > $1.date
+        }
+    }
+    static func write(_ data: Data, directory: URL, now: Date = Date()) throws -> WriteResult {
+        _ = try TaskBackup.decode(data, allowLargeFile: true)
+        let fm = FileManager.default
+        let existing = try copies(in: directory).filter { !$0.legacy }
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        // A backwards clock must not make a new checkpoint the first to be pruned.
+        let milliseconds = max((now.timeIntervalSince1970 * 1000).rounded(),
+                               existing.first.map { ($0.date.timeIntervalSince1970 * 1000).rounded() + 1 } ?? 0)
+        let name = prefix + String(format: "%020.0f", milliseconds) + "-" + UUID().uuidString + ".json"
+        let completed = directory.appendingPathComponent(name)
+        let staging = directory.appendingPathComponent(".restore-partial-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: staging) }
+        try data.write(to: staging, options: .atomic)
+        guard try Data(contentsOf: staging) == data else { throw CocoaError(.fileReadCorruptFile) }
+        try fm.moveItem(at: staging, to: completed)
+        let cleanupFailed = pruneOlderCopies(existing)
+        if cleanupFailed { log.error("Restore checkpoint saved; older checkpoints could not all be pruned") }
+        else { log.notice("Verified restore checkpoint saved; retention limit: \(retainedCount, privacy: .public)") }
+        return WriteResult(copy: Copy(url: completed, date: Date(timeIntervalSince1970: milliseconds / 1000), legacy: false), cleanupFailed: cleanupFailed)
+    }
+    /// A failed cleanup keeps extra copies; it must never invalidate the newly verified checkpoint.
+    static func pruneOlderCopies(_ existing: [Copy], remove: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) -> Bool {
+        var failed = false
+        for old in existing.filter({ !$0.legacy }).dropFirst(retainedCount - 1) {
+            do { try remove(old.url) } catch { failed = true }
+        }
+        return failed
     }
 }

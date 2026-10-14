@@ -48,27 +48,36 @@ struct BackupSettings: View {
     @State private var existingCount = 0
     @State private var missingCount = 0
     @State private var busy = false
-    @State private var hasRecovery = false
+    @State private var recoveryCopies: [RestoreBackupFiles.Copy] = []
+    @State private var cleanupWarning: String?
     @State private var largeImportURL: URL?
     var body: some View {
         Section(L("备份与恢复", "Backup and restore")) {
             Button(L("导出完整备份", "Export full backup")) { exportCurrent() }
             Button(L("从备份恢复…", "Restore from backup…")) { importing = true }
             if busy { ProgressView(L("正在处理备份…", "Processing backup…")).controlSize(.small) }
-            if hasRecovery {
-                Button(L("导出上次恢复前的副本", "Export copy from before last restore")) {
-                    do { document = BackupDocument(data: try Data(contentsOf: TaskBackup.recoveryURL())); exporting = true }
-                    catch { message = error.localizedDescription }
+            if !recoveryCopies.isEmpty {
+                Menu(L("导出恢复前副本", "Export a pre-restore copy")) {
+                    ForEach(recoveryCopies) { copy in
+                        Button((copy.legacy ? L("旧版副本 · ", "Legacy copy · ") : "") + copy.date.formatted(date: .abbreviated, time: .standard)) {
+                            do {
+                                let data = try Data(contentsOf: copy.url)
+                                _ = try TaskBackup.decode(data, allowLargeFile: true)
+                                document = BackupDocument(data: data); exporting = true
+                            } catch { message = error.localizedDescription }
+                        }
+                    }
                 }
             }
+            if let cleanupWarning { Text(cleanupWarning).font(.caption).foregroundStyle(.orange) }
             Text(L("包含全部任务与记账数据（账户、账本、账单、汇率）。文件为明文，请妥善保存。", "Includes all tasks and ledger data (accounts, books, entries and rates). Keep this unencrypted file safe."))
                 .font(.caption).foregroundStyle(.secondary)
             Text(L("旧版备份不含记账数据，恢复时会保留当前账目。新版完整替换会替换任务与记账数据。", "Legacy task-only backups preserve your ledger. Full replacement from a new backup replaces both tasks and ledger.")).font(.caption).foregroundStyle(.secondary)
-            Text(L("恢复前还会单独保留上次恢复前的副本。重要数据建议定期手动导出，另存一份。", "A separate pre-restore copy is also kept. Export important data periodically and keep another copy."))
+            Text(L("单独保留最近 \(RestoreBackupFiles.retainedCount) 份恢复前副本，不参与自动备份的按小时清理。旧版副本仍保留；重要数据请另行导出。", "Keeps the latest \(RestoreBackupFiles.retainedCount) pre-restore copies separately from hourly backups. The legacy copy is kept too. Export important data separately."))
                 .font(.caption).foregroundStyle(.secondary)
         }
         .disabled(busy)
-        .onAppear { hasRecovery = (try? TaskBackup.recoveryURL()).map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
+        .onAppear { refreshRecoveryCopies() }
         .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "Tally-\(Date().formatted(.iso8601.year().month().day().dateSeparator(.dash)))") { result in
             if case .failure(let error) = result { message = error.localizedDescription }
         }
@@ -132,19 +141,19 @@ struct BackupSettings: View {
     }
     private func restore(replace: Bool) {
         guard let pending else { return }
-        busy = true; defer { busy = false; self.pending = nil }
+        busy = true; defer { busy = false; self.pending = nil; refreshRecoveryCopies() }
         do {
-            try Store.recovery.requireWritable(context)
-            let current = try TaskBackup.capture(context)
-            _ = try pending.merging(into: current, replace: replace)
-            let before = try current.encoded()
-            try before.write(to: TaskBackup.recoveryURL(), options: .atomic); hasRecovery = true
-            try pending.restore(context, replace: replace)
+            let result = try pending.restoreKeepingCopy(context, replace: replace, directory: TaskBackup.recoveryURL().deletingLastPathComponent())
+            cleanupWarning = result.cleanupFailed ? L("恢复前副本已保存，部分旧副本未能清理，暂时保留了更多份。", "The pre-restore copy was saved. Some older copies could not be removed, so more copies are being kept temporarily.") : nil
             ReminderScheduler.shared.refresh(context)
             message = L("恢复完成。已过时的提醒会标记为需要调整；未来提醒仍受本机通知权限控制。", "Restore complete. Past reminders are marked for adjustment; future reminders use this device's notification permission.")
         } catch {
             message = Store.recovery.failure == nil ? error.localizedDescription : nil
         }
+    }
+    private func refreshRecoveryCopies() {
+        do { recoveryCopies = try RestoreBackupFiles.copies(in: TaskBackup.recoveryURL().deletingLastPathComponent()) }
+        catch { message = L("无法读取恢复前副本列表：", "Could not read pre-restore copies: ") + error.localizedDescription }
     }
 }
 

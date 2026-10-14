@@ -321,6 +321,7 @@ import AppKit
     }
 
     static func recurrenceAndBackup(today: Date, date: (Int, Int, Int) -> Date, directory: URL, require: (Bool, String) throws -> Void) throws {
+        try restoreCheckpoints(directory: directory, require: require)
         let january = date(2026, 1, 31)
         let february = Dates.nextRepeat(january, rule: "monthly", anchorDay: 31, after: january)!
         try require(Dates.sameDay(february, date(2026, 2, 28)), "Monthly clamps short month")
@@ -909,4 +910,93 @@ import AppKit
             try require(Set(after.lists.compactMap { $0.colorHex?.uppercased() }).count == after.lists.count, "Migrated store has distinct list colors")
         }
     }
+    static func restoreCheckpoints(directory: URL, require: (Bool, String) throws -> Void) throws {
+        let fm = FileManager.default
+        for round in 0..<3 {
+            let folder = directory.appendingPathComponent("restore-checkpoints-\(round)")
+            let container = try Store.make(url: directory.appendingPathComponent("restore-checkpoints-\(round).store"))
+            let context = container.mainContext
+            let originalTask = TaskItem(title: "Original before recovery")
+            originalTask.createdAt = Date(timeIntervalSince1970: 1700000000)
+            context.insert(originalTask)
+            try Store.save(context)
+            let original = try TaskBackup.capture(context)
+            let originalData = try original.encoded()
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let legacy = folder.appendingPathComponent("before-last-restore.json")
+            try originalData.write(to: legacy, options: .atomic)
+            var wrong = original
+            wrong.tasks[0].title = "Restored wrong file"
+            let first = try wrong.restoreKeepingCopy(context, replace: true, directory: folder)
+            let second = try wrong.restoreKeepingCopy(context, replace: true, directory: folder)
+            let firstData = try Data(contentsOf: first.copy.url)
+            let firstSnapshot = try TaskBackup.decode(firstData)
+            let secondSnapshot = try TaskBackup.decode(Data(contentsOf: second.copy.url))
+            try require(firstSnapshot.tasks == original.tasks && secondSnapshot.tasks == wrong.tasks,
+                        "two consecutive restores retain both pre-restore states independently")
+            try require(first.copy.url != second.copy.url && !first.cleanupFailed && !second.cleanupFailed,
+                        "repeated restores have unique verified checkpoints")
+            _ = try BackupFiles.write(wrong.encoded(), directory: folder, owner: "test-device")
+            _ = try BackupFiles.write(wrong.encoded(), directory: folder, owner: "test-device")
+            try require(try Data(contentsOf: first.copy.url) == firstData,
+                        "hourly automatic backup pruning cannot remove a pre-restore checkpoint")
+            _ = try firstSnapshot.restoreKeepingCopy(context, replace: true, directory: folder)
+            try require(try TaskBackup.capture(context).tasks == original.tasks,
+                        "original data remains recoverable after two mistaken replacements")
+            let beforeFailure = try BackupFiles.contentData(TaskBackup.capture(context))
+            let blocker = folder.appendingPathComponent("not-a-directory")
+            try Data("file blocks directory creation".utf8).write(to: blocker)
+            var failed = false
+            do { _ = try wrong.restoreKeepingCopy(context, replace: true, directory: blocker) } catch { failed = true }
+            try require(failed && (try BackupFiles.contentData(TaskBackup.capture(context))) == beforeFailure,
+                        "checkpoint write failure prevents restore and preserves existing data")
+            let count = try RestoreBackupFiles.copies(in: folder).count
+            var invalid = wrong; invalid.tasks.append(invalid.tasks[0])
+            failed = false
+            do { _ = try invalid.restoreKeepingCopy(context, replace: true, directory: folder) } catch { failed = true }
+            try require(failed && (try RestoreBackupFiles.copies(in: folder).count) == count,
+                        "invalid incoming backups are rejected before consuming checkpoint retention")
+            failed = false
+            do { _ = try RestoreBackupFiles.write(Data("broken".utf8), directory: folder) } catch { failed = true }
+            try require(failed && (try Data(contentsOf: first.copy.url)) == firstData,
+                        "invalid checkpoint bytes cannot prune earlier copies")
+
+            // Incomplete staging files and unrelated manual exports never count toward retention.
+            let partial = folder.appendingPathComponent(".restore-partial-interrupted")
+            let manual = folder.appendingPathComponent("manual.json")
+            let lookalike = folder.appendingPathComponent("before-restore-not-ours.json")
+            for file in [partial, manual, lookalike] { try originalData.write(to: file) }
+            let now = Date()
+            var written: [URL] = []
+            for index in 0..<15 {
+                var snapshot = original; snapshot.tasks[0].title = "Before restore \(index)"
+                // Include an identical clock and repeated backward-clock changes.
+                let result = try RestoreBackupFiles.write(snapshot.encoded(), directory: folder, now: now.addingTimeInterval(-Double(index)))
+                written.append(result.copy.url)
+                try require(try RestoreBackupFiles.copies(in: folder).first?.id == result.copy.id,
+                            "new restore checkpoint stays first even with a backward clock")
+            }
+            let copies = try RestoreBackupFiles.copies(in: folder)
+            try require(copies.filter { !$0.legacy }.map(\.id) == written.suffix(10).reversed().map(\.lastPathComponent),
+                        "restore retention keeps exactly the ten latest successful writes")
+            try require(copies.last?.legacy == true && (try Data(contentsOf: legacy)) == originalData,
+                        "the old fixed-name recovery file stays readable and is never overwritten or pruned")
+            try require([partial, manual, lookalike].allSatisfy { fm.fileExists(atPath: $0.path) },
+                        "retention ignores interrupted staging files and unrelated exports")
+            let reopened = try Store.make(url: directory.appendingPathComponent("restore-checkpoints-\(round).store"))
+            try require(try TaskBackup.capture(reopened.mainContext).tasks == original.tasks,
+                        "checkpoint and failed-restore checks preserve stored data after reopening")
+            var removed: [URL] = []
+            let cleanupFailed = RestoreBackupFiles.pruneOlderCopies(copies) { url in
+                removed.append(url); throw CocoaError(.fileWriteNoPermission)
+            }
+            try require(cleanupFailed && removed == [copies[9].url] && (try RestoreBackupFiles.copies(in: folder).count) == copies.count,
+                        "cleanup failure is reported while all recovery copies remain available")
+            var retryRemoved: [URL] = []
+            let retryFailed = RestoreBackupFiles.pruneOlderCopies(copies) { retryRemoved.append($0) }
+            try require(!retryFailed && retryRemoved == removed, "cleanup can retry the same old copies without touching the legacy or recent ones")
+        }
+        print("RESTORE CHECKPOINT PASS: three isolated restore/retention/failure rounds")
+    }
+
 }
