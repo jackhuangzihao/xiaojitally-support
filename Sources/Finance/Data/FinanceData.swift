@@ -10,6 +10,7 @@ struct FinanceData: Codable, Equatable {
     var rates: [MoneyRate] = []
     /// Optional so ledgers written before recurring bills decode unchanged; nil when there are none.
     var recurring: [MoneyRecurring]?
+    func category(_ id: UUID?) -> MoneyCategory? { id.flatMap { id in categories.first { $0.id == id } } }
     static var initial: Self {
         var result = Self()
         result.books = [MoneyBook(id: UUID(uuidString: "E837FC77-248C-4DE3-AF81-000000000001")!, name: L("日常", "Daily"))]

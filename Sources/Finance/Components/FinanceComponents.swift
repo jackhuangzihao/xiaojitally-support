@@ -228,7 +228,6 @@ extension MoneyDateRange {
 }
 
 extension FinanceData {
-    func category(_ id: UUID?) -> MoneyCategory? { id.flatMap { id in categories.first { $0.id == id } } }
     func account(_ id: UUID?) -> MoneyAccount? { id.flatMap { id in accounts.first { $0.id == id } } }
     func book(_ id: UUID?) -> MoneyBook? { id.flatMap { id in books.first { $0.id == id } } }
     func tint(_ category: MoneyCategory?) -> Color { category.map { MoneyColor.color($0.resolvedColor) } ?? .gray }
