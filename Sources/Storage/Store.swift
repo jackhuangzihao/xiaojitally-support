@@ -10,6 +10,7 @@ import OSLog
     private(set) var failure: String?
     private(set) var container: ModelContainer?
     private(set) var generation = 0
+    private(set) var needsLedgerRecovery = false
     @ObservationIgnored private var url: URL?
     // ModelContainer is Equatable, not Hashable; retire the exact instance without invoking its hash.
     @ObservationIgnored private let retired = NSHashTable<ModelContainer>(options: [.weakMemory, .objectPointerPersonality])
@@ -20,9 +21,15 @@ import OSLog
         }
     }
     func failed(_ error: Error, in context: ModelContext) {
+        needsLedgerRecovery = false
         retired.add(context.container)
         url = context.container.configurations.first?.url
         failure = error.localizedDescription
+    }
+    /// Only the raw-preserved recovery path may reload a ledger already known to be unreadable.
+    func permitLedgerRecoveryReload(in context: ModelContext) {
+        guard failure != nil, retired.contains(context.container) else { return }
+        needsLedgerRecovery = true
     }
     @discardableResult func reload() -> Bool {
         guard failure != nil, let url else { return false }
@@ -34,11 +41,13 @@ import OSLog
             // Do not enable editing until both model collections can be read.
             _ = try fresh.mainContext.fetch(FetchDescriptor<TaskItem>())
             _ = try fresh.mainContext.fetch(FetchDescriptor<TaskList>())
-            _ = try FinanceStore.read(fresh.mainContext)
+            if needsLedgerRecovery { _ = try fresh.mainContext.fetch(FetchDescriptor<FinanceLedger>()) }
+            else { _ = try FinanceStore.read(fresh.mainContext) }
             container = fresh
             Store.invalidateHistory()
             generation += 1
             failure = nil
+            needsLedgerRecovery = false
             return true
         } catch {
             failure = error.localizedDescription
@@ -145,6 +154,20 @@ enum StoreUpgradeSnapshot {
             throw NSError(domain: "Jianshi.StoreUpgrade", code: 1, userInfo: [NSLocalizedDescriptionKey:
                 L("升级前的数据副本未能保存，已停止打开数据库。请检查磁盘空间和文件权限后重试。", "Could not save the pre-upgrade copy. Opening the database was stopped. Check disk space and file permissions, then retry.") + "\n" + error.localizedDescription])
         }
+    }
+
+    static func recoveryCopy(_ source: URL, directory: URL) throws -> URL {
+        let files = FileManager.default
+        try files.createDirectory(at: directory, withIntermediateDirectories: true)
+        let name = "damaged-ledger-" + UUID().uuidString
+        let temporary = directory.appendingPathComponent(name + ".partial")
+        let destination = directory.appendingPathComponent(name + ".sqlite")
+        defer {
+            for suffix in ["", "-wal", "-shm", "-journal"] { try? files.removeItem(atPath: temporary.path + suffix) }
+        }
+        try snapshot(source, to: temporary)
+        try files.moveItem(at: temporary, to: destination)
+        return destination
     }
 
     private static func snapshot(_ source: URL, to destination: URL) throws {

@@ -181,8 +181,40 @@ struct TaskBackup: Codable {
         return checkpoint
     }
 
-    @MainActor private func apply(to context: ModelContext, replace: Bool) throws {
-        let original = try Self.capture(context)
+    /// Raw preservation is separate from portable backups: corrupt bytes must not pass through a decoder first.
+    @MainActor func restoreDamagedLedger(_ context: ModelContext, directory: URL, beforeSave: () throws -> Void = {}) throws -> URL {
+        try Store.recovery.requireWritable(context)
+        try validate()
+        guard finance != nil else { throw Self.invalid(L("异常账本恢复需要包含记账数据的完整备份。", "Recovering an unreadable ledger requires a full backup containing ledger data.")) }
+        guard !context.hasChanges else { throw Self.invalid(L("还有未提交的修改，请先保存或重新载入，再恢复。", "There are pending changes. Save or reload before restoring.")) }
+        let sync = try context.fetch(FetchDescriptor<CloudSyncState>())
+        guard sync.count <= 1, !sync.contains(where: \.enabled) else { throw Self.invalid(L("请先关闭 iCloud 同步，再执行异常账本恢复。", "Turn off iCloud sync before recovering an unreadable ledger.")) }
+        guard try DamagedLedgerRecovery.isNeeded(context) else { throw Self.invalid(L("当前账本可以正常读取，请重新选择备份，使用正常恢复。", "The ledger is readable now. Select the backup again and use normal restore.")) }
+        let original = try Self.capture(context, includeFinance: false)
+        try original.validate()
+        _ = try merging(into: original, replace: true)
+        guard let configuration = context.container.configurations.first, !configuration.isStoredInMemoryOnly else {
+            throw Self.invalid(L("无法定位原始数据库，未执行恢复。", "Cannot locate the original database. Nothing was restored."))
+        }
+        let copy = try StoreUpgradeSnapshot.recoveryCopy(configuration.url, directory: directory)
+        do {
+            try Store.discardingOnFailure(context) {
+                for ledger in try context.fetch(FetchDescriptor<FinanceLedger>()) { context.delete(ledger) }
+                context.processPendingChanges()
+                try apply(to: context, replace: true, original: original, recoveringLedger: true, beforeSave: beforeSave)
+            }
+        } catch {
+            Store.recovery.permitLedgerRecoveryReload(in: context)
+            DamagedLedgerRecovery.log.error("Ledger recovery did not commit; raw snapshot retained")
+            throw error
+        }
+        DamagedLedgerRecovery.log.notice("Unreadable ledger replaced after verified raw snapshot; sync remains off")
+        return copy
+    }
+
+    @MainActor private func apply(to context: ModelContext, replace: Bool, original supplied: Self? = nil,
+                                 recoveringLedger: Bool = false, beforeSave: () throws -> Void = {}) throws {
+        let original = try supplied ?? Self.capture(context)
         let merged = try merging(into: original, replace: replace)
         let oldTasks = try context.fetch(FetchDescriptor<TaskItem>())
         let oldLists = try context.fetch(FetchDescriptor<TaskList>())
@@ -207,13 +239,43 @@ struct TaskBackup: Codable {
         // A user-requested restore is a new edit; importing cloud changes is not.
         var restored = try Self.capture(context)
         restored.syncChanges = merged.syncChanges
-        try SyncChanges.stage(SyncChanges.restored(restored, replacing: original), in: context)
+        var revisions = try SyncChanges.restored(restored, replacing: original)
+        if recoveringLedger {
+            // Preserve explicit deletions for ledger rows known to sync but absent from the selected backup.
+            let current = try SyncChanges.fingerprints(restored)
+            let previous = (original.syncChanges ?? [:]).filter { SyncChanges.isFinanceKey($0.key) }.compactMapValues(\.fingerprint)
+            let removed: [String: String?] = Dictionary(uniqueKeysWithValues: previous.keys.filter { current[$0] == nil }.map { ($0, nil as String?) })
+            var updated = revisions ?? [:]
+            SyncChanges.record(removed, in: &updated, now: Date(), actor: SyncVersion.deviceID, previousFingerprints: previous)
+            revisions = updated.isEmpty ? nil : updated
+        }
+        try SyncChanges.stage(revisions, in: context)
+        try beforeSave()
         try Store.save(context, trackSyncChanges: false)
     }
     @MainActor static func recoveryURL() throws -> URL {
         let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("JianshiBackups", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent("before-last-restore.json")
+    }
+}
+
+enum DamagedLedgerRecovery {
+    static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tally", category: "LedgerRecovery")
+    @MainActor static func isNeeded(_ context: ModelContext) throws -> Bool {
+        let rows = try context.fetch(FetchDescriptor<FinanceLedger>())
+        guard rows.count <= 1 else { return true }
+        guard let row = rows.first else { return false }
+        do { _ = try FinanceStore.decode(row.payload); return false } catch { return true }
+    }
+    static func copies(in directory: URL) throws -> [URL] {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            .filter { url in
+                guard url.lastPathComponent.hasPrefix("damaged-ledger-"), url.pathExtension == "sqlite" else { return false }
+                let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                return values.isRegularFile == true && values.isSymbolicLink != true
+            }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 }
 

@@ -16,6 +16,10 @@ struct SaveRecoveryGuard: ViewModifier {
                         Text(L("编辑草稿暂存于本次会话。重新载入已保存的数据后，请检查草稿再保存；刚才的拖动、删除等操作需重新执行。", "Editor drafts are kept for this session. Reload saved data, then review and save your draft. Repeat any failed move or deletion."))
                             .font(.caption).fixedSize(horizontal: false, vertical: true)
                         Text(failure).font(.caption).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
+                        if Store.recovery.needsLedgerRecovery {
+                            Text(L("恢复未写入，原账本仍保留。重新载入后可重试从完整备份恢复。", "Recovery was not saved; the original ledger remains. Reload, then retry with a full backup."))
+                                .font(.caption).fixedSize(horizontal: false, vertical: true)
+                        }
                         Button(L("重新载入数据", "Reload data")) { _ = Store.recovery.reload() }
                             .buttonStyle(.borderedProminent).disabled(false)
                     }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.regularMaterial)
@@ -26,7 +30,7 @@ struct SaveRecoveryGuard: ViewModifier {
 
 
 struct BackupDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json] }
+    static var readableContentTypes: [UTType] { [.json, .data] }
     var data: Data
     init(data: Data) { self.data = data }
     init(configuration: ReadConfiguration) throws {
@@ -41,6 +45,7 @@ struct BackupSettings: View {
     @Environment(\.modelContext) private var context
     @State private var document: BackupDocument?
     @State private var exporting = false
+    @State private var exportingRawCopy = false
     @State private var importing = false
     @State private var pending: TaskBackup?
     @State private var confirming = false
@@ -49,6 +54,8 @@ struct BackupSettings: View {
     @State private var missingCount = 0
     @State private var busy = false
     @State private var recoveryCopies: [RestoreBackupFiles.Copy] = []
+    @State private var rawRecoveryCopies: [RestoreBackupFiles.Copy] = []
+    @State private var recoveringLedger = false
     @State private var cleanupWarning: String?
     @State private var largeImportURL: URL?
     var body: some View {
@@ -63,11 +70,25 @@ struct BackupSettings: View {
                             do {
                                 let data = try Data(contentsOf: copy.url)
                                 _ = try TaskBackup.decode(data, allowLargeFile: true)
-                                document = BackupDocument(data: data); exporting = true
+                                exportingRawCopy = false; document = BackupDocument(data: data); exporting = true
                             } catch { message = error.localizedDescription }
                         }
                     }
                 }
+            }
+            if !rawRecoveryCopies.isEmpty {
+                Menu(L("导出异常账本原始副本", "Export an unreadable-ledger original")) {
+                    ForEach(rawRecoveryCopies) { copy in
+                        Button(copy.date.formatted(date: .abbreviated, time: .standard)) {
+                            do {
+                                document = BackupDocument(data: try Data(contentsOf: copy.url))
+                                exportingRawCopy = true; exporting = true
+                            } catch { message = error.localizedDescription }
+                        }
+                    }
+                }
+                Text(L("原始数据库副本不自动清理，可用于进一步恢复，不能作为 JSON 备份直接导入。含个人数据，请妥善保存。", "Raw database copies are kept for further recovery without automatic cleanup. They cannot be imported as JSON backups. Keep these personal data files safe."))
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if let cleanupWarning { Text(cleanupWarning).font(.caption).foregroundStyle(.orange) }
             Text(L("包含全部任务与记账数据（账户、账本、账单、汇率）。文件为明文，请妥善保存。", "Includes all tasks and ledger data (accounts, books, entries and rates). Keep this unencrypted file safe."))
@@ -78,7 +99,7 @@ struct BackupSettings: View {
         }
         .disabled(busy)
         .onAppear { refreshRecoveryCopies() }
-        .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "Tally-\(Date().formatted(.iso8601.year().month().day().dateSeparator(.dash)))") { result in
+        .fileExporter(isPresented: $exporting, document: document, contentType: exportingRawCopy ? .data : .json, defaultFilename: "Tally-\(Date().formatted(.iso8601.year().month().day().dateSeparator(.dash)))" + (exportingRawCopy ? "-recovery.sqlite" : "")) { result in
             if case .failure(let error) = result { message = error.localizedDescription }
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
@@ -97,11 +118,17 @@ struct BackupSettings: View {
             Text(L("文件超过 20 MB，读取和恢复可能需要较长时间。继续读取不会更改任务；检查文件后仍需选择恢复方式。", "This file exceeds 20 MB and may take longer to read and restore. Reading changes no tasks; you will choose how to restore after it is checked."))
         }
         .confirmationDialog((pending?.finance.map { L("含 \($0.entries.count) 笔账单。", "Includes \($0.entries.count) ledger entries. ") } ?? L("此备份不含记账数据，现有账目会保留。", "This backup has no ledger; current entries will be kept. ")) + L("备份含 \(pending?.tasks.count ?? 0) 项任务、\(pending?.lists.count ?? 0) 个清单。本机有 \(existingCount) 项任务。", "Backup: \(pending?.tasks.count ?? 0) tasks, \(pending?.lists.count ?? 0) lists. This device: \(existingCount) tasks."), isPresented: $confirming, titleVisibility: .visible) {
-            Button(L("合并缺失项目（任务与记账）", "Merge missing tasks and ledger records")) { restore(replace: false) }
+            if !recoveringLedger {
+                Button(L("合并缺失项目（任务与记账）", "Merge missing tasks and ledger records")) { restore(replace: false) }
+            }
             Button(pending?.finance == nil ? L("替换任务和清单，保留当前记账", "Replace tasks and lists; keep ledger") : L("替换全部任务、清单和记账数据", "Replace all tasks, lists and ledger"), role: .destructive) { restore(replace: true) }
             Button(L("取消", "Cancel"), role: .cancel) { pending = nil }
         } message: {
-            Text(CloudSync.shared.enabled ? L("iCloud 同步已开启：恢复、替换和删除也会同步到其他设备。", "iCloud sync is enabled: restored data, replacements and deletions also sync to your other devices.") : "")
+            if recoveringLedger {
+                Text(L("当前账本无法读取。请先关闭 iCloud 同步。本次将完整封存原始数据库，再用所选备份替换全部任务、清单和记账数据；无法合并损坏账本。原件保存失败就停止，恢复失败则回滚。恢复后请先核对数据，再决定是否开启同步；云端仍有的记录可能重新合并进来。", "The current ledger is unreadable. Turn off iCloud sync first. This will preserve the raw database, then replace all tasks, lists and ledger data with the selected backup. A damaged ledger cannot be merged. If preservation fails, nothing is replaced; failed restoration rolls back. Review recovered data before enabling sync; records still in iCloud may merge back in."))
+            } else {
+                Text(CloudSync.shared.enabled ? L("iCloud 同步已开启：恢复、替换和删除也会同步到其他设备。", "iCloud sync is enabled: restored data, replacements and deletions also sync to your other devices.") : "")
+            }
         }
         .alert(L("备份与恢复", "Backup and restore"), isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button(L("知道了", "OK"), role: .cancel) {}
@@ -122,6 +149,10 @@ struct BackupSettings: View {
                     return try TaskBackup.decode(Data(contentsOf: url), allowLargeFile: allowLargeFile)
                 }.value
                 let existing = try context.fetch(FetchDescriptor<TaskItem>())
+                recoveringLedger = try DamagedLedgerRecovery.isNeeded(context)
+                if recoveringLedger && backup.finance == nil {
+                    throw TaskBackup.invalid(L("当前账本无法读取，请选择包含记账数据的完整备份。仅含任务的备份无法恢复账本。", "The current ledger is unreadable. Choose a full backup containing ledger data; a task-only backup cannot recover it."))
+                }
                 existingCount = existing.count
                 let ids = Set(existing.map(\.id)); missingCount = backup.tasks.filter { !ids.contains($0.id) }.count
                 pending = backup; confirming = true
@@ -135,7 +166,7 @@ struct BackupSettings: View {
             do {
                 let snapshot = try TaskBackup.capture(context)
                 let data = try await Task.detached(priority: .utility) { try snapshot.encoded() }.value
-                document = BackupDocument(data: data); exporting = true
+                exportingRawCopy = false; document = BackupDocument(data: data); exporting = true
             } catch { message = error.localizedDescription }
         }
     }
@@ -143,8 +174,15 @@ struct BackupSettings: View {
         guard let pending else { return }
         busy = true; defer { busy = false; self.pending = nil; refreshRecoveryCopies() }
         do {
-            let result = try pending.restoreKeepingCopy(context, replace: replace, directory: TaskBackup.recoveryURL().deletingLastPathComponent())
-            cleanupWarning = result.cleanupFailed ? L("恢复前副本已保存，部分旧副本未能清理，暂时保留了更多份。", "The pre-restore copy was saved. Some older copies could not be removed, so more copies are being kept temporarily.") : nil
+            let directory = try TaskBackup.recoveryURL().deletingLastPathComponent()
+            if recoveringLedger {
+                guard replace else { throw TaskBackup.invalid(L("异常账本只支持替换恢复。", "An unreadable ledger can only be replaced.")) }
+                _ = try pending.restoreDamagedLedger(context, directory: directory)
+                cleanupWarning = nil
+            } else {
+                let result = try pending.restoreKeepingCopy(context, replace: replace, directory: directory)
+                cleanupWarning = result.cleanupFailed ? L("恢复前副本已保存，部分旧副本未能清理，暂时保留了更多份。", "The pre-restore copy was saved. Some older copies could not be removed, so more copies are being kept temporarily.") : nil
+            }
             ReminderScheduler.shared.refresh(context)
             message = L("恢复完成。已过时的提醒会标记为需要调整；未来提醒仍受本机通知权限控制。", "Restore complete. Past reminders are marked for adjustment; future reminders use this device's notification permission.")
         } catch {
@@ -152,7 +190,14 @@ struct BackupSettings: View {
         }
     }
     private func refreshRecoveryCopies() {
-        do { recoveryCopies = try RestoreBackupFiles.copies(in: TaskBackup.recoveryURL().deletingLastPathComponent()) }
+        do {
+            let directory = try TaskBackup.recoveryURL().deletingLastPathComponent()
+            recoveryCopies = try RestoreBackupFiles.copies(in: directory)
+            rawRecoveryCopies = try DamagedLedgerRecovery.copies(in: directory).map { url in
+                let date = try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast
+                return RestoreBackupFiles.Copy(url: url, date: date, legacy: false)
+            }.sorted { $0.date > $1.date }
+        }
         catch { message = L("无法读取恢复前副本列表：", "Could not read pre-restore copies: ") + error.localizedDescription }
     }
 }

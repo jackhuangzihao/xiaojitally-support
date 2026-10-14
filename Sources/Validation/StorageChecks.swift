@@ -322,6 +322,7 @@ import AppKit
 
     static func recurrenceAndBackup(today: Date, date: (Int, Int, Int) -> Date, directory: URL, require: (Bool, String) throws -> Void) throws {
         try restoreCheckpoints(directory: directory, require: require)
+        try damagedLedgerRecovery(directory: directory, require: require)
         let january = date(2026, 1, 31)
         let february = Dates.nextRepeat(january, rule: "monthly", anchorDay: 31, after: january)!
         try require(Dates.sameDay(february, date(2026, 2, 28)), "Monthly clamps short month")
@@ -997,6 +998,96 @@ import AppKit
             try require(!retryFailed && retryRemoved == removed, "cleanup can retry the same old copies without touching the legacy or recent ones")
         }
         print("RESTORE CHECKPOINT PASS: three isolated restore/retention/failure rounds")
+    }
+
+    static func damagedLedgerRecovery(directory: URL, require: (Bool, String) throws -> Void) throws {
+        let fm = FileManager.default
+        func rejects(_ label: String, _ operation: () throws -> Void) throws {
+            var rejected = false
+            do { try operation() } catch { rejected = true }
+            try require(rejected, label)
+        }
+        for round in 0..<3 {
+            for kind in ["json", "currency", "future", "duplicate"] {
+                let url = directory.appendingPathComponent("damaged-ledger-\(round)-\(kind).store")
+                let folder = directory.appendingPathComponent("damaged-copies-\(round)-\(kind)")
+                let db = try Store.make(url: url), context = db.mainContext
+                let task = TaskItem(title: "Original task")
+                task.createdAt = Date(timeIntervalSince1970: 1700000000)
+                context.insert(task)
+                var ledger = FinanceData.initial
+                let removedBook = MoneyBook(name: "Old book absent from backup")
+                ledger.books.append(removedBook)
+                try FinanceStore.stage(ledger, in: context)
+                try Store.save(context)
+                let original = try TaskBackup.capture(context)
+                var backup = original
+                backup.tasks[0].title = "Restored task"
+                backup.finance = .initial
+                let row = try context.fetch(FetchDescriptor<FinanceLedger>())[0]
+                switch kind {
+                case "json": row.payload = Data([0xFF, 0x00, 0x7B])
+                case "currency": ledger.baseCurrency = "INVALID"; row.payload = try JSONEncoder().encode(ledger)
+                case "future": ledger.version = 999; row.payload = try JSONEncoder().encode(ledger)
+                default: context.insert(FinanceLedger(payload: row.payload))
+                }
+                try Store.save(context, trackSyncChanges: false)
+                let raw = try context.fetch(FetchDescriptor<FinanceLedger>()).map(\.payload)
+                try require(try DamagedLedgerRecovery.isNeeded(context), "damaged ledger is detected: " + kind)
+                try rejects("ordinary restore still refuses unreadable current data") { _ = try backup.restoreKeepingCopy(context, replace: true, directory: folder) }
+                var taskOnly = backup; taskOnly.finance = nil
+                try rejects("task-only backup cannot erase an unreadable ledger") { _ = try taskOnly.restoreDamagedLedger(context, directory: folder) }
+                var invalid = backup; invalid.tasks[0].title = ""
+                try rejects("invalid incoming backup cannot begin recovery") { _ = try invalid.restoreDamagedLedger(context, directory: folder) }
+                try require(!fm.fileExists(atPath: folder.path), "invalid requests create no raw snapshots")
+                task.title = "Unsaved elsewhere"
+                try rejects("pending model changes prevent raw recovery") { _ = try backup.restoreDamagedLedger(context, directory: folder) }
+                context.rollback()
+                let sync = try context.fetch(FetchDescriptor<CloudSyncState>())[0]
+                sync.enabled = true; try Store.save(context, trackSyncChanges: false)
+                try rejects("enabled sync prevents exceptional recovery") { _ = try backup.restoreDamagedLedger(context, directory: folder) }
+                sync.enabled = false; try Store.save(context, trackSyncChanges: false)
+                let blocked = directory.appendingPathComponent("blocked-\(round)-\(kind)")
+                try Data("file instead of directory".utf8).write(to: blocked)
+                try rejects("snapshot write failure stops before modifying data") { _ = try backup.restoreDamagedLedger(context, directory: blocked) }
+                try require(try context.fetch(FetchDescriptor<TaskItem>()).first?.title == "Original task" && !context.hasChanges, "failed preservation leaves current tasks untouched")
+                try rejects("interruption after staging rolls back replacement") {
+                    _ = try backup.restoreDamagedLedger(context, directory: folder) { throw CocoaError(.fileWriteOutOfSpace) }
+                }
+                try require(!context.hasChanges && (try context.fetch(FetchDescriptor<FinanceLedger>()).map(\.payload)) == raw,
+                            "failed restore restores every original ledger byte")
+                try require(try context.fetch(FetchDescriptor<TaskItem>()).first?.title == "Original task", "failed restore rolls back tasks too")
+                let failedCopies = try DamagedLedgerRecovery.copies(in: folder)
+                try require(failedCopies.count == 1, "original survives even a failed restore")
+                let readOnly = try ModelContainer(for: db.schema, configurations: [ModelConfiguration(schema: db.schema, url: url, allowsSave: false, cloudKitDatabase: .none)])
+                readOnly.mainContext.autosaveEnabled = false
+                try rejects("actual write rejection cannot commit a partial recovery") {
+                    _ = try backup.restoreDamagedLedger(readOnly.mainContext, directory: folder)
+                }
+                try require(Store.recovery.failure != nil && Store.recovery.needsLedgerRecovery, "actual persistence failure pauses editing and permits a guarded recovery retry")
+                try require((try? Store.recovery.requireWritable(readOnly.mainContext)) == nil, "failed recovery context cannot be reused")
+                try require(Store.recovery.reload(), "failed recovery can reload committed original data")
+                let afterFailure = Store.recovery.container!.mainContext
+                try require(try afterFailure.fetch(FetchDescriptor<FinanceLedger>()).map(\.payload) == raw,
+                            "reopening after a disk write rejection preserves every unreadable ledger byte")
+                try require(try afterFailure.fetch(FetchDescriptor<TaskItem>()).first?.title == "Original task", "write failure preserves committed task data")
+                let savedCopy = try backup.restoreDamagedLedger(afterFailure, directory: folder)
+                try require(try DamagedLedgerRecovery.copies(in: folder).count == 3 && savedCopy != failedCopies[0], "retry preserves previous raw copies")
+                let preserved = try Store.make(url: savedCopy)
+                try require(try preserved.mainContext.fetch(FetchDescriptor<FinanceLedger>()).map(\.payload) == raw, "SQLite copy preserves unreadable payloads including duplicates and committed WAL data")
+                try require(try preserved.mainContext.fetch(FetchDescriptor<TaskItem>()).first?.title == "Original task", "raw copy includes original tasks")
+                let reopened = try Store.make(url: url)
+                let restored = try TaskBackup.capture(reopened.mainContext)
+                try require(restored.tasks == backup.tasks && restored.finance == backup.finance, "complete replacement survives reopening")
+                try require(try reopened.mainContext.fetch(FetchDescriptor<CloudSyncState>()).allSatisfy { !$0.enabled }, "successful recovery does not enable sync")
+                let removed = restored.syncChanges?[SyncChanges.key("book", removedBook.id)]
+                try require(removed != nil && removed?.fingerprint == nil && removed?.version != nil, "known removed ledger rows receive causal deletion history")
+                let merged = try PartialSyncMerge.prepare(local: restored, cloud: original, base: original, cloudExists: true, choices: [:], now: Date())
+                try require(merged.conflict == nil && merged.localSnapshot.finance == backup.finance, "old cloud snapshot cannot resurrect known removed rows after recovery")
+                try rejects("recovery does not run again on a healthy ledger") { _ = try backup.restoreDamagedLedger(reopened.mainContext, directory: folder) }
+            }
+        }
+        print("DAMAGED LEDGER RECOVERY PASS: three rounds of four failure types, raw preservation, rollback, retry and offline sync merge")
     }
 
 }
