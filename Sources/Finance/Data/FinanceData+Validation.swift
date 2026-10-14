@@ -5,7 +5,8 @@ extension FinanceData {
         func check(_ valid: Bool, _ zh: String, _ en: String) throws { if !valid { throw TaskBackup.invalid(L(zh, en)) } }
         func unique<T: Identifiable>(_ items: [T]) -> Bool where T.ID: Hashable { Set(items.map(\.id)).count == items.count }
         try check(entries.count <= 100_000 && accounts.count <= 1000 && books.count <= 1000 && categories.count <= 1000, "记账数据超过当前支持的大小。", "Ledger exceeds supported size.")
-        try check((1...3).contains(version) && Money.currencies.contains(baseCurrency), "记账数据版本或本位币无效。", "Invalid ledger version or base currency.")
+        try check((1...3).contains(version), "当前 App 无法读取记账数据格式 \(version)（支持 1–3）。请使用与数据兼容的版本；不要删除或重置数据。", "This app cannot read ledger format \(version) (supports 1–3). Use a compatible app version; do not delete or reset your data.")
+        try check(Money.currencies.contains(baseCurrency), "记账本位币无效或当前版本不支持，请保留数据并联系支持。", "The ledger base currency is invalid or unsupported by this version. Keep your data and contact support.")
         try check(version >= 2 || !entries.contains(where: \.isPending), "待入账账单需要新版记账数据格式。", "Pending entries require the newer ledger format.")
         try check(version >= 3 || !recurringBills.contains { $0.repeatTimeZoneID != nil }, "重复时区需要新版记账数据格式。", "Repeat time zones require the newer ledger format.")
         try check(unique(accounts) && unique(books) && unique(categories) && unique(entries), "记账数据含重复编号。", "Duplicate ledger identifiers.")

@@ -450,6 +450,13 @@ import AppKit
             let backup = try TaskBackup.capture(context)
             let data = try backup.encoded()
             let automatic = directory.appendingPathComponent("automatic-versions")
+            for version in 1...3 {
+                var ledger = FinanceData.initial; ledger.version = version
+                var snapshot = backup; snapshot.finance = ledger
+                let file = try BackupFiles.write(snapshot.encoded(), directory: directory.appendingPathComponent("ledger-format-\(version)"), owner: "test")
+                let restored = try TaskBackup.decode(Data(contentsOf: file))
+                try require(restored.finance == ledger, "Automatic backup preserves supported ledger format \(version)")
+            }
             try FileManager.default.createDirectory(at: automatic, withIntermediateDirectories: true)
             let manual = automatic.appendingPathComponent("manual.json")
             try data.write(to: manual)

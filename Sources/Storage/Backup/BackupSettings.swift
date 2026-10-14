@@ -151,16 +151,26 @@ struct BackupSettings: View {
 struct BackupStatusNotice: View {
     @AppStorage("appLanguage") private var language = "system"
     @ObservedObject private var backups = AutomaticBackup.shared
+    @State private var failureDetail: String?
     let openSettings: () -> Void
     var body: some View {
-        if !backups.status.isEmpty {
-            HStack {
-                Label(L("自动备份需要检查", "Automatic backup needs attention"), systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Spacer()
-                Button(L("查看原因", "View details"), action: openSettings)
-            }.font(.caption).padding(.horizontal, 16).padding(.vertical, 6).background(.regularMaterial)
+        Group {
+            if !backups.status.isEmpty {
+                HStack {
+                    Label(L("自动备份需要检查", "Automatic backup needs attention"), systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button(L("查看原因", "View details")) { failureDetail = backups.status }
+                }.font(.caption).padding(.horizontal, 16).padding(.vertical, 6).background(.regularMaterial)
+            }
         }
+        // Keep the selected error visible even if a background retry clears the banner.
+        .alert(L("自动备份未完成", "Automatic backup failed"), isPresented: Binding(
+            get: { failureDetail != nil }, set: { if !$0 { failureDetail = nil } }
+        )) {
+            Button(L("打开设置", "Open settings")) { openSettings() }
+            Button(L("关闭", "Close"), role: .cancel) {}
+        } message: { Text(failureDetail ?? "") }
     }
 }
 

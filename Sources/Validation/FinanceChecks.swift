@@ -12,6 +12,24 @@ import SwiftData
         }
         try FinanceConversionChecks.referenceRates(require: require, rejects: rejects)
         try CalendarChecks.emptyPlanSlots(require: require)
+        for version in [0, 4] {
+            var unsupported = FinanceData.initial; unsupported.version = version
+            do {
+                try unsupported.validate()
+                try require(false, "unsupported ledger format must be rejected")
+            } catch {
+                try require(error.localizedDescription.contains("\(version)") && error.localizedDescription.contains("1–3"),
+                            "unsupported format explains the actual and supported versions")
+            }
+        }
+        var invalidCurrency = FinanceData.initial; invalidCurrency.baseCurrency = "ZZZ"
+        do {
+            try invalidCurrency.validate()
+            try require(false, "invalid base currency must be rejected")
+        } catch {
+            try require(error.localizedDescription == L("记账本位币无效或当前版本不支持，请保留数据并联系支持。", "The ledger base currency is invalid or unsupported by this version. Keep your data and contact support."),
+                        "invalid currency is distinguished from an unsupported format")
+        }
         var value = FinanceData.initial
         let bank = MoneyAccount(name: "Bank", opening: 10000), wallet = MoneyAccount(name: "Wallet"), aud = MoneyAccount(name: "AUD bank", currency: "AUD", opening: 200)
         let travel = MoneyBook(name: "Travel", defaultAccountID: bank.id)
