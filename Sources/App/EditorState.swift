@@ -2,6 +2,40 @@ import Foundation
 import SwiftData
 import Observation
 import OSLog
+import SwiftUI
+
+/// Only tracks visible editors; drafts and user content never leave their owning view.
+@MainActor final class UnsavedEditorChanges {
+    @MainActor final class Editor: NSObject {
+        var hasChanges: () -> Bool = { false }
+    }
+    static let shared = UnsavedEditorChanges()
+    private let editors = NSHashTable<Editor>.weakObjects()
+    var hasChanges: Bool { editors.allObjects.contains { $0.hasChanges() } }
+    func track(_ editor: Editor) { editors.add(editor) }
+    func remove(_ editor: Editor) { editors.remove(editor) }
+}
+
+struct UnsavedEditorGuard: ViewModifier {
+    let hasChanges: () -> Bool
+    @State private var editor = UnsavedEditorChanges.Editor()
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .onAppear {
+                // Read live State at quit, including a save that finished before the next render.
+                editor.hasChanges = hasChanges
+                UnsavedEditorChanges.shared.track(editor)
+            }
+            .onDisappear {
+                UnsavedEditorChanges.shared.remove(editor)
+                editor.hasChanges = { false }
+            }
+        #else
+        content
+        #endif
+    }
+}
 
 @MainActor @Observable final class EditorDrafts {
     var financeEntity: FinanceEntityDraft?

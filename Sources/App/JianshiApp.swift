@@ -6,19 +6,47 @@ import UniformTypeIdentifiers
 #if os(macOS)
 @MainActor final class BackupTerminationDelegate: NSObject, NSApplicationDelegate {
     private var waitingForTermination = false
+    private var presentingQuitPrompt = false
     private let reply: @MainActor (Bool) -> Void
+    private let unsaved: UnsavedEditorChanges
+    private let confirmDiscard: @MainActor () -> Bool
     override init() {
         reply = { NSApp.reply(toApplicationShouldTerminate: $0) }
+        unsaved = .shared
+        confirmDiscard = Self.askToDiscard
         super.init()
     }
-    init(reply: @escaping @MainActor (Bool) -> Void) {
+    init(unsaved: UnsavedEditorChanges? = nil, confirmDiscard: (@MainActor () -> Bool)? = nil,
+         reply: @escaping @MainActor (Bool) -> Void) {
+        self.unsaved = unsaved ?? .shared
+        self.confirmDiscard = confirmDiscard ?? Self.askToDiscard
         self.reply = reply
         super.init()
     }
+    private static func askToDiscard() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = L("还有未保存的修改", "You have unsaved changes")
+        alert.informativeText = L("退出会丢弃尚未保存的输入。你可以返回编辑页面保存，或明确放弃这些修改后退出。", "Quitting will discard unsaved input. Return to the editors to save, or discard these changes and quit.")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L("继续编辑", "Keep editing")).keyEquivalent = "\r"
+        alert.addButton(withTitle: L("放弃修改并退出", "Discard and quit")).keyEquivalent = ""
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+    private func permitsQuit() -> Bool {
+        guard unsaved.hasChanges else { return true }
+        presentingQuitPrompt = true
+        defer { presentingQuitPrompt = false }
+        return confirmDiscard()
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if presentingQuitPrompt { return .terminateCancel }
         if waitingForTermination { return .terminateLater }
         let saves = PendingEditorSaves.shared
-        guard saves.hasPending || AutomaticBackup.shared.pendingWrites > 0 || ReminderScheduler.shared.hasPendingRefresh || WidgetBridge.pendingWrites > 0 else { return .terminateNow }
+        guard saves.hasPending || AutomaticBackup.shared.pendingWrites > 0 || ReminderScheduler.shared.hasPendingRefresh || WidgetBridge.pendingWrites > 0 else {
+            waitingForTermination = true
+            defer { waitingForTermination = false }
+            return permitsQuit() ? .terminateNow : .terminateCancel
+        }
         waitingForTermination = true
         let failures = saves.failureCount
         Task { @MainActor in
@@ -33,6 +61,11 @@ import UniformTypeIdentifiers
             } while saves.hasPending
             // A second editor may have failed while the save's follow-up work was finishing.
             guard saves.failureCount == failures else {
+                waitingForTermination = false
+                reply(false)
+                return
+            }
+            guard permitsQuit() else {
                 waitingForTermination = false
                 reply(false)
                 return

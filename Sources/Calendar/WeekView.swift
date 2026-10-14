@@ -43,6 +43,7 @@ private struct CalendarWeekTitleField: View {
                 if focused != syncPaused { syncPaused = focused; CloudSync.shared.editing(focused) }
             }
             .onChange(of: value) { _, value in if !focused && draft == original { draft = value; original = value } }
+            .modifier(UnsavedEditorGuard(hasChanges: { draft != original }))
             .onDisappear { commit(); if syncPaused { syncPaused = false; CloudSync.shared.editing(false) } }
     }
 }

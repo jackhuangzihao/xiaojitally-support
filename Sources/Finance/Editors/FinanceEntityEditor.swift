@@ -35,6 +35,11 @@ struct FinanceEntityEditor: View {
     @Environment(EditorDrafts.self) private var drafts
     @State private var generation = Store.recovery.generation
     @State private var ready = false
+    @State private var initialInputs: [String]?
+    private var inputs: [String] {
+        [name, currency, opening, symbol, emoji, color, type, budget, bankName, assetRate, assetCurrency,
+         parentID?.uuidString ?? "", String(archived), String(income), accountID?.uuidString ?? ""]
+    }
     /// Set once a save has gone through and the sheet is closing; a second click in that moment must not save again.
     @State private var didSave = false
     @State private var isSaving = false
@@ -278,6 +283,7 @@ struct FinanceEntityEditor: View {
                  : L("此项目没有关联账单。删除后无法直接撤销，可从备份恢复。", "This item has no linked entries. Restore a backup to undo deletion."))
         }
         .onAppear {
+            if initialInputs == nil { initialInputs = inputs }
             if let kept = drafts.financeEntity, kept.kind == kind, kept.id == id {
                 original = kept.original
                 name = kept.name; currency = kept.currency; opening = kept.opening; symbol = kept.symbol; archived = kept.archived; accountID = kept.accountID
@@ -292,6 +298,7 @@ struct FinanceEntityEditor: View {
         }
         .disabled(isSaving)
         .interactiveDismissDisabled(isSaving)
+        .modifier(UnsavedEditorGuard(hasChanges: { ready && !didSave && initialInputs.map { $0 != inputs } == true }))
         .overlay { if isSaving { ProgressView(L("正在保存…", "Saving…")).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
         .onDisappear {
             saveTask?.cancel()
@@ -308,6 +315,7 @@ struct FinanceEntityEditor: View {
         guard let id else { return }
         do {
             try FinanceStore.update(context) { try $0.remove(kind, id: id, expected: original) }
+            didSave = true
             dismiss()
         } catch { self.error = error.localizedDescription }
     }

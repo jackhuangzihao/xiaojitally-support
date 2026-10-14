@@ -210,6 +210,54 @@ import AppKit
             try check(await retryWaiter.value, "a successful retry is not poisoned by an earlier failed quit")
             #if os(macOS)
             let shared = PendingEditorSaves.shared
+            for _ in 0..<3 {
+                let unsaved = UnsavedEditorChanges()
+                let first = UnsavedEditorChanges.Editor(), second = UnsavedEditorChanges.Editor()
+                var firstDirty = true, secondDirty = true
+                first.hasChanges = { firstDirty }; second.hasChanges = { secondDirty }
+                var discard = false, prompts = 0, answers: [Bool] = []
+                let guarded = BackupTerminationDelegate(unsaved: unsaved, confirmDiscard: { prompts += 1; return discard }, reply: { answers.append($0) })
+                try check(guarded.applicationShouldTerminate(NSApplication.shared) == .terminateNow && prompts == 0, "clean editors need no quit prompt")
+                unsaved.track(first)
+                unsaved.track(first)
+                unsaved.track(second)
+                try check(guarded.applicationShouldTerminate(NSApplication.shared) == .terminateCancel && prompts == 1, "unsaved input cancels quit by default")
+                firstDirty = false
+                try check(unsaved.hasChanges, "closing one window cannot clear another window's edits")
+                discard = true
+                try check(guarded.applicationShouldTerminate(NSApplication.shared) == .terminateNow && prompts == 2, "discard requires explicit approval")
+                try check(unsaved.hasChanges, "a cancelled system quit does not erase tracked input")
+                discard = false
+                let saving = shared.begin()
+                try check(guarded.applicationShouldTerminate(NSApplication.shared) == .terminateLater && prompts == 2, "already requested saves complete before asking about other editors")
+                shared.finish(saving, saved: true)
+                for _ in 0..<1000 where answers.isEmpty { await Task.yield() }
+                try check(answers == [false] && prompts == 3, "another dirty editor remains protected after a successful save")
+                let failed = shared.begin()
+                try check(guarded.applicationShouldTerminate(NSApplication.shared) == .terminateLater, "save failure can be retried after cancelled quit")
+                shared.finish(failed, saved: false)
+                for _ in 0..<1000 where answers.count < 2 { await Task.yield() }
+                try check(answers == [false, false] && prompts == 3, "save failure keeps app open without offering to discard that failure")
+                secondDirty = false
+                try check(!unsaved.hasChanges && guarded.applicationShouldTerminate(NSApplication.shared) == .terminateNow, "committed edits clear immediately without waiting for another render")
+                var reentrant: NSApplication.TerminateReply?
+                var prompting: BackupTerminationDelegate?
+                prompting = BackupTerminationDelegate(unsaved: unsaved, confirmDiscard: {
+                    reentrant = prompting?.applicationShouldTerminate(NSApplication.shared)
+                    return false
+                }, reply: { _ in })
+                secondDirty = true
+                try check(prompting?.applicationShouldTerminate(NSApplication.shared) == .terminateCancel && reentrant == .terminateCancel,
+                          "quit pressed inside the prompt creates neither a second dialog nor a dangling deferred quit")
+                prompting = nil
+                secondDirty = true; unsaved.remove(second)
+                try check(!unsaved.hasChanges, "dismissed editors cannot leave stale quit warnings")
+                try autoreleasepool {
+                    let transient = UnsavedEditorChanges.Editor(); transient.hasChanges = { true }; unsaved.track(transient)
+                    try check(unsaved.hasChanges, "a newly opened editor joins quit protection")
+                }
+                try check(!unsaved.hasChanges, "the registry does not retain destroyed editors or their content")
+            }
             try check(!shared.hasPending, "termination probe begins without real saves")
             try check(BackupTerminationDelegate().applicationShouldTerminate(NSApplication.shared) == .terminateNow,
                       "the system-created delegate keeps normal idle termination")

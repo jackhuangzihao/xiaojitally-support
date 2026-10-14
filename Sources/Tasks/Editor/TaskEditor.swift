@@ -266,6 +266,7 @@ struct TaskEditor: View {
         }
         .overlay { if isSaving { ProgressView(L("正在保存…", "Saving…")).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
         .onDisappear { saveTask?.cancel() }
+        .modifier(UnsavedEditorGuard(hasChanges: { hasChanges && !didFinishSaving }))
         .modifier(SaveRecoveryGuard())
         .modifier(CloudSyncEditingGuard())
         .environment(\.locale, UISettings.locale)

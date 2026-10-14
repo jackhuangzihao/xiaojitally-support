@@ -217,6 +217,7 @@ struct FinanceEntryEditor: View {
         .disabled(isSaving)
         .overlay { if isSaving { ProgressView(L("正在保存…", "Saving…")).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
         .interactiveDismissDisabled(dirty || isSaving)
+        .modifier(UnsavedEditorGuard(hasChanges: { dirty && !didSave }))
         .confirmationDialog(L("放弃未保存的修改？", "Discard unsaved changes?"), isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button(L("放弃修改", "Discard changes"), role: .destructive) { dismiss() }
             Button(L("继续编辑", "Keep editing"), role: .cancel) {}

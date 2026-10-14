@@ -26,9 +26,13 @@ struct ListEditor: View {
     @State private var emoji: String
     @FocusState private var emojiFocused: Bool
     @State private var errorMessage: String?
+    @State private var initialDraft: DraftState?
+    @State private var didSave = false
+    private let restoredDraft: Bool
 
     @State private var parentID: UUID?
     init(list: TaskList?, parentID: UUID? = nil, draft: DraftState? = nil) {
+        restoredDraft = draft != nil
         self.list = list; _name = State(initialValue: list?.name ?? "")
         _original = State(initialValue: draft?.original ?? list.map(TaskBackup.ListRecord.init))
         _colorHex = State(initialValue: list?.colorHex)
@@ -111,8 +115,9 @@ struct ListEditor: View {
         #if os(macOS)
         .frame(width: 440, height: 650)
         #endif
-        .onAppear { keepDraft() }
+        .onAppear { if initialDraft == nil { initialDraft = draftState }; keepDraft() }
         .onChange(of: draftState) { _, _ in keepDraft() }
+        .modifier(UnsavedEditorGuard(hasChanges: { !didSave && (restoredDraft || initialDraft.map { $0 != draftState } == true) }))
         .modifier(SaveRecoveryGuard())
         .modifier(CloudSyncEditingGuard())
     }
@@ -158,7 +163,7 @@ struct ListEditor: View {
         if existing == nil { target.sortOrder = (currentLists.filter { $0.parentID == parentID }.map(\.sortOrder).max() ?? -1) + 1 }
         if existing == nil { context.insert(target) }
         target.name = value; target.parentID = parentID; target.colorHex = colorHex; target.emoji = emoji.isEmpty ? nil : emoji
-        do { try Store.save(context); ReminderScheduler.shared.refresh(context); dismiss() }
+        do { try Store.save(context); didSave = true; ReminderScheduler.shared.refresh(context); dismiss() }
         catch { errorMessage = Store.recovery.failure == nil ? error.localizedDescription : nil }
     }
 }

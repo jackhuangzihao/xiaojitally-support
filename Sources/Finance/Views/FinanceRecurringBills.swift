@@ -123,6 +123,7 @@ struct FinanceRecurringEditor: View {
     @State private var amount: String
     @State private var accountAmount: String
     @State private var error: String?
+    @State private var didSave = false
 
     init(bill: MoneyRecurring, ledger: FinanceData, source: MoneyEntry? = nil) {
         original = bill; self.ledger = ledger; self.source = source
@@ -211,6 +212,8 @@ struct FinanceRecurringEditor: View {
                 }
             }
         }
+        .modifier(UnsavedEditorGuard(hasChanges: { !didSave && (source != nil || bill != original || amount != Money.text(original.amount)
+                                   || accountAmount != (original.accountAmount == 0 ? "" : Money.text(original.accountAmount))) }))
         #if os(macOS)
         .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 620)
         #endif
@@ -231,6 +234,7 @@ struct FinanceRecurringEditor: View {
             } else {
                 try FinanceStore.update(context) { try $0.updateRecurring(next, expected: original) }
             }
+            didSave = true
             recurringLog.notice("Recurring bill updated; rule=\(next.rule, privacy: .public)")
             dismiss()
         } catch {

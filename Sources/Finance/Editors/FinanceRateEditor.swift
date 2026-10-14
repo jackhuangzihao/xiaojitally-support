@@ -135,6 +135,7 @@ struct FinanceRateEditor: View {
     @State private var values: [String: String] = [:]
     @State private var restoreReference: Set<String> = []
     @State private var error: String?
+    @State private var didSave = false
     private var currencies: [String] { Set(data.accounts.map(\.currency)).filter { $0 != currency }.sorted() }
     private func originalText(_ currency: String) -> String {
         guard let stored = data.assetRate(from: currency, to: self.currency) else { return "" }
@@ -193,6 +194,7 @@ struct FinanceRateEditor: View {
         #if os(macOS)
         .frame(minWidth: 430, idealWidth: 480, minHeight: 400, idealHeight: 520)
         #endif
+        .modifier(UnsavedEditorGuard(hasChanges: { !didSave && (!restoreReference.isEmpty || values.contains { $0.value != originalText($0.key) }) }))
         .modifier(SaveRecoveryGuard())
         .modifier(CloudSyncEditingGuard())
     }
@@ -205,6 +207,7 @@ struct FinanceRateEditor: View {
                                                 clearingManual: restoreReference.intersection(changed), expected: data)
                 }
             }
+            didSave = true
             dismiss()
         } catch { self.error = error.localizedDescription }
     }
