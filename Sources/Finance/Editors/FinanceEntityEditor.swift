@@ -145,7 +145,7 @@ struct FinanceEntityEditor: View {
     }
     private var chosenSymbol: String { symbol.isEmpty ? fallbackSymbol : symbol }
     private var used: Bool { id.map { original.accountHasHistory($0) } ?? false }
-    private var categoryUsed: Bool { kind == .category && id.map { id in original.entries.contains { $0.categoryID == id } || original.categories.contains { $0.parentID == id } } == true }
+    private var categoryUsed: Bool { kind == .category && id.map { original.categoryTypeIsLocked($0) } == true }
     var body: some View {
         NavigationStack {
             Form {
@@ -172,7 +172,7 @@ struct FinanceEntityEditor: View {
                 if kind == .category {
                     Picker(L("用于", "Used for"), selection: $income) { Text(L("支出", "Spending")).tag(false); Text(L("收入", "Income")).tag(true) }.pickerStyle(.segmented)
                         .disabled(categoryUsed)
-                    if categoryUsed { Text(L("此分类已有账单或子分类，不能在支出和收入之间切换。", "This category has entries or subcategories, so it cannot switch between spending and income.")).font(.caption).foregroundStyle(.secondary) }
+                    if categoryUsed { Text(L("此分类已有账单、周期账单或子分类，不能在支出和收入之间切换。", "This category has entries, recurring bills or subcategories, so it cannot switch between spending and income.")).font(.caption).foregroundStyle(.secondary) }
                     Picker(L("上级分类", "Parent category"), selection: $parentID) {
                         Text(L("无，作为大类", "None — top level")).tag(nil as UUID?)
                         ForEach(original.categories.filter { $0.id != id && $0.parentID == nil && $0.isIncome == income && (!$0.archived || $0.id == parentID) }) {

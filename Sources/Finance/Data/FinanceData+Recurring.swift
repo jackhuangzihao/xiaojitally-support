@@ -215,6 +215,7 @@ extension FinanceData {
             throw TaskBackup.invalid(L("周期账单已达上限（\(MoneyRecurring.maximumCount) 个）。", "You have reached the limit of \(MoneyRecurring.maximumCount) recurring bills."))
         }
         try bill.validate(in: self)
+        if let issue = recurringCategoryTypeIssue(bill) { throw TaskBackup.invalid(issue) }
         recurring = recurringBills + [bill]
         if bill.repeatTimeZoneID != nil { version = max(version, 3) }
     }
@@ -225,6 +226,8 @@ extension FinanceData {
             throw TaskBackup.invalid(L("周期账单已在其他窗口修改，请重新打开。", "This recurring bill changed in another window. Reopen it."))
         }
         try bill.validate(in: self)
+        if bill.kind != expected.kind || bill.categoryID != expected.categoryID,
+           let issue = recurringCategoryTypeIssue(bill) { throw TaskBackup.invalid(issue) }
         replaceBill(bill)
         if bill.repeatTimeZoneID != nil { version = max(version, 3) }
     }
@@ -255,8 +258,11 @@ extension FinanceData {
     /// Stops a bill. Every entry it recorded stays.
     mutating func stopRecurring(_ id: UUID) { removeBill(id) }
 
-    /// Why an occurrence cannot be recorded as the bill stands: an archived book, account or category. Shown on the
-    /// pending card so the bill can be fixed, instead of a generic error when confirming.
+    private func recurringCategoryTypeIssue(_ bill: MoneyRecurring) -> String? {
+        guard let category = category(bill.categoryID), category.isIncome != (bill.kind == .income) else { return nil }
+        return L("分类的收支类型与周期账单不一致，请修改周期账单的分类。", "The category's income or expense type does not match. Edit the recurring bill's category.")
+    }
+    /// Show broken or archived links on the pending card before confirmation.
     func recurringIssue(_ bill: MoneyRecurring) -> String? {
         guard bill.recurrenceCalendar != nil else {
             return L("周期账单的重复时区无效，请从备份恢复。", "This recurring bill has an invalid repeat time zone. Restore a backup.")
@@ -275,6 +281,7 @@ extension FinanceData {
             guard let category = categories.first(where: { $0.id == id }) else {
                 return L("分类已不存在，请修改周期账单。", "Its category no longer exists. Edit the recurring bill.")
             }
+            if let issue = recurringCategoryTypeIssue(bill) { return issue }
             let parentArchived = category.parentID.map { parent in categories.first { $0.id == parent }?.archived != false } ?? false
             if category.archived || parentArchived {
                 return L("分类“\(categoryPath(id))”已归档，请修改周期账单。", "The category “\(categoryPath(id))” is archived. Edit the recurring bill.")

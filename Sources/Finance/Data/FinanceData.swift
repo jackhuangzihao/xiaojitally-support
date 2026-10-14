@@ -64,6 +64,10 @@ struct FinanceData: Codable, Equatable {
             }
         }
     }
+    func categoryTypeIsLocked(_ id: UUID) -> Bool {
+        entries.contains { $0.categoryID == id } || categories.contains { $0.parentID == id }
+            || recurringBills.contains { $0.categoryID == id }
+    }
     mutating func updateCategory(_ category: MoneyCategory, expected: MoneyCategory?) throws {
         guard categories.first(where: { $0.id == category.id }) == expected else {
             throw TaskBackup.invalid(L("分类已改变，请重新打开。", "Category changed. Reopen it."))
@@ -71,9 +75,8 @@ struct FinanceData: Codable, Equatable {
         guard !categories.contains(where: { $0.id != category.id && $0.parentID == category.parentID && $0.isIncome == category.isIncome && $0.label.caseInsensitiveCompare(category.label) == .orderedSame }) else {
             throw TaskBackup.invalid(L("此分组内的分类名称已存在。", "A category with this name already exists in this group."))
         }
-        if let expected, expected.isIncome != category.isIncome,
-           entries.contains(where: { $0.categoryID == category.id }) || categories.contains(where: { $0.parentID == category.id }) {
-            throw TaskBackup.invalid(L("已有账单或子分类，不能切换收支类型。", "A category with entries or subcategories cannot change between income and spending."))
+        if let expected, expected.isIncome != category.isIncome, categoryTypeIsLocked(category.id) {
+            throw TaskBackup.invalid(L("已有账单、周期账单或子分类，不能切换收支类型。", "A category with entries, recurring bills or subcategories cannot change between income and spending."))
         }
         var changed = self
         if let index = changed.categories.firstIndex(where: { $0.id == category.id }) { changed.categories[index] = category }

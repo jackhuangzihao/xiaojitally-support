@@ -19,6 +19,63 @@ import Foundation
                     "a bill keeps the day of month and needs no planned amounts in the base currency")
         try ledger.addRecurring(bill)
 
+        // A rule can reference a category before it has recorded its first entry.
+        for _ in 0..<3 {
+            for income in [false, true] {
+                var values = FinanceData.initial
+                let category = MoneyCategory(name: "Scheduled only", income: income)
+                try values.updateCategory(category, expected: nil)
+                var entry = rent; entry.accountID = nil; entry.accountAmount = 0
+                entry.categoryID = category.id; entry.kind = income ? .income : .expense
+                let rule = MoneyRecurring(repeating: entry, rule: "monthly", until: nil, in: values)
+                try values.addRecurring(rule)
+                let original = values
+                try require(values.categoryTypeIsLocked(category.id), "the editor and data layer lock recurring-only category types")
+                var flipped = category; flipped.income = !income
+                try rejects("a recurring-only category cannot change income/expense type") {
+                    try values.updateCategory(flipped, expected: category)
+                }
+                try require(values == original, "rejected category change leaves the entire ledger unchanged")
+                var renamed = category; renamed.name = "Renamed"
+                try values.updateCategory(renamed, expected: category)
+                try require(values.recurringIssue(rule) == nil, "renaming a recurring category still works")
+                var archived = renamed; archived.archived = true
+                try values.updateCategory(archived, expected: renamed)
+                try require(values.recurringIssue(rule) != nil, "archiving still surfaces a repairable issue")
+
+                // Already mismatched data stays readable; the user can repair the rule.
+                var mismatched = original
+                mismatched.categories[mismatched.categories.firstIndex { $0.id == category.id }!] = flipped
+                try mismatched.validate()
+                try require(mismatched.recurringIssue(rule) != nil, "older mismatched rules show an issue before confirming")
+                let before = mismatched
+                try rejects("mismatched recurring preview cannot be quick-confirmed") {
+                    try mismatched.postOccurrence(of: rule.id, scheduled: rule.nextDate)
+                }
+                try require(mismatched == before, "failed confirmation neither posts nor advances the rule")
+                var repaired = rule; repaired.categoryID = nil
+                try mismatched.updateRecurring(repaired, expected: rule)
+                try mismatched.postOccurrence(of: rule.id, scheduled: rule.nextDate)
+                try require(mismatched.entries.count == 1 && mismatched.entries[0].kind == entry.kind,
+                            "repairing the category permits a single posting of the original kind")
+
+                var stopped = original; stopped.stopRecurring(rule.id)
+                try stopped.updateCategory(flipped, expected: category)
+                let beforeStaleDraft = stopped
+                try rejects("a category changed before a recurring draft saves cannot create a mismatched rule") {
+                    try stopped.addRecurring(rule)
+                }
+                try require(stopped == beforeStaleDraft, "stale recurring creation leaves all data unchanged")
+                var newRule = rule; newRule.kind = income ? .expense : .income
+                try stopped.addRecurring(newRule)
+                try rejects("editing a recurring rule cannot select a category of the opposite type") {
+                    try stopped.updateRecurring(rule, expected: newRule)
+                }
+                try require(stopped.category(category.id)?.isIncome == !income,
+                            "unused categories can still change type after their rule stops")
+            }
+        }
+
         for _ in 0..<3 {
             var preview = ledger.recurringPreviews[0]
             preview.amount = 3210; preview.accountAmount = 3210; preview.baseAmount = 3210
