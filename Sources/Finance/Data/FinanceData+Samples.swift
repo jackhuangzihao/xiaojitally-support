@@ -29,12 +29,28 @@ extension FinanceData {
     /// What removing the example data would do; the same rules as `removeSamples`.
     var sampleCleanup: SampleCleanup? {
         var copy = self
-        let result = copy.removeSamples()
+        let result = copy.removeSampleRecords()
         return result.entries + result.accounts + result.books == 0 ? nil : result
+    }
+    var sampleCleanupBlock: String? {
+        let accountIDs = Set(accounts.filter { Self.isSample($0.name) }.map(\.id))
+        let bookIDs = Set(books.filter { Self.isSample($0.name) }.map(\.id))
+        let parents = Set(categories.filter { Self.isSample($0.name) }.map(\.id))
+        let categoryIDs = parents.union(categories.filter { $0.parentID.map(parents.contains) == true }.map(\.id))
+        guard recurringBills.contains(where: {
+            $0.accountID.map(accountIDs.contains) == true || $0.bookID.map(bookIDs.contains) == true
+                || $0.categoryID.map(categoryIDs.contains) == true
+        }) else { return nil }
+        return L("周期账单仍在使用示例账户、账本或分类。请先在周期账单中更换这些关联，或停止对应规则，再清除示例。现有账单不会因此被删除。", "Recurring bills still use example accounts, books or categories. Change those links in Recurring bills, or stop the affected rules, before clearing examples. Stopping a rule keeps its recorded entries.")
+    }
+    @discardableResult mutating func removeSamples() throws -> SampleCleanup {
+        // Check before mutation, including when a rule was added after the confirmation opened.
+        if let reason = sampleCleanupBlock { throw TaskBackup.invalid(reason) }
+        return removeSampleRecords()
     }
     /// Removes example accounts, books and entries (names starting with “示例 ·”). The user's own entries on an
     /// example account go with it, since its balance cannot exist without it; own entries in an example book move to a real book.
-    @discardableResult mutating func removeSamples() -> SampleCleanup {
+    private mutating func removeSampleRecords() -> SampleCleanup {
         var result = SampleCleanup()
         let accountIDs = Set(accounts.filter { Self.isSample($0.name) }.map(\.id))
         let bookIDs = Set(books.filter { Self.isSample($0.name) }.map(\.id))

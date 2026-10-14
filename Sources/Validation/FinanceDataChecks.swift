@@ -229,6 +229,7 @@ import SwiftData
     }
 
     static func sampleCleanup(require: (Bool, String) throws -> Void) throws {
+        try recurringSampleCleanup(require: require)
         do {
             var example = FinanceData.initial
             let original = example
@@ -239,14 +240,62 @@ import SwiftData
             let once = example
             try require(try example.addSamples() == book && example == once, "Adding samples twice never duplicates them")
             try require(example.rates == original.rates && example.books.first == original.books.first, "Examples do not change real rates or book defaults")
-            let clean = example.removeSamples(); try example.validate()
+            let clean = try example.removeSamples(); try example.validate()
             try require(clean.entries == 3 && clean.categories == 2 && example == original, "Clearing untouched samples restores the exact original ledger")
             _ = try example.addSamples()
             let retainedCategory = example.categories.last!.id
             var own = MoneyEntry(); own.title = "My real entry"; own.amount = 5; own.currency = "CNY"; own.baseAmount = 5
             own.bookID = original.books[0].id; own.categoryID = retainedCategory
-            example.entries.append(own); _ = example.removeSamples(); try example.validate()
+            example.entries.append(own); _ = try example.removeSamples(); try example.validate()
             try require(example.entries == [own] && example.categories.contains { $0.id == retainedCategory }, "Clearing examples preserves categories used by a surviving real entry")
+        }
+    }
+
+    static func recurringSampleCleanup(require: (Bool, String) throws -> Void) throws {
+        for _ in 0..<3 {
+            for link in ["account", "book", "parent", "child"] {
+                var ledger = FinanceData.initial
+                _ = try ledger.addSamples()
+                let real = MoneyAccount(name: "Real account")
+                ledger.accounts.append(real)
+                var entry = MoneyEntry(); entry.title = "Recurring"; entry.amount = 10
+                entry.currency = "CNY"; entry.accountID = real.id; entry.accountAmount = 10
+                entry.bookID = ledger.books[0].id
+                switch link {
+                case "account": entry.accountID = ledger.accounts[0].id
+                case "book": entry.bookID = ledger.books.last!.id
+                case "parent": entry.categoryID = ledger.categories.dropLast().last!.id
+                default: entry.categoryID = ledger.categories.last!.id
+                }
+                let rule = MoneyRecurring(repeating: entry, rule: "monthly", until: nil, in: ledger)
+                try ledger.addRecurring(rule)
+                let original = ledger
+                try require(ledger.sampleCleanup != nil && ledger.sampleCleanupBlock != nil,
+                            "cleanup remains discoverable with an explanation for recurring \(link) references")
+                var rejected = false
+                do { _ = try ledger.removeSamples() } catch { rejected = true }
+                try require(rejected && ledger == original, "blocked sample cleanup changes no records or recurring rules")
+                // This same guard runs on the latest ledger after a confirmation or another device's edit.
+                let bytes = try JSONEncoder().encode(ledger)
+                ledger = try JSONDecoder().decode(FinanceData.self, from: bytes)
+                rejected = false
+                do { _ = try ledger.removeSamples() } catch { rejected = true }
+                try require(rejected && ledger == original, "reloaded rules still block cleanup without deleting references")
+                var repaired = rule; repaired.accountID = real.id; repaired.bookID = ledger.books[0].id; repaired.categoryID = nil
+                try ledger.updateRecurring(repaired, expected: rule)
+                try require(ledger.sampleCleanupBlock == nil, "changing the links enables cleanup")
+                _ = try ledger.removeSamples(); try ledger.validate()
+                try require(ledger.recurringBills == [repaired] && ledger.accounts == [real],
+                            "unrelated recurring rules survive ordinary sample cleanup")
+                try ledger.postOccurrence(of: repaired.id, scheduled: repaired.nextDate)
+                try require(ledger.entries.count == 1 && ledger.entries[0].amount == 10,
+                            "surviving recurring rules can still post after cleanup")
+
+                var stopped = original; stopped.stopRecurring(rule.id)
+                _ = try stopped.removeSamples(); try stopped.validate()
+                try require(stopped.recurringBills.isEmpty && stopped.sampleCleanup == nil,
+                            "explicitly stopping a rule also enables sample cleanup")
+            }
         }
     }
 

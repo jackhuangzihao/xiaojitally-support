@@ -333,11 +333,12 @@ extension FinanceHome {
         }
     }
     var sampleMessage: String {
+        if let reason = data.sampleCleanupBlock { return reason }
         guard let c = data.sampleCleanup else { return "" }
         var parts = [L("将删除 \(c.entries) 笔示例账单、\(c.accounts) 个示例账户和 \(c.books) 个示例账本。", "Deletes \(c.entries) example entries, \(c.accounts) example accounts and \(c.books) example books.")]
         if c.ownEntries > 0 { parts.append(L("其中 \(c.ownEntries) 笔是你记在示例账户上的账单，账户删除后无法保留，也会一起删除。", "\(c.ownEntries) of them are your own entries on example accounts and go with those accounts.")) }
         if c.moved > 0 {
-            var after = data; after.removeSamples()
+            var after = data; _ = try? after.removeSamples()
             let home = after.books.first { !$0.archived }?.name ?? ""
             parts.append(L("你记在示例账本里的 \(c.moved) 笔会移到“\(home)”。", "\(c.moved) of your entries in example books move to “\(home)”."))
         }

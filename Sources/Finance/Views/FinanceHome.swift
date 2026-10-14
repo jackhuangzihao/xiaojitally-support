@@ -324,7 +324,9 @@ struct FinanceHome: View {
             Button(L("取消", "Cancel"), role: .cancel) { confirmDelete = nil }
         }
         .confirmationDialog(L("清除示例数据？", "Clear the example data?"), isPresented: $confirmSamples, titleVisibility: .visible) {
-            Button(L("清除示例数据", "Clear example data"), role: .destructive, action: clearSamples)
+            if data.sampleCleanupBlock == nil {
+                Button(L("清除示例数据", "Clear example data"), role: .destructive, action: clearSamples)
+            }
             Button(L("取消", "Cancel"), role: .cancel) {}
         } message: { Text(sampleMessage) }
         .alert(L("已完成", "Done"), isPresented: Binding(get: { info != nil }, set: { if !$0 { info = nil } })) { Button(L("好", "OK"), role: .cancel) {} } message: { Text(info ?? "") }
@@ -428,6 +430,7 @@ extension FinanceHome {
     /// Saves a complete backup file first, then removes the example accounts, books and entries in one save.
     private func clearSamples() {
         do {
+            if let reason = try FinanceStore.read(context)?.sampleCleanupBlock { throw TaskBackup.invalid(reason) }
             let backup = try TaskBackup.capture(context).encoded()
             let folder = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
                 .appendingPathComponent("JianshiBackups", isDirectory: true)
@@ -436,7 +439,7 @@ extension FinanceHome {
             let file = folder.appendingPathComponent("before-clearing-examples-\(stamp).json")
             try backup.write(to: file, options: .atomic)
             var result = FinanceData.SampleCleanup()
-            try FinanceStore.update(context) { result = $0.removeSamples() }
+            try FinanceStore.update(context) { result = try $0.removeSamples() }
             reload()
             for key in ["lastMoneyAccount", "lastMoneyBook"] {
                 if let raw = UserDefaults.standard.string(forKey: key), raw != "none",

@@ -146,7 +146,7 @@ import SwiftData
             var example = own; example.id = UUID(); example.title = "示例 · 纪念品"; example.accountID = nil; example.accountAmount = 0
             sample.entries = [own, moved, mine, example]; try sample.validate()
             try require(sample.sampleCleanup == FinanceData.SampleCleanup(entries: 3, ownEntries: 1, accounts: 1, books: 1, moved: 1), "example cleanup preview counts what will change")
-            sample.removeSamples(); try sample.validate()
+            try sample.removeSamples(); try sample.validate()
             try require(sample.accounts.map(\.name) == ["学习"] && sample.entries.map(\.id) == [own.id] && sample.entries[0].bookID == sample.books[0].id, "example cleanup keeps own entries and moves them to a real book")
             try require(sample.books[0].defaultAccountID == nil && sample.balance(real.id) == 80 && sample.sampleCleanup == nil, "example cleanup clears defaults and leaves real balances right")
 
