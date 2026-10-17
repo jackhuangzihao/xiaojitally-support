@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 /// Recurring bills as rules with a next date: previews, confirming, recording today, skipping, editing the rule
 /// and the next date, ending, converting an entry, migrating bills from earlier builds, validation and sync.
@@ -18,6 +19,83 @@ import Foundation
         try require(bill.anchorDay == 31 && bill.nextDate == rent.date && bill.accountAmount == 0 && bill.baseAmount == nil,
                     "a bill keeps the day of month and needs no planned amounts in the base currency")
         try ledger.addRecurring(bill)
+
+        // An editor opened before another window changes the rule must not silently post its old amount.
+        let staleRequest = PendingEntryConfirmation(entry: ledger.recurringPreviews[0], data: ledger).request
+        var changedRuleLedger = ledger
+        var changedRule = bill; changedRule.amount = 6400
+        try changedRuleLedger.updateRecurring(changedRule, expected: bill)
+        try rejects("stale recurring confirmation must reject a changed amount at the same scheduled time") {
+            try staleRequest.apply(staleRequest.entry, to: &changedRuleLedger, baseCurrency: ledger.baseCurrency)
+        }
+
+        for _ in 0..<3 {
+            let preview = ledger.recurringPreviews[0]
+            let occurrence = RecurringOccurrence(bill: bill, scheduled: bill.nextDate)
+            let confirmation = PendingEntryConfirmation(entry: preview, data: ledger)
+            let request = confirmation.request
+            let changes: [(String, (inout MoneyRecurring) -> Void)] = [
+                ("amount", { $0.amount += 1 }), ("account", { $0.accountID = nil }),
+                ("category", { $0.categoryID = nil }), ("book", { $0.bookID = nil }),
+                ("notes", { $0.notes = "Another window" }), ("rule", { $0.rule = "weekly" }),
+                ("date", { $0.nextDate = $0.nextDate.addingTimeInterval(60) }),
+                ("timezone", { $0.repeatTimeZoneID = "Europe/London" })
+            ]
+            for (label, change) in changes {
+                var live = ledger; var updated = bill; change(&updated)
+                live.recurring = [updated]
+                let before = live
+                try require(confirmation.occurrence?.bill == bill && confirmation.entry == preview,
+                            "open confirmation retains its displayed amount and original rule through list refresh")
+                try rejects("stale editor rejects changed \(label)") {
+                    try request.apply(preview, to: &live, baseCurrency: ledger.baseCurrency)
+                }
+                try require(live == before, "rejected editor preserves the entire ledger and next date: \(label)")
+                try rejects("quick confirm rejects changed \(label)") {
+                    try live.postOccurrence(of: bill.id, scheduled: bill.nextDate, expected: bill)
+                }
+                try rejects("record today rejects changed \(label)") {
+                    try live.postOccurrence(of: bill.id, scheduled: bill.nextDate, postedOn: day(2, 1), expected: bill)
+                }
+                try rejects("skip rejects changed \(label)") {
+                    try live.skipOccurrence(of: bill.id, scheduled: bill.nextDate, expected: bill)
+                }
+                try require(live == before, "rejected quick actions leave balances, entries and rules unchanged: \(label)")
+            }
+            var stopped = ledger; stopped.stopRecurring(bill.id)
+            let afterStop = stopped
+            try rejects("stale confirmation cannot recreate a stopped rule") {
+                try request.apply(preview, to: &stopped, baseCurrency: ledger.baseCurrency)
+            }
+            try require(stopped == afterStop, "stopped rule and entries remain untouched")
+
+            var edited = preview; edited.amount += 10; edited.accountAmount = edited.amount; edited.baseAmount = edited.amount
+            let draft = FinanceDraft(ledger: ledger, entry: edited, expected: nil, amount: Money.text(edited.amount),
+                actual: Money.text(edited.accountAmount), received: "", fee: "", converted: Money.text(edited.amount),
+                convertedFee: "", balance: 0, confirmingPending: true, occurrence: occurrence)
+            var live = ledger; var newer = bill; newer.amount += 20
+            try live.updateRecurring(newer, expected: bill)
+            let before = live
+            try rejects("recovered draft retains its original rule rather than adopting a newer baseline") {
+                try draft.request.apply(draft.entry, to: &live, baseCurrency: ledger.baseCurrency)
+            }
+            try require(live == before && draft.entry.amount == edited.amount && draft.occurrence?.bill == bill,
+                        "rejected recovery keeps both user input and newer data")
+
+            var allowed = ledger
+            allowed.books.append(MoneyBook(name: "Unrelated book"))
+            try draft.request.apply(draft.entry, to: &allowed, baseCurrency: ledger.baseCurrency)
+            try require(allowed.entries.count == 1 && allowed.entries[0].amount == edited.amount
+                        && allowed.recurringBill(bill.id)?.amount == bill.amount
+                        && allowed.recurringBill(bill.id)?.nextDate == bill.followingDate,
+                        "unrelated edits and an intentional one-off amount remain allowed; advance exactly once")
+            let once = allowed
+            try rejects("retry after success cannot double post or advance twice") {
+                try draft.request.apply(draft.entry, to: &allowed, baseCurrency: ledger.baseCurrency)
+            }
+            try require(allowed == once, "duplicate confirmation changes nothing")
+            try confirmationPersistence(ledger: ledger, bill: bill, request: draft.request, require: require, rejects: rejects)
+        }
 
         // A rule can reference a category before it has recorded its first entry.
         for _ in 0..<3 {
@@ -80,7 +158,7 @@ import Foundation
             var preview = ledger.recurringPreviews[0]
             preview.amount = 3210; preview.accountAmount = 3210; preview.baseAmount = 3210
             preview.notes = "Kept after recovery"
-            let occurrence = RecurringOccurrence(billID: bill.id, scheduled: bill.nextDate)
+            let occurrence = RecurringOccurrence(bill: bill, scheduled: bill.nextDate)
             let draft = FinanceDraft(ledger: ledger, entry: preview, expected: nil, amount: "3210", actual: "3210",
                 received: "", fee: "", converted: "3210", convertedFee: "", balance: 0,
                 confirmingPending: true, occurrence: occurrence)
@@ -159,7 +237,7 @@ import Foundation
             try future.updateRecurring(futureBill, expected: bill)
             var futureDraft = draft
             futureDraft.entry = future.recurringPreviews[0]
-            futureDraft.occurrence = .init(billID: bill.id, scheduled: futureBill.nextDate)
+            futureDraft.occurrence = .init(bill: futureBill, scheduled: futureBill.nextDate)
             try futureDraft.request.apply(futureDraft.entry, to: &future, baseCurrency: ledger.baseCurrency)
             try require(future.entries.count == 1 && future.recurringBill(bill.id)?.nextDate == day(2, 28, year: 2035),
                         "recovering an early confirmation keeps the explicitly chosen future occurrence")
@@ -360,4 +438,52 @@ import Foundation
         try require(items[SyncChanges.key("recurring", bill.id)] != nil
                     && (try CloudMerge.bytes(CloudRecordCodec.snapshot(items))) == CloudMerge.bytes(left), "bills sync as their own records")
     }
+    private static func confirmationPersistence(ledger: FinanceData, bill: MoneyRecurring, request: EntryRequest,
+                                                require: (Bool, String) throws -> Void,
+                                                rejects: (String, () throws -> Void) throws -> Void) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Tally-RecurringConfirm-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("test.store")
+        let db = try Store.make(url: url)
+        try FinanceStore.update(db.mainContext) { $0 = ledger }
+        let original = try FinanceStore.read(db.mainContext)!
+        try rejects("interruption after staging does not commit an occurrence") {
+            try Store.discardingOnFailure(db.mainContext) {
+                var value = original
+                try request.apply(request.entry, to: &value, baseCurrency: original.baseCurrency)
+                try FinanceStore.stage(value, in: db.mainContext)
+                throw TaskBackup.invalid("Injected interruption before commit")
+            }
+        }
+        try require(try !db.mainContext.hasChanges && FinanceStore.read(db.mainContext) == original,
+                    "staging interruption restores the full ledger")
+        let schema = Schema([TaskItem.self, TaskList.self, FinanceLedger.self, CloudSyncState.self, CalendarWeekTitle.self])
+        let readOnly = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: url,
+            allowsSave: false, cloudKitDatabase: .none)])
+        readOnly.mainContext.autosaveEnabled = false
+        try rejects("real SQLite save rejection does not post or advance") {
+            try FinanceStore.update(readOnly.mainContext) {
+                try request.apply(request.entry, to: &$0, baseCurrency: original.baseCurrency)
+            }
+        }
+        try require(Store.recovery.failure != nil && Store.recovery.reload(), "failed save reloads committed data for retry")
+        let reopened = try Store.make(url: url)
+        try require(try FinanceStore.read(reopened.mainContext) == original, "reopening after failure sees no partial posting")
+        try FinanceStore.update(reopened.mainContext) {
+            try request.apply(request.entry, to: &$0, baseCurrency: original.baseCurrency)
+        }
+        let verified = try Store.make(url: url)
+        let result = try FinanceStore.read(verified.mainContext)!
+        try require(result.entries.count == 1 && result.entries[0].amount == request.entry.amount
+                    && result.recurringBill(bill.id)?.nextDate == bill.followingDate,
+                    "same restored request retries successfully once after a write failure")
+        try rejects("second window cannot confirm the already committed occurrence") {
+            try FinanceStore.update(verified.mainContext) {
+                try request.apply(request.entry, to: &$0, baseCurrency: original.baseCurrency)
+            }
+        }
+        try require(try FinanceStore.read(verified.mainContext) == result, "second-window rejection preserves committed data")
+    }
+
 }

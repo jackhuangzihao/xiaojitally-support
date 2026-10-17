@@ -64,31 +64,29 @@ extension FinanceHome {
         L("待入账里不再出现它，已经入账的全部保留。\n以后想恢复，可在它的任意一笔账单的“⋯”里选“设为周期账单…”。",
           "It leaves the pending list; every recorded entry stays.\nTo restart later, choose “Make recurring…” from any of its entries.")
     }
-    /// A pending item that is a recurring bill's next occurrence, shown from its rule rather than stored.
-    private func occurrence(of entry: MoneyEntry) -> RecurringOccurrence? {
-        guard let id = entry.recurringID, !data.entries.contains(where: { $0.id == entry.id }) else { return nil }
-        return RecurringOccurrence(billID: id, scheduled: entry.date)
-    }
-    func confirmPendingItem(_ entry: MoneyEntry) {
-        if let occurrence = occurrence(of: entry) {
-            mutate { try $0.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled) }
-            recurringLog.notice("Recurring occurrence confirmed")
+    func confirmPendingItem(_ confirmation: PendingEntryConfirmation) {
+        if let occurrence = confirmation.occurrence {
+            if mutate({ try $0.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, expected: occurrence.bill) }) {
+                recurringLog.notice("Recurring occurrence confirmed")
+            }
         } else {
-            mutate { try $0.confirmPending(entry) }
+            mutate { try $0.confirmPending(confirmation.entry) }
         }
     }
-    func confirmPendingItemWithChanges(_ entry: MoneyEntry) {
-        editor = EntryRequest(entry: entry, expected: occurrence(of: entry) == nil ? entry : nil, confirmingPending: true, occurrence: occurrence(of: entry))
+    func confirmPendingItemWithChanges(_ confirmation: PendingEntryConfirmation) {
+        editor = confirmation.request
     }
-    func postOccurrenceToday(_ entry: MoneyEntry) {
-        guard let occurrence = occurrence(of: entry) else { return }
-        mutate { try $0.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, postedOn: Date()) }
-        recurringLog.notice("Recurring occurrence recorded today")
+    func postOccurrenceToday(_ confirmation: PendingEntryConfirmation) {
+        guard let occurrence = confirmation.occurrence else { return }
+        if mutate({ try $0.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, postedOn: Date(), expected: occurrence.bill) }) {
+            recurringLog.notice("Recurring occurrence recorded today")
+        }
     }
-    func skipOccurrence(_ entry: MoneyEntry) {
-        guard let occurrence = occurrence(of: entry) else { return }
-        mutate { try $0.skipOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled) }
-        recurringLog.notice("Recurring occurrence skipped")
+    func skipOccurrence(_ confirmation: PendingEntryConfirmation) {
+        guard let occurrence = confirmation.occurrence else { return }
+        if mutate({ try $0.skipOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, expected: occurrence.bill) }) {
+            recurringLog.notice("Recurring occurrence skipped")
+        }
     }
 
     /// Turns `entry` itself into a recurring bill, in the same page used to edit one.
@@ -99,8 +97,10 @@ extension FinanceHome {
 
 /// A recurring bill's occurrence being confirmed through the entry editor.
 struct RecurringOccurrence {
-    var billID: UUID
-    var scheduled: Date
+    // In-memory opening snapshot, retained unchanged when the editor's draft is recovered.
+    let bill: MoneyRecurring
+    let scheduled: Date
+    var billID: UUID { bill.id }
 }
 
 /// Which bill editor to open: editing a bill, or making one from an existing entry.
@@ -124,6 +124,11 @@ struct FinanceRecurringEditor: View {
     @State private var accountAmount: String
     @State private var error: String?
     @State private var didSave = false
+    @State private var confirmDiscard = false
+    private var dirty: Bool {
+        !didSave && (source != nil || bill != original || amount != Money.text(original.amount)
+                    || accountAmount != (original.accountAmount == 0 ? "" : Money.text(original.accountAmount)))
+    }
 
     init(bill: MoneyRecurring, ledger: FinanceData, source: MoneyEntry? = nil) {
         original = bill; self.ledger = ledger; self.source = source
@@ -205,21 +210,26 @@ struct FinanceRecurringEditor: View {
             }.formStyle(.grouped)
             .navigationTitle(source == nil ? L("修改周期账单", "Edit recurring bill") : L("设为周期账单", "Make recurring"))
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { dismiss() }.keyboardShortcut(.cancelAction) }
+                ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { if dirty { confirmDiscard = true } else { dismiss() } }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L("保存", "Save"), action: save).keyboardShortcut("s", modifiers: .command)
                         .disabled(bill.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
-        .modifier(UnsavedEditorGuard(hasChanges: { !didSave && (source != nil || bill != original || amount != Money.text(original.amount)
-                                   || accountAmount != (original.accountAmount == 0 ? "" : Money.text(original.accountAmount))) }))
+        .interactiveDismissDisabled(dirty)
+        .modifier(UnsavedEditorGuard(hasChanges: { dirty }))
+        .confirmationDialog(L("放弃未保存的修改？", "Discard unsaved changes?"), isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button(L("放弃修改", "Discard changes"), role: .destructive) { dismiss() }
+            Button(L("继续编辑", "Keep editing"), role: .cancel) {}
+        }
         #if os(macOS)
         .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 620)
         #endif
     }
 
     private func save() {
+        guard !didSave else { return }
         do {
             var next = bill
             next.title = next.title.trimmingCharacters(in: .whitespacesAndNewlines)

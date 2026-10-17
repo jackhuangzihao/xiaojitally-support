@@ -36,6 +36,8 @@ struct FinanceEntityEditor: View {
     @State private var generation = Store.recovery.generation
     @State private var ready = false
     @State private var initialInputs: [String]?
+    @State private var confirmDiscard = false
+    private var dirty: Bool { ready && !didSave && initialInputs.map { $0 != inputs } == true }
     private var inputs: [String] {
         [name, currency, opening, symbol, emoji, color, type, budget, bankName, assetRate, assetCurrency,
          parentID?.uuidString ?? "", String(archived), String(income), accountID?.uuidString ?? ""]
@@ -257,7 +259,7 @@ struct FinanceEntityEditor: View {
                 #if os(iOS)
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button(L("完成", "Done")) { textFocused = false } }
                 #endif
-                ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { dismiss() }.keyboardShortcut(.cancelAction) }
+                ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { if dirty { confirmDiscard = true } else { dismiss() } }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) { Button(L("保存", "Save")) { save() }.keyboardShortcut("s", modifiers: .command).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
             }
         }
@@ -297,8 +299,12 @@ struct FinanceEntityEditor: View {
             if let parentID, original.category(parentID)?.isIncome != income { self.parentID = nil }
         }
         .disabled(isSaving)
-        .interactiveDismissDisabled(isSaving)
-        .modifier(UnsavedEditorGuard(hasChanges: { ready && !didSave && initialInputs.map { $0 != inputs } == true }))
+        .interactiveDismissDisabled(dirty || isSaving)
+        .modifier(UnsavedEditorGuard(hasChanges: { dirty }))
+        .confirmationDialog(L("放弃未保存的修改？", "Discard unsaved changes?"), isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button(L("放弃修改", "Discard changes"), role: .destructive) { dismiss() }
+            Button(L("继续编辑", "Keep editing"), role: .cancel) {}
+        }
         .overlay { if isSaving { ProgressView(L("正在保存…", "Saving…")).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
         .onDisappear {
             saveTask?.cancel()

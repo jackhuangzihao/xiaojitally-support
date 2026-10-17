@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let recurringPostingLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tally", category: "RecurringPosting")
 
 /// A repeating income or expense, such as rent, a subscription or a salary. A bill keeps only its rule and the
 /// date of its next occurrence; the pending list shows that occurrence as a preview computed from the rule, the
@@ -323,10 +326,8 @@ extension FinanceData {
 
     /// Records the occurrence scheduled on `scheduled` and moves the bill to its next date. `entry` carries the
     /// user's changes when confirmed through the editor; `postedOn` records it on another day (e.g. today).
-    mutating func postOccurrence(of billID: UUID, scheduled: Date, entry: MoneyEntry? = nil, postedOn: Date? = nil) throws {
-        guard var bill = recurringBill(billID), MoneyEntry.timestamp(bill.nextDate) == MoneyEntry.timestamp(scheduled) else {
-            throw TaskBackup.invalid(L("周期账单已改变，请刷新后重试。", "This recurring bill changed. Refresh and try again."))
-        }
+    mutating func postOccurrence(of billID: UUID, scheduled: Date, entry: MoneyEntry? = nil, postedOn: Date? = nil, expected: MoneyRecurring? = nil) throws {
+        var bill = try checkedOccurrence(billID, scheduled: scheduled, expected: expected)
         try requireRecurrenceCalendar(bill)
         // Without the user's changes the bill's own book, account and category must still be usable.
         if entry == nil, let issue = recurringIssue(bill) { throw TaskBackup.invalid(issue) }
@@ -348,12 +349,21 @@ extension FinanceData {
     }
 
     /// Skips the occurrence scheduled on `scheduled` without recording anything.
-    mutating func skipOccurrence(of billID: UUID, scheduled: Date) throws {
-        guard var bill = recurringBill(billID), MoneyEntry.timestamp(bill.nextDate) == MoneyEntry.timestamp(scheduled) else {
-            throw TaskBackup.invalid(L("周期账单已改变，请刷新后重试。", "This recurring bill changed. Refresh and try again."))
-        }
+    mutating func skipOccurrence(of billID: UUID, scheduled: Date, expected: MoneyRecurring? = nil) throws {
+        var bill = try checkedOccurrence(billID, scheduled: scheduled, expected: expected)
         try requireRecurrenceCalendar(bill)
         if let next = bill.followingDate { bill.nextDate = MoneyEntry.timestamp(next); replaceBill(bill) } else { removeBill(billID) }
+    }
+
+    // UI actions supply the rule they displayed; single-snapshot data operations may omit it.
+    private func checkedOccurrence(_ id: UUID, scheduled: Date, expected: MoneyRecurring?) throws -> MoneyRecurring {
+        guard let bill = recurringBill(id), MoneyEntry.timestamp(bill.nextDate) == MoneyEntry.timestamp(scheduled),
+              expected.map({ $0 == bill }) ?? true else {
+            recurringPostingLog.notice("Rejected stale recurring action before posting or advancing")
+            throw TaskBackup.invalid(L("周期账单已修改、停止或处理，未执行入账或跳过。输入仍保留，请先复制需要的内容，再重新打开核对。",
+                                       "This recurring bill was changed, stopped, or already handled. Nothing was posted or skipped. Your input remains here; copy anything you need before reopening to review."))
+        }
+        return bill
     }
 
     private func requireRecurrenceCalendar(_ bill: MoneyRecurring) throws {

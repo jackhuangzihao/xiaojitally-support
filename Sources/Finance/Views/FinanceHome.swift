@@ -391,8 +391,9 @@ extension FinanceHome {
             data = try FinanceStore.read(context) ?? upgraded
         } catch {}
     }
-    func mutate(_ change: (inout FinanceData) throws -> Void) {
-        do { try FinanceStore.update(context, change); reload() } catch { self.error = error.localizedDescription }
+    @discardableResult func mutate(_ change: (inout FinanceData) throws -> Void) -> Bool {
+        do { try FinanceStore.update(context, change); reload(); return true }
+        catch { self.error = error.localizedDescription; return false }
     }
     func newEntry() {
         editor = EntryRequest(entry: data.newEntry(preferredBook: bookFilterID, preferredAccount: accountDetailID ?? accountFilter), expected: nil)

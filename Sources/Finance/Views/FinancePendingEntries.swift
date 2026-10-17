@@ -31,6 +31,24 @@ extension FinanceHome {
     }
 }
 
+/// Retains what the user saw even if the pending list refreshes while its confirmation is open.
+struct PendingEntryConfirmation {
+    let entry: MoneyEntry
+    let occurrence: RecurringOccurrence?
+
+    init(entry: MoneyEntry, data: FinanceData) {
+        self.entry = entry
+        if let bill = data.recurringBill(entry.recurringID), bill.entryID(for: bill.nextDate) == entry.id,
+           !data.entries.contains(where: { $0.id == entry.id && $0.deletedAt == nil }) {
+            occurrence = RecurringOccurrence(bill: bill, scheduled: entry.date)
+        } else { occurrence = nil }
+    }
+
+    var request: EntryRequest {
+        EntryRequest(entry: entry, expected: occurrence == nil ? entry : nil, confirmingPending: true, occurrence: occurrence)
+    }
+}
+
 /// Local disclosure and clock updates do not rebuild the full ledger or charts.
 struct PendingEntriesSection: View {
     let entries: [MoneyEntry]
@@ -38,18 +56,18 @@ struct PendingEntriesSection: View {
     let hidden: Bool
     let open: (MoneyEntry) -> Void
     /// Posts the entry as it is.
-    let confirm: (MoneyEntry) -> Void
+    let confirm: (PendingEntryConfirmation) -> Void
     /// Opens the full editor to change amounts or the date before posting.
-    let confirmWithChanges: (MoneyEntry) -> Void
+    let confirmWithChanges: (PendingEntryConfirmation) -> Void
     let remove: (MoneyEntry) -> Void
     let editBill: (MoneyRecurring) -> Void
     let stopBill: (MoneyRecurring) -> Void
     let restartBill: (MoneyEntry) -> Void
     /// Records a recurring occurrence dated today instead of its scheduled day.
-    let postToday: (MoneyEntry) -> Void
-    let skip: (MoneyEntry) -> Void
+    let postToday: (PendingEntryConfirmation) -> Void
+    let skip: (PendingEntryConfirmation) -> Void
     @State private var showUpcoming = false
-    @State private var confirming: MoneyEntry?
+    @State private var confirming: PendingEntryConfirmation?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if os(iOS)
@@ -94,14 +112,14 @@ struct PendingEntriesSection: View {
                     .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: entries.map(\.id))
                 }.padding(.horizontal, FinanceHome.pageInset(stacked)).padding(.bottom, 12)
             }
-            .confirmationDialog(confirming.map { L("确认入账“\($0.title)”？", "Confirm “\($0.title)”?") } ?? "",
+            .confirmationDialog(confirming.map { L("确认入账“\($0.entry.title)”？", "Confirm “\($0.entry.title)”?") } ?? "",
                                 isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
                                 titleVisibility: .visible, presenting: confirming) { entry in
                 Button(L("确认入账", "Confirm entry")) { confirm(entry); confirming = nil }
                 Button(L("修改后确认…", "Change, then confirm…")) { confirmWithChanges(entry); confirming = nil }
                 Button(L("取消", "Cancel"), role: .cancel) { confirming = nil }
             } message: { entry in
-                Text(confirmationMessage(entry))
+                Text(confirmationMessage(entry.entry))
             }
         }
     }
@@ -154,7 +172,8 @@ struct PendingEntriesSection: View {
     /// Entries in the base currency, or already converted, can post straight away. A missing conversion
     /// would leave the posting out of combined totals, so those open the editor to enter a rate or the bank amount.
     private func startConfirmation(_ entry: MoneyEntry) {
-        if entry.currency != data.baseCurrency && entry.baseAmount == nil { confirmWithChanges(entry) } else { confirming = entry }
+        let confirmation = PendingEntryConfirmation(entry: entry, data: data)
+        if entry.currency != data.baseCurrency && entry.baseAmount == nil { confirmWithChanges(confirmation) } else { confirming = confirmation }
     }
 
     /// A recurring bill's occurrence shown from its rule; it is not stored until confirmed.
@@ -185,9 +204,10 @@ struct PendingEntriesSection: View {
 
     private func row(_ entry: MoneyEntry, ready: Bool) -> some View {
         let preview = isPreview(entry)
+        let confirmation = PendingEntryConfirmation(entry: entry, data: data)
         // A bill whose book, account or category was archived is fixed in the bill, not confirmed as it stands.
         let blockedBill = preview ? data.recurringBill(entry.recurringID).flatMap { bill in data.recurringIssue(bill).map { (bill, $0) } } : nil
-        let details = Button { preview ? confirmWithChanges(entry) : open(entry) } label: {
+        let details = Button { preview ? confirmWithChanges(confirmation) : open(entry) } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(entry.title).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
@@ -202,8 +222,8 @@ struct PendingEntriesSection: View {
         }.buttonStyle(.plain)
         let menu = Menu {
             if preview {
-                Button(L("今天入账", "Record today")) { postToday(entry) }.disabled(blockedBill != nil)
-                Button(L("跳过这一期", "Skip this one")) { skip(entry) }
+                Button(L("今天入账", "Record today")) { postToday(confirmation) }.disabled(blockedBill != nil)
+                Button(L("跳过这一期", "Skip this one")) { skip(confirmation) }
                 Divider()
             } else {
                 Button(L("编辑这一笔", "Edit this entry")) { open(entry) }

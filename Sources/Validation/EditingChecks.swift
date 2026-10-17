@@ -315,7 +315,7 @@ import AppKit
             let preview = value.recurringPreviews[0]
             let kept = FinanceDraft(ledger: value, entry: preview, expected: nil, amount: "10", actual: "10", received: "",
                 fee: "", converted: "10", convertedFee: "", balance: 1000, confirmingPending: true,
-                occurrence: .init(billID: bill.id, scheduled: bill.nextDate))
+                occurrence: .init(bill: bill, scheduled: bill.nextDate))
             try rejects("an interrupted recurring confirmation is reported") {
                 try Store.discardingOnFailure(context) {
                     var proposed = try FinanceStore.read(context)!

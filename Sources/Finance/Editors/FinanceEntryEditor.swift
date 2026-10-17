@@ -19,7 +19,7 @@ struct EntryRequest: Identifiable {
 
     func apply(_ value: MoneyEntry, to ledger: inout FinanceData, baseCurrency: String, referenceRates: [MoneyRate] = []) throws {
         if let occurrence {
-            try ledger.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, entry: value)
+            try ledger.postOccurrence(of: occurrence.billID, scheduled: occurrence.scheduled, entry: value, expected: occurrence.bill)
         } else {
             try ledger.updateEntry(value, expected: expected, baseCurrency: baseCurrency, referenceRates: referenceRates)
             if confirmingPending { try ledger.confirmPending(value) }

@@ -531,7 +531,7 @@ import AppKit
             try ledger.addRecurring(bill)
             try FinanceStore.stage(ledger, in: ctx); try Store.save(ctx)
             let request = EntryRequest(entry: ledger.recurringPreviews[0], expected: nil, confirmingPending: true,
-                occurrence: .init(billID: bill.id, scheduled: bill.nextDate))
+                occurrence: .init(bill: bill, scheduled: bill.nextDate))
             var proposed = ledger
             try request.apply(request.entry, to: &proposed, baseCurrency: ledger.baseCurrency)
             try FinanceStore.stage(proposed, in: ctx)
