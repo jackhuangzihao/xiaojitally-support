@@ -5,9 +5,15 @@ import UniformTypeIdentifiers
 /// Used on the main window and every editor/settings sheet so a modal cannot hide recovery.
 struct SaveRecoveryGuard: ViewModifier {
     @AppStorage("appLanguage") private var language = "system"
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.modelContext) private var context
+    @State private var retainedContainer: ModelContainer?
     var active = true
     func body(content: Content) -> some View {
         content.disabled(active && Store.recovery.failure != nil)
+            // A retiring sheet may still update its Query while UIKit finishes dismissing it.
+            // ModelContext does not keep its container alive across another recovery.
+            .onAppear { retainedContainer = context.container }
             .safeAreaInset(edge: .bottom) {
                 if active, let failure = Store.recovery.failure {
                     VStack(alignment: .leading, spacing: 8) {
@@ -25,6 +31,8 @@ struct SaveRecoveryGuard: ViewModifier {
                     }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.regularMaterial)
                 }
             }
+            // Sheets inherit the failed parent's disabled state; only the recovery controls must escape it.
+            .environment(\.isEnabled, active && Store.recovery.failure != nil ? true : isEnabled)
     }
 }
 

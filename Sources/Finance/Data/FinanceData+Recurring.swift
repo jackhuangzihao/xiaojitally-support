@@ -324,6 +324,30 @@ extension FinanceData {
         }
     }
 
+    /// A chosen sync schedule may still point at a separately merged confirmation.
+    /// Follow that schedule past recorded occurrences without changing any posting.
+    mutating func advanceRecordedRecurringOccurrences() throws {
+        let recorded = Set(entries.lazy.filter { $0.deletedAt == nil && !$0.isPending }.map(\.id))
+        var advanced = 0
+        var running: [MoneyRecurring] = []
+        for var bill in recurringBills {
+            var ended = false
+            while recorded.contains(bill.entryID(for: bill.nextDate)) {
+                try requireRecurrenceCalendar(bill)
+                guard let next = bill.followingDate else { ended = true; break }
+                let date = MoneyEntry.timestamp(next)
+                guard date > bill.nextDate else {
+                    throw TaskBackup.invalid(L("周期账单的下一期未向后推进，未应用同步结果。", "The recurring schedule did not advance. Sync changes were not applied."))
+                }
+                bill.nextDate = date
+                advanced += 1
+            }
+            if !ended { running.append(bill) }
+        }
+        recurring = running.isEmpty ? nil : running
+        if advanced > 0 { recurringPostingLog.notice("Advanced past \(advanced, privacy: .public) recorded recurring occurrences after merge") }
+    }
+
     /// Records the occurrence scheduled on `scheduled` and moves the bill to its next date. `entry` carries the
     /// user's changes when confirmed through the editor; `postedOn` records it on another day (e.g. today).
     mutating func postOccurrence(of billID: UUID, scheduled: Date, entry: MoneyEntry? = nil, postedOn: Date? = nil, expected: MoneyRecurring? = nil) throws {

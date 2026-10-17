@@ -371,6 +371,7 @@ enum CloudMerge {
             result.finance = try value(local.finance, cloud.finance, base?.finance, label: L("记账数据", "Ledger"), choice: choice, report: report, review: review, key: "ledger", causalKeys: resolution.financeKeys)
         }
         if !conflicts.isEmpty { throw Conflict(label: conflicts.joined(separator: "\n\n——\n\n"), items: review.items) }
+        try result.finance?.advanceRecordedRecurringOccurrences()
         result.syncChanges = try resolution.revisions(for: result, acknowledging: !review.confirmations.isEmpty, confirmations: review.confirmations)
         // Validate combined references; never silently discard a posting or its account.
         do { try result.validate() }

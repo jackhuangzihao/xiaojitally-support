@@ -244,10 +244,12 @@ struct FinanceEntryEditor: View {
                 initialFingerprint = restoringDraft ? "restored-unsaved" : fingerprint; loaded = true
                 keepDraft()
                 focus = desiredAmountFocus
-                // Restore the nested editor even if the rule was removed while recovery rebuilt the ledger.
-                editingRecurring = drafts.financeRecurring?.request
             }
         }
+        .modifier(EditorPresentationReady {
+            // The parent sheet must finish appearing before restoring its nested rule editor.
+            if generation == Store.recovery.generation { editingRecurring = drafts.financeRecurring?.request }
+        })
         .onChange(of: records.first?.payload) { _, _ in reload() }
         .onChange(of: fingerprint) { _, _ in if loaded { keepDraft() } }
         .onDisappear {

@@ -3,6 +3,63 @@ import SwiftData
 import Observation
 import OSLog
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
+
+/// Restore sheets after their host is visible and its previous transition has finished.
+struct EditorPresentationReady: ViewModifier {
+    let action: () -> Void
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content.background(ReadyHost(action: action).frame(width: 0, height: 0))
+        #else
+        content.onAppear(perform: action)
+        #endif
+    }
+
+    #if os(iOS)
+    private struct ReadyHost: UIViewControllerRepresentable {
+        let action: () -> Void
+        func makeUIViewController(context: Context) -> Controller { Controller() }
+        func updateUIViewController(_ controller: Controller, context: Context) { controller.action = action }
+        static func dismantleUIViewController(_ controller: Controller, coordinator: ()) {
+            controller.readinessTask?.cancel()
+        }
+        final class Controller: UIViewController {
+            var action: (() -> Void)?
+            var readinessTask: Task<Void, Never>?
+            override func viewDidAppear(_ animated: Bool) {
+                super.viewDidAppear(animated)
+                readinessTask?.cancel()
+                readinessTask = Task { @MainActor [weak self] in
+                    // Recovery rebuilds the host before UIKit starts dismissing its old sheets.
+                    // Wait for actual readiness, rather than guessing a presentation delay.
+                    await Task.yield()
+                    for _ in 0..<100 {
+                        guard !Task.isCancelled, let self, self.view.window != nil else { return }
+                        var host: UIViewController = self
+                        while let parent = host.parent { host = parent }
+                        if host.presentedViewController == nil && host.transitionCoordinator == nil
+                            && !host.isBeingDismissed && !host.isBeingPresented {
+                            self.action?()
+                            return
+                        }
+                        do { try await Task.sleep(for: .milliseconds(50)) }
+                        catch { return }
+                    }
+                    Logger(subsystem: Bundle.main.bundleIdentifier ?? "Tally", category: "EditorRecovery")
+                        .error("Editor host did not become ready; session draft remains retained")
+                }
+            }
+            override func viewDidDisappear(_ animated: Bool) {
+                super.viewDidDisappear(animated)
+                readinessTask?.cancel()
+            }
+        }
+    }
+    #endif
+}
 
 /// Only tracks visible editors; drafts and user content never leave their owning view.
 @MainActor final class UnsavedEditorChanges {

@@ -436,9 +436,10 @@ import SwiftData
         }
         for choice in [CloudMerge.Choice.local, .cloud] {
             let selected = try CloudMerge.merge(local: shortened, cloud: advanced, base: base, choice: choice)
-            let expected = choice == .local ? endsEarlier : advanced.finance!.recurringBill(bill.id)!
+            // The chosen cutoff has no unpaid occurrence after the separately confirmed January entry.
+            let expected = choice == .local ? nil : advanced.finance!.recurringBill(bill.id)
             try require(selected.finance?.recurringBill(bill.id) == expected && selected.finance?.entries.count == 1,
-                        "review chooses the complete schedule and retains the recorded entry")
+                        "review keeps the posting and ends a chosen schedule with no unpaid occurrences before its cutoff")
         }
         try scheduleConcurrency(ledger: ledger, bill: bill, require: require)
         for _ in 0..<3 { try ruleDraftRecovery(ledger: ledger, bill: bill, require: require, rejects: rejects) }
@@ -487,6 +488,25 @@ import SwiftData
                 var confirmed = ledger
                 try confirmed.postOccurrence(of: bill.id, scheduled: bill.nextDate, expected: bill)
                 let right = try snapshot(confirmed, previous: base, actor: b)
+                var weeklyLedger = ledger, weekly = bill
+                weekly.rule = "weekly"
+                try weeklyLedger.updateRecurring(weekly, expected: bill)
+                let weeklySnapshot = try snapshot(weeklyLedger, previous: base, actor: a)
+                for (local, cloud, choice) in [(weeklySnapshot, right, CloudMerge.Choice.local),
+                                               (right, weeklySnapshot, CloudMerge.Choice.cloud)] {
+                    try needsReview(local, cloud, base)
+                    let resolved = try CloudMerge.merge(local: local, cloud: cloud, base: base,
+                                                       choices: [key: choice], now: now)
+                    try require(resolved.finance?.recurringBill(bill.id)?.nextDate == weekly.followingDate
+                                && resolved.finance?.recurringBill(bill.id)?.rule == "weekly"
+                                && resolved.finance?.recurringPreviews.count == 1
+                                && resolved.finance?.entries == confirmed.entries,
+                                "chosen weekly schedule passes the confirmed occurrence without losing or reposting it")
+                    for stale in [local, cloud] {
+                        try require(try CloudMerge.merge(local: resolved, cloud: stale, base: base, now: now).finance == resolved.finance,
+                                    "adjusted schedule survives either stale device and lost-response retries")
+                    }
+                }
                 var edited = ledger, moved = bill
                 let calendar = bill.recurrenceCalendar!
                 let february15 = calendar.date(bySetting: .day, value: 15, of: bill.followingDate!)!
@@ -541,6 +561,37 @@ import SwiftData
                 }
             }
         }
+        var recorded = ledger
+        for _ in 0..<3 {
+            let next = recorded.recurringBill(bill.id)!
+            try recorded.postOccurrence(of: bill.id, scheduled: next.nextDate, expected: next)
+        }
+        let postings = recorded.entries, expectedNext = recorded.recurringBill(bill.id)!.nextDate
+        recorded.recurring = [bill]
+        try recorded.advanceRecordedRecurringOccurrences()
+        try require(recorded.entries == postings && recorded.recurringBill(bill.id)?.nextDate == expectedNext,
+                    "three consecutive posted occurrences are bypassed without changing money")
+        let once = recorded
+        try recorded.advanceRecordedRecurringOccurrences()
+        try require(recorded == once, "reconciling a schedule twice is idempotent")
+        var ended = bill; ended.until = bill.nextDate
+        recorded.recurring = [ended]
+        try recorded.advanceRecordedRecurringOccurrences()
+        try require(recorded.recurringBills.isEmpty && recorded.entries == postings,
+                    "an already confirmed final occurrence ends the rule and keeps all postings")
+        recorded.recurring = [bill]
+        let first = recorded.entries.first { $0.id == bill.entryID(for: bill.nextDate) }!
+        try recorded.trash(first)
+        let trashed = recorded
+        try recorded.advanceRecordedRecurringOccurrences()
+        try require(recorded == trashed && recorded.recurringPreviews.count == 1,
+                    "a deleted confirmation is not silently treated as a paid occurrence")
+        var pending = ledger
+        var pendingEntry = ledger.occurrenceEntry(bill, on: bill.nextDate)!
+        pendingEntry.pending = true; pending.entries = [pendingEntry]
+        let pendingBefore = pending
+        try pending.advanceRecordedRecurringOccurrences()
+        try require(pending == pendingBefore, "a stored pending entry does not advance the rule")
     }
 
     private static func ruleDraftRecovery(ledger: FinanceData, bill: MoneyRecurring,
