@@ -40,9 +40,19 @@ struct UnsavedEditorGuard: ViewModifier {
 @MainActor @Observable final class EditorDrafts {
     var financeEntity: FinanceEntityDraft?
     var finance: FinanceDraft?
+    var financeRecurring: FinanceRecurringDraft?
+    var hasFinanceDraft: Bool { finance != nil || financeEntity != nil || financeRecurring != nil }
     // Presentation state expires when recovery replaces the window; value-only drafts remain separate.
     var financePresentationGeneration: Int?
     var financePresentationActive: Bool { financePresentationGeneration == Store.recovery.generation }
+    var financeNavigationBlocked: Bool { hasFinanceDraft || financePresentationActive }
+
+    func clearRecurringDraft(id: UUID, generation: Int) {
+        // A disappearing retired editor must not clear the recovered window's draft.
+        if generation == Store.recovery.generation && Store.recovery.failure == nil && financeRecurring?.original.id == id {
+            financeRecurring = nil
+        }
+    }
     var reminder = ReminderNavigation()
     var taskID: UUID?
     var task: TaskEditor.DraftState?

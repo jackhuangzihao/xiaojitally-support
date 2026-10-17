@@ -278,8 +278,8 @@ struct ContentView: View {
                 pendingMove = nil; confirmingDelete = nil; deletingList = nil; purgeIDs = nil
             }
             .onChange(of: reminderAlertActive) { _, active in if !active { openReminderIfReady() } }
-            .onChange(of: drafts.finance == nil && drafts.financeEntity == nil && !drafts.financePresentationActive) { _, finished in
-                if finished { openReminderIfReady() }
+            .onChange(of: drafts.financeNavigationBlocked) { _, blocked in
+                if !blocked { openReminderIfReady() }
             }
             .sheet(isPresented: $showingSettings, onDismiss: openReminderIfReady) { PreferencesView() }
             .sheet(item: $copyRequest, onDismiss: openReminderIfReady) { request in
@@ -310,7 +310,7 @@ struct ContentView: View {
 
     private func openReminderIfReady() {
         let blocked = !windowReady || editor != nil || listEditor != nil || copyRequest != nil || showingSettings || reminderAlertActive || settlementEditor != nil
-            || drafts.finance != nil || drafts.financeEntity != nil || drafts.financePresentationActive
+            || drafts.financeNavigationBlocked
             || Store.recovery.failure != nil || recoveryGeneration != Store.recovery.generation
         guard let id = drafts.reminder.take(blocked: blocked) else { return }
         guard let task = tasks.first(where: { $0.id == id && $0.deletedAt == nil }) else {
@@ -346,7 +346,7 @@ struct ContentView: View {
     }
 
     private func restoreEditorDraft() {
-        if drafts.finance != nil || drafts.financeEntity != nil { financeMode = true; return }
+        if drafts.hasFinanceDraft { financeMode = true; return }
         if drafts.task != nil {
             let task = tasks.first { $0.id == drafts.taskID }
             editor = EditorRequest(task: task)

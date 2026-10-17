@@ -142,6 +142,7 @@ struct FinanceHome: View {
     private var presentationActive: Bool {
         editor != nil || entity != nil || conversionRequest != nil || showAssetRates || exporting || showDateRange
             || error != nil || info != nil || confirmDelete != nil || removingAccount != nil || confirmSamples
+            || editingRecurring != nil || stoppingRecurring != nil
     }
 
     /// Nil means every book.
@@ -290,6 +291,7 @@ struct FinanceHome: View {
         .onAppear {
             if let kept = drafts.finance { editor = kept.request }
             else if let kept = drafts.financeEntity { entity = EntityRequest(kind: kept.kind, existingID: kept.id, income: kept.income) }
+            else if let kept = drafts.financeRecurring { editingRecurring = kept.request }
         }
         .onChange(of: presentationActive, initial: true) { _, active in
             guard generation == Store.recovery.generation else { return }
@@ -309,7 +311,10 @@ struct FinanceHome: View {
         .sheet(item: $editor, onDismiss: reload) { request in FinanceEntryEditor(entry: request.entry, expected: request.expected, confirmingPending: request.confirmingPending, occurrence: request.occurrence) }
         .sheet(item: $entity, onDismiss: reload) { item in FinanceEntityEditor(kind: item.kind, id: item.existingID, income: item.income, parentID: item.parentID, data: data) }
         .sheet(item: $conversionRequest, onDismiss: reload) { request in FinanceConversionPreview(ledger: request.ledger) }
-        .sheet(item: $editingRecurring, onDismiss: reload) { request in FinanceRecurringEditor(bill: request.bill, ledger: data, source: request.source) }
+        .sheet(item: $editingRecurring, onDismiss: reload) { request in
+            FinanceRecurringEditor(bill: request.bill, ledger: data, source: request.source,
+                                   draft: drafts.financeRecurring)
+        }
         .confirmationDialog(L("停止重复“\(stoppingRecurring?.title ?? "")”？", "Stop repeating “\(stoppingRecurring?.title ?? "")”?"),
                             isPresented: Binding(get: { stoppingRecurring != nil }, set: { if !$0 { stoppingRecurring = nil } }), titleVisibility: .visible) {
             Button(L("停止重复", "Stop repeating"), role: .destructive) { if let bill = stoppingRecurring { stopRecurring(bill) }; stoppingRecurring = nil }

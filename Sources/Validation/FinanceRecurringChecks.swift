@@ -431,13 +431,197 @@ import SwiftData
         var endsEarlier = bill; endsEarlier.until = day(2, 10)
         try shortened.finance!.updateRecurring(endsEarlier, expected: bill)
         try advanced.finance!.postOccurrence(of: bill.id, scheduled: day(1, 31))
-        let ended = try CloudMerge.merge(local: shortened, cloud: advanced, base: base)
-        try require(ended.finance?.recurringBill(bill.id) == nil && ended.finance?.entries.count == 1,
-                    "a bill whose merged next date passes its end has ended instead of blocking sync")
+        try rejects("changing the end and advancing concurrently requires a whole-schedule review") {
+            _ = try CloudMerge.merge(local: shortened, cloud: advanced, base: base)
+        }
+        for choice in [CloudMerge.Choice.local, .cloud] {
+            let selected = try CloudMerge.merge(local: shortened, cloud: advanced, base: base, choice: choice)
+            let expected = choice == .local ? endsEarlier : advanced.finance!.recurringBill(bill.id)!
+            try require(selected.finance?.recurringBill(bill.id) == expected && selected.finance?.entries.count == 1,
+                        "review chooses the complete schedule and retains the recorded entry")
+        }
+        try scheduleConcurrency(ledger: ledger, bill: bill, require: require)
+        for _ in 0..<3 { try ruleDraftRecovery(ledger: ledger, bill: bill, require: require, rejects: rejects) }
         let items = try CloudRecordCodec.items(left)
         try require(items[SyncChanges.key("recurring", bill.id)] != nil
                     && (try CloudMerge.bytes(CloudRecordCodec.snapshot(items))) == CloudMerge.bytes(left), "bills sync as their own records")
     }
+    private static func scheduleConcurrency(ledger: FinanceData, bill: MoneyRecurring,
+                                            require: (Bool, String) throws -> Void) throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let a = UUID(), b = UUID()
+        let key = SyncChanges.key("recurring", bill.id)
+        func tracked(_ ledger: FinanceData, from previous: TaskBackup?, actor: UUID?) throws -> TaskBackup {
+            var value = TaskBackup(finance: ledger, lists: [], tasks: [])
+            var revisions = previous?.syncChanges ?? [:]
+            let before = try previous.map(SyncChanges.fingerprints) ?? [:], after = try SyncChanges.fingerprints(value)
+            var changes: [String: String?] = [:]
+            for key in Set(before.keys).union(after.keys) where before[key] != after[key] { changes[key] = .some(after[key]) }
+            SyncChanges.record(changes, in: &revisions, now: now, fieldFingerprints: try SyncFields.snapshot(value),
+                previousFieldFingerprints: try previous.map(SyncFields.snapshot) ?? [:],
+                createdKeys: Set(after.keys).subtracting(before.keys), actor: actor, previousFingerprints: before)
+            value.syncChanges = revisions
+            return value
+        }
+        func needsReview(_ local: TaskBackup, _ cloud: TaskBackup, _ base: TaskBackup?) throws {
+            let outcome = Result { try CloudMerge.merge(local: local, cloud: cloud, base: base, now: now) }
+            switch outcome {
+            case .success:
+                try require(false, "different concurrent schedules must not merge without review")
+            case .failure(let error):
+                guard let conflict = error as? CloudMerge.Conflict else { throw error }
+                try require(conflict.items.count == 1 && conflict.items.first?.id == key,
+                            "different concurrent schedules require one review item")
+                try require(conflict.items.first?.detail.contains(L("下一期", "Next")) == true,
+                            "review shows both next dates")
+            }
+        }
+        for _ in 0..<3 {
+            // Cover old snapshots, timestamp-only history and genuine two-device revision clocks.
+            for mode in 0..<3 {
+                func snapshot(_ data: FinanceData, previous: TaskBackup?, actor: UUID) throws -> TaskBackup {
+                    mode == 0 ? TaskBackup(finance: data, lists: [], tasks: [])
+                        : try tracked(data, from: previous, actor: mode == 2 ? actor : nil)
+                }
+                let base = try snapshot(ledger, previous: nil, actor: a)
+                var confirmed = ledger
+                try confirmed.postOccurrence(of: bill.id, scheduled: bill.nextDate, expected: bill)
+                let right = try snapshot(confirmed, previous: base, actor: b)
+                var edited = ledger, moved = bill
+                let calendar = bill.recurrenceCalendar!
+                let february15 = calendar.date(bySetting: .day, value: 15, of: bill.followingDate!)!
+                moved.reschedule(to: february15)
+                try edited.updateRecurring(moved, expected: bill)
+                let left = try snapshot(edited, previous: base, actor: a)
+                for (local, cloud) in [(left, right), (right, left)] {
+                    try needsReview(local, cloud, base)
+                    try needsReview(local, cloud, nil)
+                    for choice in [CloudMerge.Choice.local, .cloud] {
+                        let expected = (choice == .local ? local : cloud).finance!.recurringBill(bill.id)!
+                        let result = try CloudMerge.merge(local: local, cloud: cloud, base: base,
+                                                         choices: [key: choice], now: now)
+                        try require(result.finance?.recurringBill(bill.id) == expected,
+                                    "manual choice includes next date, anchor, frequency, end and timezone")
+                        try require(result.finance?.entries == confirmed.entries
+                                    && result.finance?.balance(ledger.accounts[0].id) == confirmed.balance(ledger.accounts[0].id),
+                                    "schedule review neither removes nor duplicates the confirmed posting")
+                        try require(result.finance?.recurringPreviews.count == 1,
+                                    "review leaves exactly one future preview")
+                        // A lost response/repeated fetch must not undo a confirmed choice or double post.
+                        for stale in [local, cloud] {
+                            let replay = try CloudMerge.merge(local: result, cloud: stale, base: base, now: now)
+                            try require(replay.finance == result.finance, "resolved schedule survives replay of either stale device")
+                        }
+                        let repeated = try CloudMerge.merge(local: local, cloud: cloud, base: base,
+                                                           choices: [key: choice], now: now)
+                        try require(repeated.finance == result.finance, "retrying the same review produces the same ledger")
+                    }
+                }
+                let alsoConfirmed = try snapshot(confirmed, previous: base, actor: a)
+                let same = try CloudMerge.merge(local: alsoConfirmed, cloud: right, base: base, now: now)
+                try require(same.finance == confirmed, "two devices confirming the same occurrence post once and advance once")
+                var skipped = ledger
+                try skipped.skipOccurrence(of: bill.id, scheduled: bill.nextDate, expected: bill)
+                let skip = try snapshot(skipped, previous: base, actor: a)
+                let skipConfirm = try CloudMerge.merge(local: skip, cloud: right, base: base, now: now)
+                try require(skipConfirm.finance == confirmed, "skip never deletes a confirmed posting and advances only once")
+                let unchanged = try CloudMerge.merge(local: left, cloud: base, base: base, now: now)
+                try require(unchanged.finance == edited, "one-device rescheduling remains automatic")
+                let sameMove = try snapshot(edited, previous: base, actor: b)
+                try require(try CloudMerge.merge(local: left, cloud: sameMove, base: base, now: now).finance == edited,
+                            "identical rescheduling remains automatic")
+                if mode == 2 {
+                    var observed = confirmed
+                    var laterRule = observed.recurringBill(bill.id)!
+                    laterRule.reschedule(to: february15)
+                    try observed.updateRecurring(laterRule, expected: observed.recurringBill(bill.id)!)
+                    let later = try snapshot(observed, previous: right, actor: a)
+                    try require(try CloudMerge.merge(local: later, cloud: right, base: base, now: now).finance == observed,
+                                "an edit made after observing confirmation remains automatic")
+                }
+            }
+        }
+    }
+
+    private static func ruleDraftRecovery(ledger: FinanceData, bill: MoneyRecurring,
+                                          require: (Bool, String) throws -> Void,
+                                          rejects: (String, () throws -> Void) throws -> Void) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Tally-RuleDraft-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("test.store")
+        let initial = try Store.make(url: url)
+        try FinanceStore.update(initial.mainContext) { $0 = ledger }
+        let drafts = EditorDrafts()
+        let originalDraft = FinanceRecurringDraft(original: bill, source: nil, bill: bill,
+                                                 amount: Money.text(bill.amount), accountAmount: "")
+        try require(!originalDraft.dirty, "opening a rule does not count as an edit")
+        var draft = originalDraft
+        draft.amount = "004321.00"; draft.bill.notes = "Unsaved rule note"
+        drafts.financeRecurring = draft
+        let oldGeneration = Store.recovery.generation
+        let schema = Schema([TaskItem.self, TaskList.self, FinanceLedger.self, CloudSyncState.self, CalendarWeekTitle.self])
+        for _ in 0..<2 {
+            let readOnly = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: url,
+                allowsSave: false, cloudKitDatabase: .none)])
+            readOnly.mainContext.autosaveEnabled = false
+            try rejects("rule save failure keeps original durable data") {
+                try FinanceStore.update(readOnly.mainContext) { try draft.apply(to: &$0) }
+            }
+            drafts.clearRecurringDraft(id: bill.id, generation: Store.recovery.generation)
+            try require(drafts.financeRecurring == draft && Store.recovery.failure != nil,
+                        "disappearing while save failed retains exact input and baseline")
+            try require(Store.recovery.reload(), "rule failure reloads the isolated store")
+            drafts.clearRecurringDraft(id: bill.id, generation: oldGeneration)
+            try require(drafts.financeRecurring == draft && drafts.financeRecurring?.request.bill == bill,
+                        "retired editor cannot erase or refresh the recovery draft")
+            try require(try FinanceStore.read(Store.recovery.container!.mainContext) == ledger,
+                        "failed rule edit leaves no partial data")
+        }
+        let fresh = Store.recovery.container!.mainContext
+        try FinanceStore.update(fresh) { try drafts.financeRecurring!.apply(to: &$0) }
+        let reopened = try Store.make(url: url)
+        let saved = try FinanceStore.read(reopened.mainContext)!
+        try require(saved.recurringBill(bill.id)?.amount == 4321 && saved.recurringBill(bill.id)?.notes == draft.bill.notes
+                    && saved.entries == ledger.entries && saved.recurringBill(bill.id)?.nextDate == bill.nextDate,
+                    "recovered rule saves only edited fields without recording or advancing an occurrence")
+        try rejects("repeating a successful rule save cannot overwrite the new revision") {
+            try FinanceStore.update(reopened.mainContext) { try draft.apply(to: &$0) }
+        }
+        var changed = ledger, other = bill; other.reschedule(to: bill.followingDate!)
+        try changed.updateRecurring(other, expected: bill)
+        let before = changed
+        try rejects("draft cannot overwrite another device's reschedule") { try draft.apply(to: &changed) }
+        try require(changed == before && drafts.financeRecurring == draft, "stale rejection preserves both drafts and saved edits")
+        changed.stopRecurring(bill.id)
+        let stopped = changed
+        try rejects("recovered draft cannot recreate a stopped rule") { try draft.apply(to: &changed) }
+        try require(changed == stopped, "stopped rule remains stopped")
+        drafts.clearRecurringDraft(id: UUID(), generation: Store.recovery.generation)
+        try require(drafts.financeRecurring != nil, "another editor cannot clear this draft")
+        drafts.clearRecurringDraft(id: bill.id, generation: Store.recovery.generation)
+        try require(drafts.financeRecurring == nil, "save or explicit discard clears the current draft")
+        var invalid = originalDraft; invalid.amount = "invalid"
+        var untouched = ledger
+        try rejects("invalid recovered amount is not silently normalized") { try invalid.apply(to: &untouched) }
+        try require(untouched == ledger, "invalid input does not mutate the ledger")
+        var sourceLedger = ledger
+        try sourceLedger.postOccurrence(of: bill.id, scheduled: bill.nextDate, expected: bill)
+        sourceLedger.stopRecurring(bill.id)
+        let source = sourceLedger.entries[0], newRule = sourceLedger.recurringDraft(from: sourceLedger.entries[0])
+        let creating = FinanceRecurringDraft(original: newRule, source: source, bill: newRule,
+                                            amount: Money.text(newRule.amount), accountAmount: "")
+        sourceLedger.entries[0].notes = "Changed elsewhere"
+        let changedSource = sourceLedger
+        try rejects("recovered Make recurring checks the original entry version") { try creating.apply(to: &sourceLedger) }
+        try require(sourceLedger == changedSource, "a changed source entry is never relinked by an old draft")
+        sourceLedger.entries[0] = source
+        try creating.apply(to: &sourceLedger)
+        let once = sourceLedger
+        try rejects("Make recurring retry after success cannot create a second rule") { try creating.apply(to: &sourceLedger) }
+        try require(sourceLedger == once && sourceLedger.entries.count == 1, "creating a rule retains its original posting once")
+    }
+
     private static func confirmationPersistence(ledger: FinanceData, bill: MoneyRecurring, request: EntryRequest,
                                                 require: (Bool, String) throws -> Void,
                                                 rejects: (String, () throws -> Void) throws -> Void) throws {

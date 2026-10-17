@@ -63,6 +63,7 @@ struct FinanceEntryEditor: View {
     let occurrence: RecurringOccurrence?
     @Environment(EditorDrafts.self) private var drafts
     @State private var generation = Store.recovery.generation
+    @State private var editingRecurring: RecurringEditRequest?
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Query private var tasks: [TaskItem]
@@ -166,7 +167,9 @@ struct FinanceEntryEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if compact { amountRow; chips; Divider() }
-                    if expected != nil || occurrence != nil, let bill = ledger.recurringBill(draft.recurringID) { RecurringOriginBanner(bill: bill, ledger: ledger) }
+                    if expected != nil || occurrence != nil, let bill = ledger.recurringBill(draft.recurringID) {
+                        RecurringOriginBanner(bill: bill) { editingRecurring = RecurringEditRequest(bill: bill) }
+                    }
                     if draft.accountID == nil && (draft.kind == .expense || draft.kind == .income) {
                         Text(draft.isPending
                              ? L("未选择账户：确认后只计入收支，不改变资产余额。", "No account selected: after confirmation, this counts in totals without changing an account balance.")
@@ -241,6 +244,8 @@ struct FinanceEntryEditor: View {
                 initialFingerprint = restoringDraft ? "restored-unsaved" : fingerprint; loaded = true
                 keepDraft()
                 focus = desiredAmountFocus
+                // Restore the nested editor even if the rule was removed while recovery rebuilt the ledger.
+                editingRecurring = drafts.financeRecurring?.request
             }
         }
         .onChange(of: records.first?.payload) { _, _ in reload() }
@@ -314,6 +319,10 @@ struct FinanceEntryEditor: View {
             if !rates.isEmpty { applyRates(rates) }
         }
         .sheet(item: $entity, onDismiss: reload) { item in FinanceEntityEditor(kind: item.kind, id: item.existingID, income: item.income, parentID: item.parentID, data: ledger) }
+        .sheet(item: $editingRecurring, onDismiss: reload) { request in
+            FinanceRecurringEditor(bill: request.bill, ledger: ledger, source: request.source,
+                                   draft: drafts.financeRecurring)
+        }
         .modifier(SaveRecoveryGuard())
         .modifier(CloudSyncEditingGuard())
     }

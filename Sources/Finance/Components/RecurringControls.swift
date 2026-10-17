@@ -95,8 +95,7 @@ struct RecurringBadge: View {
 /// and the bill itself is one click away.
 struct RecurringOriginBanner: View {
     let bill: MoneyRecurring
-    let ledger: FinanceData
-    @State private var editing = false
+    let edit: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -105,12 +104,11 @@ struct RecurringOriginBanner: View {
                    "This entry comes from the recurring bill “\(bill.title) · \(bill.scheduleLabel)”. Changes here affect only this entry."))
                 .font(.callout).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            Button(L("修改周期账单…", "Edit recurring bill…")) { editing = true }
+            Button(L("修改周期账单…", "Edit recurring bill…"), action: edit)
                 .buttonStyle(.bordered).frame(minHeight: 44)
         }
         .padding(.horizontal, 10).padding(.vertical, 4)
         .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-        .sheet(isPresented: $editing) { FinanceRecurringEditor(bill: bill, ledger: ledger) }
         .accessibilityIdentifier("finance.recurringOrigin")
     }
 }

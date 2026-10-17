@@ -161,6 +161,23 @@ import AppKit
             try require(financePresentation.financePresentationActive, "Open finance dialogs defer reminder navigation")
             financePresentation.financePresentationGeneration = Store.recovery.generation - 1
             try require(!financePresentation.financePresentationActive, "Recovered windows ignore obsolete finance presentation state")
+            let finance = FinanceData.initial
+            var entry = MoneyEntry(); entry.amount = 10; entry.bookID = finance.books[0].id
+            let recurring = MoneyRecurring(repeating: entry, rule: "monthly", until: nil, in: finance)
+            financePresentation.financeRecurring = FinanceRecurringDraft(original: recurring, source: nil, bill: recurring,
+                                                                         amount: "10.00", accountAmount: "")
+            route.pendingTaskID = id
+            try require(financePresentation.hasFinanceDraft && financePresentation.financeNavigationBlocked
+                        && route.take(blocked: financePresentation.financeNavigationBlocked) == nil,
+                        "recurring draft blocks reminder navigation even while a recovered sheet is not yet presented")
+            financePresentation.financePresentationGeneration = Store.recovery.generation
+            financePresentation.clearRecurringDraft(id: recurring.id, generation: Store.recovery.generation)
+            try require(route.take(blocked: financePresentation.financeNavigationBlocked) == nil,
+                        "cleared draft waits until the recurring sheet has closed")
+            financePresentation.financePresentationGeneration = nil
+            try require(route.take(blocked: financePresentation.financeNavigationBlocked) == id
+                        && route.take(blocked: false) == nil,
+                        "saving or discarding a recurring draft allows the queued reminder exactly once")
             inbox.receive(id)
             try require(inbox.navigation.take(blocked: true) == nil && inbox.navigation.pendingTaskID == id,
                         "Notification tap survives delivery before an active iOS window exists")

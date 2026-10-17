@@ -110,11 +110,49 @@ struct RecurringEditRequest: Identifiable {
     var id: UUID { bill.id }
 }
 
+/// Session-only values survive store recovery; the opening version is never refreshed implicitly.
+struct FinanceRecurringDraft: Equatable {
+    let original: MoneyRecurring
+    let source: MoneyEntry?
+    var bill: MoneyRecurring
+    var amount: String
+    var accountAmount: String
+
+    var request: RecurringEditRequest { RecurringEditRequest(bill: original, source: source) }
+    var dirty: Bool {
+        source != nil || bill != original || amount != Money.text(original.amount)
+            || accountAmount != (original.accountAmount == 0 ? "" : Money.text(original.accountAmount))
+    }
+
+    func apply(to ledger: inout FinanceData) throws {
+        var next = bill
+        let account = ledger.accounts.first { $0.id == next.accountID }
+        next.title = next.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        next.amount = try Money.parse(amount, currency: next.currency)
+        if let account, account.currency != next.currency {
+            next.accountAmount = try Money.parse(accountAmount, currency: account.currency)
+        } else { next.accountAmount = 0 }
+        if next.currency == ledger.baseCurrency || account?.currency == ledger.baseCurrency
+            || next.accountID != original.accountID || next.amount != original.amount {
+            next.baseAmount = nil
+        }
+        if let source {
+            guard ledger.entries.first(where: { $0.id == source.id }) == source else {
+                throw TaskBackup.invalid(L("原账单已修改或删除，未保存周期规则。输入仍保留，请重新打开核对。",
+                                          "The original entry changed or was deleted. The rule was not saved. Your input is kept; reopen to review."))
+            }
+            try ledger.makeRecurring(next, from: source.id)
+        } else { try ledger.updateRecurring(next, expected: original) }
+    }
+}
+
 /// Edits a bill's amount, account, category, book, schedule and notes. Changes apply from today on;
 /// entries already generated keep their own values.
 struct FinanceRecurringEditor: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Environment(EditorDrafts.self) private var drafts
+    @State private var generation = Store.recovery.generation
     let original: MoneyRecurring
     let ledger: FinanceData
     /// Set when turning an existing entry into a bill; that entry becomes its first occurrence.
@@ -125,16 +163,17 @@ struct FinanceRecurringEditor: View {
     @State private var error: String?
     @State private var didSave = false
     @State private var confirmDiscard = false
-    private var dirty: Bool {
-        !didSave && (source != nil || bill != original || amount != Money.text(original.amount)
-                    || accountAmount != (original.accountAmount == 0 ? "" : Money.text(original.accountAmount)))
+    private var currentDraft: FinanceRecurringDraft {
+        FinanceRecurringDraft(original: original, source: source, bill: bill, amount: amount, accountAmount: accountAmount)
     }
+    private var dirty: Bool { !didSave && currentDraft.dirty }
 
-    init(bill: MoneyRecurring, ledger: FinanceData, source: MoneyEntry? = nil) {
-        original = bill; self.ledger = ledger; self.source = source
-        _bill = State(initialValue: bill)
-        _amount = State(initialValue: Money.text(bill.amount))
-        _accountAmount = State(initialValue: bill.accountAmount == 0 ? "" : Money.text(bill.accountAmount))
+    init(bill: MoneyRecurring, ledger: FinanceData, source: MoneyEntry? = nil, draft: FinanceRecurringDraft? = nil) {
+        let kept = draft.flatMap { $0.original.id == bill.id ? $0 : nil }
+        original = kept?.original ?? bill; self.ledger = ledger; self.source = kept?.source ?? source
+        _bill = State(initialValue: kept?.bill ?? bill)
+        _amount = State(initialValue: kept?.amount ?? Money.text(bill.amount))
+        _accountAmount = State(initialValue: kept?.accountAmount ?? (bill.accountAmount == 0 ? "" : Money.text(bill.accountAmount)))
     }
 
     private var account: MoneyAccount? { ledger.accounts.first { $0.id == bill.accountID } }
@@ -210,7 +249,7 @@ struct FinanceRecurringEditor: View {
             }.formStyle(.grouped)
             .navigationTitle(source == nil ? L("修改周期账单", "Edit recurring bill") : L("设为周期账单", "Make recurring"))
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { if dirty { confirmDiscard = true } else { dismiss() } }.keyboardShortcut(.cancelAction) }
+                ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { if dirty { confirmDiscard = true } else { close() } }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L("保存", "Save"), action: save).keyboardShortcut("s", modifiers: .command)
                         .disabled(bill.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -220,35 +259,38 @@ struct FinanceRecurringEditor: View {
         .interactiveDismissDisabled(dirty)
         .modifier(UnsavedEditorGuard(hasChanges: { dirty }))
         .confirmationDialog(L("放弃未保存的修改？", "Discard unsaved changes?"), isPresented: $confirmDiscard, titleVisibility: .visible) {
-            Button(L("放弃修改", "Discard changes"), role: .destructive) { dismiss() }
+            Button(L("放弃修改", "Discard changes"), role: .destructive, action: close)
             Button(L("继续编辑", "Keep editing"), role: .cancel) {}
         }
         #if os(macOS)
         .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 620)
         #endif
+        .onAppear { keepDraft() }
+        .onChange(of: currentDraft) { _, _ in keepDraft() }
+        .onDisappear { drafts.clearRecurringDraft(id: original.id, generation: generation) }
+        .modifier(SaveRecoveryGuard())
+        .modifier(CloudSyncEditingGuard())
     }
 
+    private func keepDraft() {
+        guard !didSave, generation == Store.recovery.generation else { return }
+        drafts.financeRecurring = currentDraft
+    }
+    private func close() {
+        drafts.clearRecurringDraft(id: original.id, generation: generation)
+        dismiss()
+    }
     private func save() {
         guard !didSave else { return }
+        keepDraft()
         do {
-            var next = bill
-            next.title = next.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            next.amount = try Money.parse(amount, currency: next.currency)
-            next.accountAmount = foreignAccount ? try Money.parse(accountAmount, currency: account!.currency) : 0
-            // A plan in the base currency needs no separate conversion; a foreign one keeps it only on the same account.
-            if next.currency == ledger.baseCurrency || account?.currency == ledger.baseCurrency || next.accountID != original.accountID || next.amount != original.amount {
-                next.baseAmount = nil
-            }
-            if let source {
-                try FinanceStore.update(context) { try $0.makeRecurring(next, from: source.id) }
-            } else {
-                try FinanceStore.update(context) { try $0.updateRecurring(next, expected: original) }
-            }
+            try FinanceStore.update(context) { try currentDraft.apply(to: &$0) }
             didSave = true
-            recurringLog.notice("Recurring bill updated; rule=\(next.rule, privacy: .public)")
-            dismiss()
+            recurringLog.notice("Recurring bill updated; rule=\(bill.rule, privacy: .public)")
+            close()
         } catch {
             self.error = error.localizedDescription
+            recurringLog.error("Recurring bill save failed; session draft retained")
         }
     }
 }

@@ -200,17 +200,17 @@ extension CloudMerge {
 }
 
 extension CloudMerge {
-    /// Confirming or skipping on one device only moves the next date forward, so it merges with an edit made
-    /// elsewhere: concurrent moves keep the furthest date, and every other field merges on its own.
+    /// Next date and repeat rules form one schedule. A concurrent reschedule and confirmation must not
+    /// splice two schedules together; recorded entries are merged separately and remain recorded.
     static func recurringFields(_ local: MoneyRecurring, _ cloud: MoneyRecurring, _ base: MoneyRecurring,
                                 choice: Choice?, report: @escaping (String) -> Void, review: ConflictReview?) throws -> MoneyRecurring {
         let key = SyncChanges.key("recurring", local.id)
         let label = L("周期账单：", "Recurring bill: ") + local.title + " / " + cloud.title
         // Amounts and the account, and the rule and its day, only make sense together; each set merges as one.
         struct Money: Equatable { var kind: MoneyKind, amount: Decimal, currency: String, accountID: UUID?, accountAmount: Decimal, baseAmount: Decimal? }
-        struct Schedule: Equatable { var rule: String, anchorDay: Int, until: Date?, repeatTimeZoneID: String? }
+        struct Schedule: Equatable { var rule: String, anchorDay: Int, until: Date?, repeatTimeZoneID: String?, nextDate: Date }
         func money(_ b: MoneyRecurring) -> Money { Money(kind: b.kind, amount: b.amount, currency: b.currency, accountID: b.accountID, accountAmount: b.accountAmount, baseAmount: b.baseAmount) }
-        func schedule(_ b: MoneyRecurring) -> Schedule { Schedule(rule: b.rule, anchorDay: b.anchorDay, until: b.until, repeatTimeZoneID: b.repeatTimeZoneID) }
+        func schedule(_ b: MoneyRecurring) -> Schedule { Schedule(rule: b.rule, anchorDay: b.anchorDay, until: b.until, repeatTimeZoneID: b.repeatTimeZoneID, nextDate: b.nextDate) }
         var result = base
         func field<T: Equatable>(_ path: WritableKeyPath<MoneyRecurring, T>) throws {
             result[keyPath: path] = try value(local[keyPath: path], cloud[keyPath: path], base[keyPath: path],
@@ -222,11 +222,7 @@ extension CloudMerge {
         result.accountID = amounts.accountID; result.accountAmount = amounts.accountAmount; result.baseAmount = amounts.baseAmount
         let rules = try value(schedule(local), schedule(cloud), schedule(base), label: label, choice: choice, report: report, review: review, key: key)
         result.rule = rules.rule; result.anchorDay = rules.anchorDay; result.until = rules.until; result.repeatTimeZoneID = rules.repeatTimeZoneID
-        switch (local.nextDate == base.nextDate, cloud.nextDate == base.nextDate) {
-        case (true, _): result.nextDate = cloud.nextDate
-        case (_, true): result.nextDate = local.nextDate
-        default: result.nextDate = max(local.nextDate, cloud.nextDate)
-        }
+        result.nextDate = rules.nextDate
         return result
     }
 }
