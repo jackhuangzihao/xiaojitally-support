@@ -51,15 +51,23 @@ enum Dates {
         let m = remainder < 0 ? remainder + 1440 : remainder
         let shiftedDay = calendar.date(byAdding: .day, value: dayOffset, to: calendar.startOfDay(for: day))!
         let start = calendar.startOfDay(for: shiftedDay)
-        func resolve(_ policy: Calendar.RepeatedTimePolicy) -> Date {
-            calendar.nextDate(after: start.addingTimeInterval(-1), matching: DateComponents(hour: m / 60, minute: m % 60, second: 0),
-                              matchingPolicy: .nextTimePreservingSmallerComponents, repeatedTimePolicy: policy)!
-        }
-        let first = resolve(.first)
-        // Keep the existing occurrence of an ambiguous autumn hour when editing that same day.
+        let first: Date = {
+            let found = calendar.nextDate(after: start.addingTimeInterval(-1), matching: DateComponents(hour: m / 60, minute: m % 60, second: 0),
+                                          matchingPolicy: .nextTimePreservingSmallerComponents, repeatedTimePolicy: .first)
+            if let found, calendar.isDate(found, inSameDayAs: start) { return found }
+            // A time in a half-hour gap (Lord Howe 02:15) can match the next day; move it forward by the gap instead.
+            var parts = calendar.dateComponents([.year, .month, .day], from: start)
+            parts.hour = m / 60; parts.minute = m % 60
+            return calendar.date(from: parts) ?? found ?? start
+        }()
+        // Keep the existing occurrence of an ambiguous autumn hour when editing that same day. The later one is found
+        // from the offset change, as the repeated-time policy misses a repeated half hour (Lord Howe).
         if let reference, calendar.isDate(reference, inSameDayAs: start) {
-            let last = resolve(.last)
-            if calendar.timeZone.secondsFromGMT(for: last) == calendar.timeZone.secondsFromGMT(for: reference) { return last }
+            let zone = calendar.timeZone
+            let shift = zone.secondsFromGMT(for: first) - zone.secondsFromGMT(for: reference)
+            let later = first.addingTimeInterval(TimeInterval(shift))
+            if shift > 0, calendar.isDate(later, inSameDayAs: start), clockMinute(later, calendar: calendar) == clockMinute(first, calendar: calendar),
+               zone.secondsFromGMT(for: later) == zone.secondsFromGMT(for: reference) { return later }
         }
         return first
     }
@@ -83,14 +91,44 @@ enum Dates {
 
     /// The next time a repeating task comes back after `now`, or nil once that would be past `until` (a whole day).
     /// Missed occurrences are skipped rather than piled up.
-    static func nextRepeat(_ base: Date, rule text: String, anchorDay: Int, after now: Date, until: Date? = nil, calendar: Calendar = Dates.calendar) -> Date? {
-        guard let rule = RepeatRule(text), let next = nextOccurrence(base, rule: rule, anchorDay: anchorDay, after: now, calendar: calendar) else { return nil }
+    /// `clock` is the rule's intended local time (seconds after midnight). Each occurrence is placed on it, so a time
+    /// skipped by a daylight-saving change (02:30 → 03:30) moves only that day and later ones return to 02:30.
+    /// Nil keeps the earlier behavior of carrying the previous occurrence's actual time forward.
+    static func nextRepeat(_ base: Date, rule text: String, anchorDay: Int, after now: Date, until: Date? = nil,
+                           calendar: Calendar = Dates.calendar, clock: Int? = nil) -> Date? {
+        guard let rule = RepeatRule(text), let next = nextOccurrence(base, rule: rule, anchorDay: anchorDay, after: now, calendar: calendar, clock: clock) else { return nil }
         if let until, calendar.startOfDay(for: next) > calendar.startOfDay(for: until) { return nil }
         return next
     }
 
-    private static func nextOccurrence(_ base: Date, rule: RepeatRule, anchorDay: Int, after now: Date, calendar: Calendar) -> Date? {
+    /// Seconds after local midnight of `date`'s wall-clock time.
+    static func clock(of date: Date, calendar: Calendar) -> Int {
+        let parts = calendar.dateComponents([.hour, .minute, .second], from: date)
+        return (parts.hour ?? 0) * 3600 + (parts.minute ?? 0) * 60 + (parts.second ?? 0)
+    }
+
+    static func validClock(_ clock: Int) -> Bool { (0..<86_400).contains(clock) }
+
+    /// A reminder distance that can be stored: up to a year before (or, for an inconsistent reminder, after) its occurrence.
+    /// Compared without `abs`, which traps on `Int.min` from damaged data.
+    static func validReminderOffset(_ offset: Int) -> Bool { (-366 * 86_400...366 * 86_400).contains(offset) }
+
+    /// `clock` on the calendar day of `day`. A time skipped by daylight saving moves forward by the gap
+    /// (02:30 → 03:30); a repeated hour uses its first instance.
+    static func placing(clock: Int, onDayOf day: Date, calendar: Calendar) -> Date? {
+        guard validClock(clock) else { return nil }
+        var parts = calendar.dateComponents([.year, .month, .day], from: day)
+        parts.hour = clock / 3600; parts.minute = clock % 3600 / 60; parts.second = clock % 60
+        return calendar.date(from: parts)
+    }
+
+    private static func nextOccurrence(_ base: Date, rule: RepeatRule, anchorDay: Int, after now: Date, calendar: Calendar, clock: Int?) -> Date? {
         let cal = calendar, n = rule.interval
+        func placed(_ date: Date?) -> Date? {
+            guard let date else { return nil }
+            guard let clock else { return date }
+            return placing(clock: clock, onDayOf: date, calendar: cal)
+        }
         switch rule.unit {
         case .day, .week:
             if rule.unit == .week, !rule.weekdays.isEmpty {
@@ -100,8 +138,8 @@ enum Dates {
                 for _ in 0..<(7 * n + 14) {
                     if let week = cal.dateInterval(of: .weekOfYear, for: day)?.start {
                         let weeks = (cal.dateComponents([.day], from: baseWeek, to: week).day ?? 0) / 7
-                        let candidate = replacingDay(of: base, with: day, calendar: cal)
-                        if weeks >= 0, weeks % n == 0, rule.weekdays.contains(cal.component(.weekday, from: day)), candidate > now, candidate > base {
+                        if let candidate = placed(replacingDay(of: base, with: day, calendar: cal)),
+                           weeks >= 0, weeks % n == 0, rule.weekdays.contains(cal.component(.weekday, from: day)), candidate > now, candidate > base {
                             return candidate
                         }
                     }
@@ -113,8 +151,8 @@ enum Dates {
             let step = rule.unit == .day ? n : 7 * n
             let elapsed = max(0, cal.dateComponents([.day], from: cal.startOfDay(for: base), to: cal.startOfDay(for: now)).day ?? 0)
             let steps = max(1, elapsed / step)
-            guard let candidate = cal.date(byAdding: .day, value: steps * step, to: base) else { return nil }
-            return candidate > now ? candidate : cal.date(byAdding: .day, value: step, to: candidate)
+            guard let candidate = placed(cal.date(byAdding: .day, value: steps * step, to: base)) else { return nil }
+            return candidate > now ? candidate : placed(cal.date(byAdding: .day, value: step, to: candidate))
         case .month:
             let months = max(n, (cal.dateComponents([.month], from: monthStart(base, calendar: cal), to: monthStart(now, calendar: cal)).month ?? n) / n * n)
             func candidate(_ offset: Int) -> Date? {
@@ -122,7 +160,11 @@ enum Dates {
                 let last = cal.range(of: .day, in: .month, for: month)!.count
                 var parts = cal.dateComponents([.year, .month], from: month)
                 parts.day = min(max(1, anchorDay > 0 ? anchorDay : cal.component(.day, from: base)), last)
-                parts.hour = cal.component(.hour, from: base); parts.minute = cal.component(.minute, from: base)
+                if let clock {
+                    parts.hour = clock / 3600; parts.minute = clock % 3600 / 60; parts.second = clock % 60
+                } else {
+                    parts.hour = cal.component(.hour, from: base); parts.minute = cal.component(.minute, from: base)
+                }
                 return cal.date(from: parts)
             }
             guard let date = candidate(months) else { return nil }
@@ -134,6 +176,7 @@ enum Dates {
                       let days = cal.range(of: .day, in: .month, for: year) else { return nil }
                 var parts = cal.dateComponents([.year, .month, .hour, .minute, .second], from: year)
                 parts.day = min(max(1, anchorDay > 0 ? anchorDay : cal.component(.day, from: base)), days.count)
+                if let clock { parts.hour = clock / 3600; parts.minute = clock % 3600 / 60; parts.second = clock % 60 }
                 return cal.date(from: parts)
             }
             guard let date = candidate(years) else { return nil }

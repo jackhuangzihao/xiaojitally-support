@@ -177,18 +177,32 @@ import AppKit
         return count
     }
 
+    private static func waitUntil(_ label: String, timeout: Duration = .seconds(5),
+                                  condition: @MainActor () -> Bool) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition() {
+            guard clock.now < deadline else { throw TaskBackup.invalid("Timed out waiting for " + label) }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+    }
+
     static func editorSaveLifecycle() async throws -> Int {
         var count = 0
         func check(_ value: Bool, _ label: String) throws {
             guard value else { throw TaskBackup.invalid("EDITOR SAVE LIFECYCLE: " + label) }; count += 1
         }
-        for _ in 0..<3 {
+        for round in 0..<3 {
+            var timedOut = false
+            do { try await waitUntil("injected missing callback", timeout: .milliseconds(10)) { false } }
+            catch { timedOut = error.localizedDescription.contains("injected missing callback") }
+            try check(timedOut, "a missing callback fails with a bounded, descriptive timeout")
             let saves = PendingEditorSaves()
             try check(await saves.waitForCompletion(), "no saves require no wait")
             let first = saves.begin(), second = saves.begin()
             var started = false, finished = false
             let waiter = Task { started = true; let result = await saves.waitForCompletion(); finished = true; return result }
-            while !started { await Task.yield() }
+            try await waitUntil("save waiter start") { started }
             saves.finish(first, saved: true)
             await Task.yield()
             try check(!finished && saves.hasPending, "multiple windows wait until every save completes")
@@ -200,7 +214,7 @@ import AppKit
             let retry = saves.begin()
             started = false
             let retryWaiter = Task { started = true; return await saves.waitForCompletion() }
-            while !started { await Task.yield() }
+            try await waitUntil("save waiter start") { started }
             saves.finish(retry, saved: true)
             // A new save starts before the suspended quit gets the main actor back.
             let extra = saves.begin()
@@ -216,7 +230,10 @@ import AppKit
                 var firstDirty = true, secondDirty = true
                 first.hasChanges = { firstDirty }; second.hasChanges = { secondDirty }
                 var discard = false, prompts = 0, answers: [Bool] = []
-                let guarded = BackupTerminationDelegate(unsaved: unsaved, confirmDiscard: { prompts += 1; return discard }, reply: { answers.append($0) })
+                let guarded = BackupTerminationDelegate(unsaved: unsaved, confirmDiscard: { prompts += 1; return discard }, reply: { value in
+                    if round == 0 { answers.append(value) }
+                    else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { answers.append(value) } }
+                })
                 try check(guarded.applicationShouldTerminate(NSApplication.shared) == .terminateNow && prompts == 0, "clean editors need no quit prompt")
                 unsaved.track(first)
                 unsaved.track(first)
@@ -231,12 +248,12 @@ import AppKit
                 let saving = shared.begin()
                 try check(guarded.applicationShouldTerminate(NSApplication.shared) == .terminateLater && prompts == 2, "already requested saves complete before asking about other editors")
                 shared.finish(saving, saved: true)
-                for _ in 0..<1000 where answers.isEmpty { await Task.yield() }
+                try await waitUntil("first guarded quit reply") { !answers.isEmpty }
                 try check(answers == [false] && prompts == 3, "another dirty editor remains protected after a successful save")
                 let failed = shared.begin()
                 try check(guarded.applicationShouldTerminate(NSApplication.shared) == .terminateLater, "save failure can be retried after cancelled quit")
                 shared.finish(failed, saved: false)
-                for _ in 0..<1000 where answers.count < 2 { await Task.yield() }
+                try await waitUntil("failed-save quit reply") { answers.count >= 2 }
                 try check(answers == [false, false] && prompts == 3, "save failure keeps app open without offering to discard that failure")
                 secondDirty = false
                 try check(!unsaved.hasChanges && guarded.applicationShouldTerminate(NSApplication.shared) == .terminateNow, "committed edits clear immediately without waiting for another render")
@@ -271,19 +288,19 @@ import AppKit
             await Task.yield()
             try check(replies.isEmpty, "quit is not approved while save is pending")
             shared.finish(pending, saved: false)
-            for _ in 0..<1000 where replies.isEmpty { await Task.yield() }
+            try await waitUntil("failed quit reply") { !replies.isEmpty }
             try check(replies == [false], "failed save keeps the app open exactly once")
             let successful = shared.begin()
             try check(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater, "quit can be retried")
             await Task.yield()
             shared.finish(successful, saved: true)
-            for _ in 0..<1000 where replies.count < 2 { await Task.yield() }
+            try await waitUntil("successful quit reply") { replies.count >= 2 }
             try check(replies == [false, true], "successful save permits quit after completion")
             try check(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow, "idle app retains normal immediate quit")
             let fastFailure = shared.begin()
             try check(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater, "fast save still registers before quit")
             shared.finish(fastFailure, saved: false)
-            for _ in 0..<1000 where replies.count < 3 { await Task.yield() }
+            try await waitUntil("fast failed-save quit reply") { replies.count >= 3 }
             try check(replies == [false, true, false], "a failure before the quit task starts still cancels termination")
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("Jianshi-Quit-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -308,7 +325,7 @@ import AppKit
                 if cancel { save.cancel() }
                 do { try await save.value }
                 catch is CancellationError { try check(cancel, "only the intentionally cancelled save throws cancellation") }
-                for _ in 0..<1000 where approval == nil { await Task.yield() }
+                try await waitUntil("prepared-save quit reply") { approval != nil }
                 try check(approval == !cancel && committed == !cancel, "quit approval follows the actual save result")
                 let reopened = try Store.make(url: url)
                 try check(try reopened.mainContext.fetchCount(FetchDescriptor<TaskItem>()) == (cancel ? 0 : 1),

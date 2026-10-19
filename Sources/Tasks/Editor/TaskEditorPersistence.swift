@@ -17,6 +17,106 @@ extension TaskEditor {
         var repeatTimeZoneID: String? = nil
         var normalizedScheduledDate: Date? = nil
         var normalizedDueDate: Date? = nil
+        var startClockIntent: ClockIntent? = nil
+        var dueClockIntent: ClockIntent? = nil
+
+        /// Called after assigning dates, before the unified save. Only the clock that drives recurrence participates.
+        func applyRepeatClock(to task: TaskItem) {
+            guard task.repeatRule != "none", task.repeatTimeZoneID != nil,
+                  let calendar = task.recurrenceCalendar, let clockDate = task.clockDate else {
+                task.refreshRepeatClock(); return
+            }
+            let usesStart = task.scheduledAt != nil
+            let intent = usesStart ? startClockIntent : dueClockIntent
+            let originalClockDate = original.flatMap { record in
+                record.scheduledAt != nil ? (record.hasTime ? record.scheduledAt : nil) : (record.dueHasTime ? record.dueAt : nil)
+            }
+            let sameClockSource = original?.repeatRule != "none"
+                && original?.repeatTimeZoneID.map { ClockIntent.sameTimeZone($0, calendar.timeZone) } == true
+                && (original?.scheduledAt != nil) == usesStart
+            let preservesClock = sameClockSource && intent?.explicit != true
+                && (intent?.reference ?? clockDate) == originalClockDate
+            let clock: Int
+            if preservesClock, let originalClockDate {
+                clock = original?.repeatClock.flatMap { Dates.validClock($0) ? $0 : nil }
+                    ?? Dates.clock(of: originalClockDate, calendar: calendar)
+            } else {
+                clock = intent?.clock(in: calendar, on: clockDate) ?? Dates.clock(of: clockDate, calendar: calendar)
+            }
+            task.repeatClock = clock
+            if sameClockSource, let originalClockDate, let original,
+               task.resolvedReminderPreset == .custom,
+               (ReminderPreset(rawValue: original.reminderKind) ?? .custom) == .custom,
+               task.reminderAt == original.reminderAt,
+               let offset = original.repeatReminderOffset, Dates.validReminderOffset(offset) {
+                // An unchanged custom reminder keeps its original meaning even when this occurrence was shifted by DST.
+                let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: originalClockDate),
+                                                   to: calendar.startOfDay(for: clockDate)).day
+                // Both the old and final offsets are bounded by a year; bound days before multiplying.
+                guard let days, (-732...732).contains(days) else { task.repeatReminderOffset = nil; return }
+                let originalClock = original.repeatClock.flatMap { Dates.validClock($0) ? $0 : nil }
+                    ?? Dates.clock(of: originalClockDate, calendar: calendar)
+                let adjusted = offset - days * 86_400 + originalClock - clock
+                task.repeatReminderOffset = Dates.validReminderOffset(adjusted) ? adjusted : nil
+            } else {
+                task.refreshRepeatReminderOffset()
+            }
+        }
+    }
+    /// Session-only intent: date changes and recovery must not turn a temporary DST shift into a new daily time.
+    struct ClockIntent: Equatable {
+        let reference: Date
+        private(set) var inputTimeZoneID: String
+        private(set) var requestedClock: Int
+        let explicit: Bool
+
+        init(_ date: Date, requestedClock: Int? = nil, explicit: Bool = true, calendar: Calendar = Dates.calendar) {
+            reference = date
+            inputTimeZoneID = calendar.timeZone.identifier
+            self.requestedClock = requestedClock.flatMap { Dates.validClock($0) ? $0 : nil } ?? Dates.clock(of: date, calendar: calendar)
+            self.explicit = explicit
+        }
+
+        func clock(in calendar: Calendar, on date: Date) -> Int {
+            // A foreign rule uses the final selected instant, not the date on which the clock was first edited.
+            Self.sameTimeZone(inputTimeZoneID, calendar.timeZone) ? requestedClock : Dates.clock(of: date, calendar: calendar)
+        }
+
+        mutating func moving(toDay day: Date, from date: Date, calendar: Calendar = Dates.calendar) -> Date {
+            // A same-day pick is a no-op, including a recovered gap input abroad or a later autumn occurrence.
+            if calendar.isDate(date, inSameDayAs: day) { return date }
+            let clock = clock(in: calendar, on: date)
+            guard let selected = Dates.placing(clock: clock, onDayOf: day, calendar: calendar) else { return date }
+            // An unedited opening clock stays anchored to its rule even after date-only edits abroad.
+            if explicit {
+                inputTimeZoneID = calendar.timeZone.identifier
+                requestedClock = clock
+            }
+            return selected
+        }
+
+        static func opening(_ date: Date?, original: TaskBackup.TaskRecord?, usesStart: Bool,
+                            calendar: Calendar = Dates.calendar) -> ClockIntent? {
+            guard let date else { return nil }
+            let originalDate = usesStart ? original?.scheduledAt : original?.dueAt
+            let ownsClock = (original?.scheduledAt != nil) == usesStart
+                && (usesStart ? original?.hasTime : original?.dueHasTime) == true
+            let storedClock = original?.repeatClock.flatMap { Dates.validClock($0) ? $0 : nil }
+            if original?.repeatRule != "none", ownsClock, date == originalDate, let storedClock,
+               let ruleCalendar = Dates.recurrenceCalendar(timeZoneID: original?.repeatTimeZoneID) {
+                // Retain rule-zone input while viewing abroad, so returning home can recover it without guessing.
+                return ClockIntent(date, requestedClock: storedClock, explicit: false, calendar: ruleCalendar)
+            }
+            return ClockIntent(date, explicit: false, calendar: calendar)
+        }
+
+        static func sameTimeZone(_ identifier: String, _ zone: TimeZone) -> Bool {
+            if identifier == zone.identifier { return true }
+            guard let input = TimeZone(identifier: identifier) else { return false }
+            // Compare complete zone rules for aliases (US/Eastern), never just today's UTC offset.
+            let data = (input as NSTimeZone).data
+            return !data.isEmpty && data == (zone as NSTimeZone).data
+        }
     }
     /// The input stays available to the date picker; its saved day survives recovery in another zone.
     struct AllDayDraftDate: Equatable {
@@ -38,7 +138,8 @@ extension TaskEditor {
                    timed: hasTime, dueTimed: dueHasTime, preset: reminderPreset, listID: listID, priority: priority, subtasks: subtasks, original: original,
                    finance: linkedFinance, repeatTimeZoneID: repeatTimeZoneID,
                    normalizedScheduledDate: hasTime ? nil : savedScheduledDate,
-                   normalizedDueDate: dueHasTime ? nil : savedDueDate)
+                   normalizedDueDate: dueHasTime ? nil : savedDueDate,
+                   startClockIntent: startClockIntent, dueClockIntent: dueClockIntent)
     }
     var effectiveEnd: Date? { hasDate && hasTime && hasEnd ? end : nil }
     var savedScheduledDate: Date? {
@@ -208,6 +309,7 @@ extension TaskEditor {
                task.repeatAnchorDay == 0 || oldRule != repeatRule || oldBase.map({ !calendar.isDate($0, inSameDayAs: base) }) == true {
                 task.repeatAnchorDay = calendar.component(.day, from: base)
             }
+            draftState.applyRepeatClock(to: task)
             task.reminderNeedsAttention = task.reminderRequiresAttention()
             task.list = selectedList
             task.subtasks = cleanSubtasks

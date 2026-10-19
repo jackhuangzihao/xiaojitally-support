@@ -1,9 +1,10 @@
 import Foundation
 import OSLog
 
-/// Format 16 fences publishers that would discard recurrence time zones; immutable storage is unchanged.
+/// Format 17 fences publishers that would discard intended repeat times (16 added recurrence time zones);
+/// immutable storage is unchanged.
 enum CloudCommitProtocol {
-    static let format = 16
+    static let format = 17
     static let maximumBlobBytes = 900 * 1024
     static let manifestPageBytes = 16 * 1024
     static let batchSize = 200 // Includes headroom below CloudKit's per-request limit.

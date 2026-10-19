@@ -26,6 +26,8 @@ struct TaskEditor: View {
 
     @State var end: Date
     @State var hasTime: Bool
+    @State var startClockIntent: ClockIntent?
+    @State var dueClockIntent: ClockIntent?
     @State var hasDue: Bool
     @State var due: Date
     @State var restoredDueDate: AllDayDraftDate?
@@ -68,7 +70,8 @@ struct TaskEditor: View {
         _recoveredDraft = State(initialValue: draft != nil)
         _openPanel = State(initialValue: request.timed ? .time : nil)
         let task = request.task
-        _original = State(initialValue: draft?.original ?? task.map(TaskBackup.TaskRecord.init))
+        let original = draft?.original ?? task.map(TaskBackup.TaskRecord.init)
+        _original = State(initialValue: original)
         _title = State(initialValue: task?.title ?? "")
         _notes = State(initialValue: task?.notes ?? "")
         _hasDate = State(initialValue: (task?.scheduledAt ?? request.date) != nil)
@@ -76,6 +79,8 @@ struct TaskEditor: View {
         _hasEnd = State(initialValue: task?.endAt != nil || (task == nil && request.timed))
         _end = State(initialValue: task?.endAt ?? (task?.scheduledAt ?? request.date ?? Date()).addingTimeInterval(3600))
         _hasTime = State(initialValue: task?.hasTime ?? request.timed)
+        _startClockIntent = State(initialValue: ClockIntent.opening(task?.scheduledAt ?? request.date, original: original, usesStart: true))
+        _dueClockIntent = State(initialValue: ClockIntent.opening(task?.dueAt, original: original, usesStart: false))
         _hasDue = State(initialValue: task?.dueAt != nil)
         _due = State(initialValue: task?.dueAt ?? task?.scheduledAt ?? request.date ?? Date())
         _dueHasTime = State(initialValue: task?.dueHasTime ?? false)
@@ -97,6 +102,8 @@ struct TaskEditor: View {
             _end = State(initialValue: draft.end ?? (draft.scheduled ?? Date()).addingTimeInterval(3600))
             _hasDue = State(initialValue: draft.due != nil); _due = State(initialValue: draft.due ?? Date())
             _dueHasTime = State(initialValue: draft.dueTimed); _priority = State(initialValue: draft.priority)
+            _startClockIntent = State(initialValue: draft.startClockIntent ?? ClockIntent.opening(draft.scheduled, original: original, usesStart: true))
+            _dueClockIntent = State(initialValue: draft.dueClockIntent ?? ClockIntent.opening(draft.due, original: original, usesStart: false))
             _restoredScheduledDate = State(initialValue: AllDayDraftDate(input: draft.scheduled,
                 normalized: draft.normalizedScheduledDate, timed: draft.timed))
             _restoredDueDate = State(initialValue: AllDayDraftDate(input: draft.due,

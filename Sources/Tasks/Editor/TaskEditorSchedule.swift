@@ -58,16 +58,53 @@ extension TaskEditor {
             let start = TaskEditor.defaultTime(on: date)
             end = start.addingTimeInterval(3600)
             date = start
+            startClockIntent = ClockIntent(start)
             hasTime = true; hasEnd = true
         }
         toggle(.time)
     }
 
-    /// Clock edits preserve the selected end day; an invalid earlier time rolls forward.
+    /// Date changes use the retained input clock, so a temporary DST shift is not carried into the next day.
     private var startDate: Binding<Date> {
+        Binding(get: { date }, set: { value in
+            var intent = startClockIntent ?? ClockIntent(date, explicit: false)
+            let selected = hasTime ? intent.moving(toDay: value, from: date) : value
+            end = end.addingTimeInterval(selected.timeIntervalSince(date))
+            date = selected
+            startClockIntent = intent
+        })
+    }
+
+    private var startClock: Binding<Date> {
         Binding(get: { date }, set: { value in
             end = end.addingTimeInterval(value.timeIntervalSince(date))
             date = value
+            startClockIntent = ClockIntent(value)
+        })
+    }
+
+    private var dueClock: Binding<Date> {
+        Binding(get: { due }, set: { value in
+            due = value
+            dueClockIntent = ClockIntent(value)
+        })
+    }
+
+    private var startClockInput: Binding<Int> {
+        Binding(get: { startClockIntent?.clock(in: Dates.calendar, on: date) ?? Dates.clock(of: date, calendar: Dates.calendar) },
+                set: { startClockIntent = ClockIntent(date, requestedClock: $0) })
+    }
+
+    private var dueClockInput: Binding<Int> {
+        Binding(get: { dueClockIntent?.clock(in: Dates.calendar, on: due) ?? Dates.clock(of: due, calendar: Dates.calendar) },
+                set: { dueClockIntent = ClockIntent(due, requestedClock: $0) })
+    }
+
+    private var dueDate: Binding<Date> {
+        Binding(get: { due }, set: { value in
+            var intent = dueClockIntent ?? ClockIntent(due, explicit: false)
+            due = dueHasTime ? intent.moving(toDay: value, from: due) : value
+            dueClockIntent = intent
         })
     }
 
@@ -94,7 +131,7 @@ extension TaskEditor {
                 (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12))) {
                     VStack(spacing: 4) {
                         Text(L("开始", "Start")).font(.caption).foregroundStyle(.secondary)
-                        TimeWheel(date: startDate)
+                        TimeWheel(date: startClock, clock: startClockInput)
                     }
                     VStack(spacing: 4) {
                         Text(L("结束", "End")).font(.caption).foregroundStyle(.secondary)
@@ -125,10 +162,10 @@ extension TaskEditor {
                 }
                 }
             case .deadline:
-                DateGrid(date: $due, earliest: dueEarliest, highlight: hasDue) { hasDue = true }
+                DateGrid(date: dueDate, earliest: dueEarliest, highlight: hasDue) { hasDue = true }
                 HStack {
                     if dueHasTime {
-                        TimeWheel(date: $due)
+                        TimeWheel(date: dueClock, clock: dueClockInput)
                     } else {
                         Text(L("截止到这一天结束", "Due by the end of the day")).font(.caption).foregroundStyle(.secondary)
                     }
@@ -138,6 +175,7 @@ extension TaskEditor {
                         else {
                             hasDue = true
                             due = TaskEditor.defaultTime(on: due, after: hasTime && Dates.sameDay(date, due) ? (effectiveEnd ?? date) : nil)
+                            dueClockIntent = ClockIntent(due)
                             dueHasTime = true
                         }
                     }.buttonStyle(.borderless).font(.callout)

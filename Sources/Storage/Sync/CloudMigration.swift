@@ -105,11 +105,15 @@ enum CloudMigration {
         return snapshot
     }
 
-    /// A sealed format-14/15 migration may retain a digest produced by the previous canonical encoder.
+    /// A sealed migration may retain a digest produced by an earlier canonical encoder: 14/3 by protocol 14–16 builds,
+    /// 13/2 before recurrence time zones. An older encoder applies only to a snapshot it could have represented.
     static func matchesLegacyDigest(_ expected: String, snapshot: TaskBackup) throws -> Bool {
-        if try CloudMerge.digest(CloudMerge.bytes(snapshot)) == expected { return true }
-        guard snapshot.version <= 13, (snapshot.finance?.version ?? 1) <= 2 else { return false }
-        return try CloudMerge.digest(CloudMerge.bytes(snapshot, legacyMigrationFormat: true)) == expected
+        for format in CloudMerge.CanonicalFormat.allCases {
+            let versions = format.versions
+            guard format == .current || (snapshot.version <= versions.backup && (snapshot.finance?.version ?? 1) <= versions.finance) else { continue }
+            if try CloudMerge.digest(CloudMerge.bytes(snapshot, canonical: format)) == expected { return true }
+        }
+        return false
     }
 
     static func markCommitted(in database: CKDatabase, digest: String?, authorize: @Sendable () async throws -> Void) async throws {

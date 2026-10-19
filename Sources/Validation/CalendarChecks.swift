@@ -105,6 +105,34 @@ import AppKit
             let afterSpring = c.date(byAdding: .day, value: 1, to: spring)!
             try require(Dates.clockTime(on: afterSpring, minute: 135 - 1440, calendar: c) == missing,
                         "A continuation resolves a missing spring hour on its normalized start day")
+            // Lord Howe moves by half an hour (02:00 → 02:30, and 02:00 → 01:30 in April): a missing time stays on its day.
+            var howe = Calendar(identifier: .gregorian); howe.timeZone = TimeZone(identifier: "Australia/Lord_Howe")!
+            let howeSpring = howe.date(from: DateComponents(year: 2026, month: 10, day: 4))!
+            for (minute, shown) in [(105, 105.0), (120, 150), (135, 165), (150, 150), (165, 165)] {
+                let result = Dates.clockTime(on: howeSpring, minute: minute, calendar: howe)
+                try require(howe.isDate(result, inSameDayAs: howeSpring) && Dates.clockMinute(result, calendar: howe) == shown,
+                            "Lord Howe's missing half hour resolves forward on the same day: minute \(minute)")
+            }
+            try require(Dates.clockTime(on: howe.date(byAdding: .day, value: 1, to: howeSpring)!, minute: 135 - 1440, calendar: howe)
+                        == Dates.clockTime(on: howeSpring, minute: 135, calendar: howe),
+                        "A continuation resolves Lord Howe's missing half hour on its normalized start day")
+            let howeAutumn = howe.date(from: DateComponents(year: 2026, month: 4, day: 5))!
+            let howeFirst = Dates.clockTime(on: howeAutumn, minute: 105, calendar: howe), howeSecond = howeFirst.addingTimeInterval(1800)
+            try require(howe.isDate(howeFirst, inSameDayAs: howeAutumn) && Dates.clockMinute(howeSecond, calendar: howe) == 105
+                        && Dates.clockTime(on: howeAutumn, minute: 105, reference: howeSecond, calendar: howe) == howeSecond,
+                        "Lord Howe's repeated half hour keeps the occurrence being edited")
+            // The iPhone time wheel places a skipped time like repeat occurrences, always on the same day.
+            for (zone, month, day, hour, minute, shown) in [("America/New_York", 3, 8, 2, 30, 210.0), ("Australia/Sydney", 10, 4, 2, 30, 210),
+                                                            ("Australia/Lord_Howe", 10, 4, 2, 15, 165), ("America/Santiago", 9, 6, 0, 30, 90),
+                                                            ("America/New_York", 3, 8, 12, 0, 720), ("Asia/Shanghai", 10, 18, 2, 30, 150),
+                                                            ("America/New_York", 11, 1, 1, 30, 90)] {
+                var wheel = Calendar(identifier: .gregorian); wheel.timeZone = TimeZone(identifier: zone)!
+                let noon = wheel.date(from: DateComponents(year: 2026, month: month, day: day, hour: 12))!
+                let set = TimeWheel.setting(hour: hour, minute: minute, of: noon, calendar: wheel)
+                try require(wheel.isDate(set, inSameDayAs: noon) && Dates.clockMinute(set, calendar: wheel) == shown
+                            && (shown != Double(hour * 60 + minute) || set == wheel.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute))),
+                            "The time wheel keeps the day and moves a skipped time forward by the gap: \(zone) \(hour):\(minute)")
+            }
             for (zone, month, day) in [("America/Santiago", 9, 6), ("America/Havana", 3, 8), ("Africa/Cairo", 4, 24)] {
                 var midnightCalendar = Calendar(identifier: .gregorian)
                 midnightCalendar.timeZone = TimeZone(identifier: zone)!

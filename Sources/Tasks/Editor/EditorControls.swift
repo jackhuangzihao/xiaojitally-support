@@ -152,30 +152,57 @@ struct FlowLayout: Layout {
 /// (the system wheel is not). macOS has no wheel, so it uses the system time field, which also takes typing.
 struct TimeWheel: View {
     @Binding var date: Date
+    var clock: Binding<Int>? = nil
+    private var selectedClock: Int { clock?.wrappedValue ?? Dates.clock(of: date, calendar: Dates.calendar) }
     var body: some View {
         #if os(iOS)
-        let parts = Dates.calendar.dateComponents([.hour, .minute], from: date)
-        let hour = parts.hour ?? 0, minute = parts.minute ?? 0
+        let minute = selectedClock % 3600 / 60
         // An existing time that isn't on a five-minute step stays selectable instead of being rounded away.
         let minutes = Array(Set(Array(stride(from: 0, to: 60, by: 5)) + [minute])).sorted()
         HStack(spacing: 0) {
-            Picker(L("小时", "Hour"), selection: Binding(get: { hour }, set: { set(hour: $0, minute: minute) })) {
+            Picker(L("小时", "Hour"), selection: Binding(get: { selectedClock / 3600 }, set: { set(hour: $0) })) {
                 ForEach(0..<24, id: \.self) { Text(String(format: "%02d", $0)).tag($0) }
             }.pickerStyle(.wheel).frame(maxWidth: .infinity).clipped()
             Text(":").font(.title3.monospacedDigit()).foregroundStyle(.secondary)
-            Picker(L("分钟", "Minute"), selection: Binding(get: { minute }, set: { set(hour: hour, minute: $0) })) {
+            Picker(L("分钟", "Minute"), selection: Binding(get: { selectedClock % 3600 / 60 }, set: { set(minute: $0) })) {
                 ForEach(minutes, id: \.self) { Text(String(format: "%02d", $0)).tag($0) }
             }.pickerStyle(.wheel).frame(maxWidth: .infinity).clipped()
         }.frame(maxWidth: .infinity).frame(height: 140)
         #else
-        DatePicker(L("时间", "Time"), selection: $date, displayedComponents: .hourAndMinute)
+        DatePicker(L("时间", "Time"), selection: clockField, displayedComponents: .hourAndMinute)
             .labelsHidden().datePickerStyle(.stepperField).controlSize(.large)
             .frame(maxWidth: .infinity)
         #endif
     }
 
-    private func set(hour: Int, minute: Int) {
-        date = Dates.calendar.date(bySettingHour: hour, minute: minute, second: 0, of: date) ?? date
+    // The native field edits a clock on a neutral day; otherwise it normalizes missing DST times before our binding sees them.
+    private var clockField: Binding<Date> {
+        Binding(get: { Self.fieldDate(for: date, clock: selectedClock) }, set: { set(fieldDate: $0) })
+    }
+
+    static func fieldDate(for date: Date, clock: Int? = nil, calendar: Calendar = Dates.calendar) -> Date {
+        let clock = clock.flatMap { Dates.validClock($0) ? $0 : nil } ?? Dates.clock(of: date, calendar: calendar)
+        return Calendar(identifier: .gregorian).date(from: DateComponents(year: 2001, month: 1, day: 15,
+            hour: clock / 3600, minute: clock % 3600 / 60, second: clock % 60)) ?? date
+    }
+
+    func set(fieldDate: Date) {
+        let calendar = Calendar(identifier: .gregorian)
+        set(hour: calendar.component(.hour, from: fieldDate), minute: calendar.component(.minute, from: fieldDate))
+    }
+
+    func set(hour: Int? = nil, minute: Int? = nil) {
+        let previous = selectedClock
+        let hour = hour ?? previous / 3600, minute = minute ?? previous % 3600 / 60
+        guard (0..<24).contains(hour), (0..<60).contains(minute) else { return }
+        date = Self.setting(hour: hour, minute: minute, of: date)
+        clock?.wrappedValue = hour * 3600 + minute * 60
+    }
+
+    /// The chosen time on the same day, placed like repeat occurrences: a time skipped by daylight saving moves forward
+    /// by the gap (02:30 → 03:30, Lord Howe 02:15 → 02:45) instead of to the hour after it or to the next day.
+    static func setting(hour: Int, minute: Int, of date: Date, calendar: Calendar = Dates.calendar) -> Date {
+        Dates.placing(clock: hour * 3600 + minute * 60, onDayOf: date, calendar: calendar) ?? date
     }
 }
 

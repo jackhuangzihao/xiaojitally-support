@@ -12,10 +12,71 @@ extension TaskItem {
         return Dates.recurrenceCalendar(timeZoneID: repeatTimeZoneID)
     }
 
+    /// The local time each occurrence is placed on. A rule with a time zone keeps its intended time (an all-day one,
+    /// midnight); a rule saved before the intended time existed starts from its current time. Rules without a time
+    /// zone keep carrying the previous time forward, as they always have.
+    var effectiveRepeatClock: Int? {
+        guard repeatTimeZoneID != nil, let calendar = recurrenceCalendar else { return nil }
+        guard let clockDate else { return 0 }
+        if let repeatClock, Dates.validClock(repeatClock) { return repeatClock }
+        return Dates.clock(of: clockDate, calendar: calendar)
+    }
+
+    /// This occurrence's actual local time in the rule's calendar; on a day skipped by daylight saving, the moved time.
+    var actualRepeatClock: Int? {
+        guard let calendar = recurrenceCalendar, let clockDate else { return nil }
+        return Dates.clock(of: clockDate, calendar: calendar)
+    }
+
+    /// Call after the user sets this task's time, reminder or rule: records the intended time and a custom reminder's
+    /// distance from it, so later occurrences keep both.
+    func refreshRepeatClock() {
+        guard repeatRule != "none", repeatTimeZoneID != nil, let calendar = recurrenceCalendar, let clockDate else {
+            repeatClock = nil; repeatReminderOffset = nil; return
+        }
+        repeatClock = Dates.clock(of: clockDate, calendar: calendar)
+        repeatReminderOffset = currentReminderOffset()
+    }
+
+    /// After a move. Moving only to another day keeps the intended time (and the reminder's distance), wherever the
+    /// daylight-saving gap of either day puts that time; a time the user chose is recorded, even 03:30 on a gap day,
+    /// unless it is the same local time as before (an occurrence shown at 03:30 dropped at 03:30 on another day).
+    func updateRepeatClock(previousClock: Int?, dateOnly: Bool = false) {
+        if let previousClock, repeatRule != "none", repeatTimeZoneID != nil, clockDate != nil,
+           dateOnly || actualRepeatClock == previousClock {
+            // A rule saved before the intended time existed locks in the time it had before this move.
+            if repeatClock == nil { repeatClock = previousClock; repeatReminderOffset = currentReminderOffset() }
+            return
+        }
+        refreshRepeatClock()
+    }
+
+    /// Call when only the reminder changed.
+    func refreshRepeatReminderOffset() {
+        repeatReminderOffset = repeatClock == nil ? nil : currentReminderOffset()
+    }
+
+    /// A custom reminder's distance from this occurrence on the wall clock: whole days plus local time, so a reminder
+    /// at 02:15 for a 02:30 task is −900 whatever the daylight-saving state of either day.
+    func currentReminderOffset() -> Int? {
+        guard repeatRule != "none", repeatTimeZoneID != nil, resolvedReminderPreset == .custom,
+              let calendar = recurrenceCalendar, let clockDate, let reminderAt else { return nil }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: clockDate), to: calendar.startOfDay(for: reminderAt)).day ?? 0
+        guard abs(days) <= 366 else { return nil }
+        let offset = days * 86_400 + Dates.clock(of: reminderAt, calendar: calendar) - Dates.clock(of: clockDate, calendar: calendar)
+        // A reminder further away than backups accept keeps the earlier whole-day rule instead of an unsavable value.
+        return Dates.validReminderOffset(offset) ? offset : nil
+    }
+
+    var effectiveReminderOffset: Int? {
+        if let repeatReminderOffset, Dates.validReminderOffset(repeatReminderOffset), resolvedReminderPreset == .custom { return repeatReminderOffset }
+        return currentReminderOffset()
+    }
+
     func nextRepeat(after now: Date) -> Date? {
         guard let base = calendarDate, let calendar = recurrenceCalendar else { return nil }
         return Dates.nextRepeat(base, rule: repeatRule, anchorDay: repeatAnchorDay,
-                                after: now, until: repeatUntil, calendar: calendar)
+                                after: now, until: repeatUntil, calendar: calendar, clock: effectiveRepeatClock)
     }
 
     func repeatAnchor(for base: Date, rule: String, calendar: Calendar? = nil) -> Int {
@@ -71,8 +132,13 @@ extension TaskItem {
         let dayOffset = calendar.dateComponents([.day], from: calendar.startOfDay(for: base), to: calendar.startOfDay(for: nextDate)).day ?? 0
         next.endAt = duration.map { nextDate.addingTimeInterval($0) }
         next.notes = notes; next.hasTime = hasTime; next.dueHasTime = dueHasTime; next.priority = priority
-        next.dueAt = dueAt.flatMap { calendar.date(byAdding: .day, value: dayOffset, to: $0) }
+        // An unscheduled timed deadline is the occurrence itself; counting days from it would carry a shifted time.
+        next.dueAt = scheduledAt == nil && repeatTimeZoneID != nil && dueAt != nil
+            ? nextDate : dueAt.flatMap { calendar.date(byAdding: .day, value: dayOffset, to: $0) }
         next.repeatRule = repeatRule; next.repeatUntil = repeatUntil; next.repeatTimeZoneID = repeatTimeZoneID
+        // Carry the intended time, recording it now for a rule saved before it existed (taken before any shifted day).
+        next.repeatClock = clockDate == nil ? nil : effectiveRepeatClock
+        next.repeatReminderOffset = next.repeatClock == nil ? nil : effectiveReminderOffset
         next.repeatAnchorDay = repeatAnchorDay > 0 ? repeatAnchorDay : calendar.component(.day, from: base)
         if preview {
             next.previewSourceID = id; next.previewList = list
@@ -102,6 +168,18 @@ extension TaskItem {
         guard let reminderAt, let base = calendarDate else { return nil }
         guard let calendar = repeatTimeZoneID == nil ? calendar : recurrenceCalendar else { return nil }
         if resolvedReminderPreset == .custom {
+            // From the occurrence's intended time, not the previous reminder: a reminder moved by a daylight-saving gap
+            // moves only that day and can never drift past its task.
+            if clockDate != nil, let clock = effectiveRepeatClock, let offset = effectiveReminderOffset {
+                let target = clock + offset
+                let days = Int((Double(target) / 86_400).rounded(.down)), local = target - days * 86_400
+                guard let day = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: nextDate)),
+                      let placed = Dates.placing(clock: local, onDayOf: day, calendar: calendar) else { return nil }
+                // A reminder time skipped by daylight saving is counted back from the occurrence instead of moving
+                // forward with the gap, which could put it after the task (03:10 task, 02:50 → 03:50).
+                if Dates.clock(of: placed, calendar: calendar) != local { return nextDate.addingTimeInterval(TimeInterval(offset)) }
+                return placed
+            }
             let dayOffset = calendar.dateComponents([.day], from: calendar.startOfDay(for: base), to: calendar.startOfDay(for: nextDate)).day ?? 0
             return calendar.date(byAdding: .day, value: dayOffset, to: reminderAt)
         }

@@ -80,6 +80,19 @@ private struct ConflictDetails {
     private func name<T>(_ id: UUID?, in rows: [UUID: T], label: (T) -> String) -> String {
         id.flatMap { rows[$0] }.map(label) ?? L("无", "None")
     }
+    /// "02:30" (with seconds only when set) for an intended repeat time.
+    private func clock(_ value: Int?) -> String {
+        guard let value, Dates.validClock(value) else { return L("无", "None") }
+        let time = String(format: "%02d:%02d", value / 3600, value % 3600 / 60)
+        return value % 60 == 0 ? time : time + String(format: ":%02d", value % 60)
+    }
+    /// "−00:15" or "−1 天 03:00" for a custom reminder's distance from the intended time.
+    private func offset(_ value: Int?) -> String {
+        guard let value, Dates.validReminderOffset(value) else { return L("无", "None") }
+        let magnitude = abs(value), days = magnitude / 86_400, rest = magnitude % 86_400
+        let time = String(format: "%02d:%02d", rest / 3600, rest % 3600 / 60)
+        return (value < 0 ? "−" : "+") + (days > 0 ? L("\(days) 天 ", "\(days) d ") : "") + time
+    }
     private func date(_ value: Date?) -> String {
         value?.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(UISettings.locale)) ?? L("无", "None")
     }
@@ -98,6 +111,8 @@ private struct ConflictDetails {
           (L("提醒待调整", "Reminder needs attention"), yes(row.reminderNeedsAttention)),
           (L("重复", "Repeat"), Dates.repeatLabel(row.repeatRule)), (L("重复截至", "Repeat until"), date(row.repeatUntil)),
           (L("重复时区", "Repeat time zone"), row.repeatTimeZoneID ?? L("尚未指定", "Not assigned")),
+          (L("原定时刻", "Intended time"), clock(row.repeatClock)),
+          (L("提醒间隔", "Reminder offset"), offset(row.repeatReminderOffset)),
           (L("重复基准日", "Repeat day"), String(row.repeatAnchorDay)),
           (L("后续任务", "Next occurrence"), name(row.nextOccurrenceID, in: tasks, label: { $0.title })), (L("删除时间", "Deleted at"), date(row.deletedAt)) ]
     }
@@ -121,6 +136,7 @@ private struct ConflictDetails {
           (L("账本", "Book"), name(row.bookID, in: books, label: { $0.name })), (L("分类", "Category"), name(row.categoryID, in: categories, label: { $0.label })),
           (L("重复", "Repeat"), row.scheduleLabel), (L("下一期", "Next"), date(row.nextDate)), (L("重复截至", "Repeat until"), date(row.until)),
           (L("重复时区", "Repeat time zone"), row.repeatTimeZoneID ?? L("尚未指定", "Not assigned")),
+          (L("原定时刻", "Intended time"), clock(row.repeatClock)),
           (L("备注", "Notes"), row.notes), (L("标签", "Tags"), row.tags) ]
     }
     private func account(_ row: MoneyAccount) -> Fields {

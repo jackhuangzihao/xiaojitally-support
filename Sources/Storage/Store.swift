@@ -131,7 +131,8 @@ private let storeLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "local.
 enum StoreUpgradeSnapshot {
     // Bump for a persisted-schema or stored-format change, not for every app build. Keep prior generations.
     // v4: optional recurrence time zone; legacy dates are retained without binding a zone.
-    static let generation = "schema-v4"
+    // v5: optional intended repeat time, so daylight-saving gaps don't shift later occurrences.
+    static let generation = "schema-v5"
     static func prepare(_ source: URL, generation: String = StoreUpgradeSnapshot.generation) throws -> URL? {
         guard !generation.isEmpty, generation.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 }) else {
             throw CocoaError(.fileWriteInvalidFileName)

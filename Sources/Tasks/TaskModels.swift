@@ -86,6 +86,12 @@ struct Subtask: Codable, Identifiable, Equatable {
     var repeatAnchorDay: Int = 0
     /// Nil is an older rule awaiting an explicitly approved timezone migration.
     var repeatTimeZoneID: String?
+    /// The rule's intended local time (seconds after midnight in its time zone), so a time skipped by daylight saving
+    /// moves only that day. Nil for all-day and untimed tasks and for rules without a time zone.
+    var repeatClock: Int?
+    /// A custom reminder's wall-clock distance from the intended time (days and local time; −900 is 15 minutes
+    /// earlier), so each occurrence's reminder is derived from its own intended time instead of the previous reminder.
+    var repeatReminderOffset: Int?
     /// The last day a repeating task may come back; nil repeats without end.
     var repeatUntil: Date?
     var nextOccurrenceID: UUID?
@@ -152,6 +158,7 @@ struct Subtask: Codable, Identifiable, Equatable {
     }
     /// Set an exact start time. A deadline remains independent; callers confirm any extension first.
     func schedule(at moment: Date, extendingDeadline: Bool = false) {
+        let previousClock = actualRepeatClock
         let ending = proposedEnd(at: moment)
         if timeConflict(at: moment) {
             guard extendingDeadline else { return }
@@ -161,6 +168,7 @@ struct Subtask: Codable, Identifiable, Equatable {
         scheduledAt = moment; hasTime = true; endAt = ending
         keepReminder(preset)
         repeatAnchorDay = recurrenceCalendar?.component(.day, from: moment) ?? repeatAnchorDay
+        updateRepeatClock(previousClock: previousClock)
     }
     /// Drag on a block's lower edge. The deadline still wins: a longer task may not run past it.
     @discardableResult func resize(to newEnd: Date) -> Bool {
@@ -175,6 +183,7 @@ struct Subtask: Codable, Identifiable, Equatable {
         scheduledAt = Dates.calendar.startOfDay(for: day); hasTime = false; endAt = nil
         keepReminder(preset)
         repeatAnchorDay = calendarDate.flatMap { recurrenceCalendar?.component(.day, from: $0) } ?? repeatAnchorDay
+        refreshRepeatClock()
     }
     /// Dropped on the undated list. A deadline or a repeat rule keeps a task on the calendar, so those are refused.
     @discardableResult func clearSchedule() -> Bool {
@@ -229,6 +238,7 @@ struct Subtask: Codable, Identifiable, Equatable {
 
     func reschedule(to day: Date, extendingDeadline: Bool = false) {
         guard extendingDeadline || !deadlineConflict(movingTo: day) else { return }
+        let previousClock = actualRepeatClock
         let length = duration
         if extendingDeadline { dueAt = extendedDeadline(movingTo: day) }
         if let scheduledAt { self.scheduledAt = Dates.replacingDay(of: scheduledAt, with: day) }
@@ -237,6 +247,7 @@ struct Subtask: Codable, Identifiable, Equatable {
         if let length, let scheduledAt { endAt = scheduledAt.addingTimeInterval(length) }
         keepReminder(resolvedReminderPreset)
         repeatAnchorDay = calendarDate.flatMap { recurrenceCalendar?.component(.day, from: $0) } ?? repeatAnchorDay
+        updateRepeatClock(previousClock: previousClock, dateOnly: true)
     }
 
     func appearsInCalendar(on selected: Date, wholeMonth: Bool) -> Bool {

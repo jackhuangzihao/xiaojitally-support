@@ -32,6 +32,9 @@ struct MoneyRecurring: Identifiable, Equatable {
     var until: Date?
     /// Nil means an older rule whose original time zone has not been confirmed.
     var repeatTimeZoneID: String? = nil
+    /// The intended local time (seconds after midnight in the rule's time zone). Occurrences are placed on it, so a
+    /// time skipped by daylight saving moves only that day. Nil for rules without a time zone or saved before it existed.
+    var repeatClock: Int? = nil
     /// Only on a bill read from an earlier format, until `FinanceData.migrateLegacyRecurring` settles it. Never written.
     var legacy: Legacy? = nil
 
@@ -59,10 +62,28 @@ struct MoneyRecurring: Identifiable, Equatable {
         repeatTimeZoneID == nil ? Dates.calendar : Dates.recurrenceCalendar(timeZoneID: repeatTimeZoneID)
     }
 
+    /// The local time occurrences are placed on: the intended time, or for a rule saved before it existed, the next
+    /// occurrence's time. Rules without a time zone keep carrying the previous time forward.
+    var effectiveRepeatClock: Int? {
+        guard repeatTimeZoneID != nil, let calendar = recurrenceCalendar else { return nil }
+        if let repeatClock, Dates.validClock(repeatClock) { return repeatClock }
+        return Dates.clock(of: nextDate, calendar: calendar)
+    }
+
     /// The occurrence after the next one, or nil once the bill has ended.
     var followingDate: Date? {
         guard let calendar = recurrenceCalendar else { return nil }
-        return Dates.nextRepeat(nextDate, rule: rule, anchorDay: anchorDay, after: nextDate, until: until, calendar: calendar)
+        return Dates.nextRepeat(nextDate, rule: rule, anchorDay: anchorDay, after: nextDate, until: until,
+                                calendar: calendar, clock: effectiveRepeatClock)
+    }
+
+    /// Moves to the following occurrence; false once the bill has ended. The intended time is recorded first, so a rule
+    /// saved before it existed keeps its time from before any daylight-saving gap.
+    mutating func advance() -> Bool {
+        guard let next = followingDate else { return false }
+        repeatClock = effectiveRepeatClock
+        nextDate = MoneyEntry.timestamp(next)
+        return true
     }
 
     /// Whether the next occurrence falls after the end date. Only a sync merge can produce this (one device moved
@@ -72,9 +93,30 @@ struct MoneyRecurring: Identifiable, Equatable {
         return until.map { calendar.startOfDay(for: $0) < calendar.startOfDay(for: nextDate) } ?? false
     }
 
-    /// Moves the next occurrence; monthly and yearly rules then keep its day of month (a 31st stays at month end).
+    /// Moves the next occurrence to a date and time the user chose; monthly and yearly rules then keep its day of month
+    /// (a 31st stays at month end). A new local time becomes the intended time, even 03:30 on a daylight-saving gap day.
     mutating func reschedule(to date: Date) {
         guard let calendar = recurrenceCalendar else { return }
+        let previousClock = Dates.clock(of: nextDate, calendar: calendar)
+        nextDate = MoneyEntry.timestamp(date)
+        anchorDay = calendar.component(.day, from: date)
+        let clock = Dates.clock(of: nextDate, calendar: calendar)
+        if repeatTimeZoneID == nil { repeatClock = nil }
+        else if repeatClock == nil || clock != previousClock { repeatClock = clock }
+    }
+
+    /// Moves the next occurrence to another day only. The intended time is kept and placed on that day the way later
+    /// occurrences are, so 02:30 on a gap day is 03:30 (not 03:00) and the following ones are 02:30 again.
+    mutating func reschedule(toDay day: Date) {
+        guard let calendar = recurrenceCalendar else { return }
+        guard let clock = effectiveRepeatClock else {
+            // Rules without a time zone keep their previous behavior: the same hour and minute on the new day.
+            let time = calendar.dateComponents([.hour, .minute], from: nextDate)
+            if let date = calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day) { reschedule(to: date) }
+            return
+        }
+        guard let date = Dates.placing(clock: clock, onDayOf: day, calendar: calendar) else { return }
+        repeatClock = clock
         nextDate = MoneyEntry.timestamp(date)
         anchorDay = calendar.component(.day, from: date)
     }
@@ -128,6 +170,7 @@ struct MoneyRecurring: Identifiable, Equatable {
         try check(bookID.map { id in ledger.books.contains { $0.id == id } } ?? false, "请为周期账单选择账本。", "Choose a book for the recurring bill.")
         try check(categoryID.map { id in ledger.categories.contains { $0.id == id } } ?? true, "周期账单的分类不存在。", "The recurring bill's category is missing.")
         try check(RepeatRule(rule) != nil && (1...31).contains(anchorDay), "重复规则无效。", "Invalid repeat rule.")
+        try check(repeatClock.map(Dates.validClock) ?? true, "周期账单的原定时刻无效。", "Invalid intended time for the recurring bill.")
         guard let calendar = recurrenceCalendar else {
             throw TaskBackup.invalid(L("周期账单的重复时区无效。", "The recurring bill has an invalid repeat time zone."))
         }
@@ -143,7 +186,7 @@ struct MoneyRecurring: Identifiable, Equatable {
 
 extension MoneyRecurring: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, kind, title, amount, currency, accountID, accountAmount, baseAmount, bookID, categoryID, notes, tags, rule, anchorDay, nextDate, until, repeatTimeZoneID
+        case id, kind, title, amount, currency, accountID, accountAmount, baseAmount, bookID, categoryID, notes, tags, rule, anchorDay, nextDate, until, repeatTimeZoneID, repeatClock
     }
     /// Keys written by earlier builds, which stored every occurrence as an entry and could pause a bill.
     private enum LegacyKeys: String, CodingKey { case start, activeFrom }
@@ -159,6 +202,7 @@ extension MoneyRecurring: Codable {
         rule = try c.decode(String.self, forKey: .rule); anchorDay = try c.decode(Int.self, forKey: .anchorDay)
         until = try c.decodeIfPresent(Date.self, forKey: .until)
         repeatTimeZoneID = try c.decodeIfPresent(String.self, forKey: .repeatTimeZoneID)
+        repeatClock = try c.decodeIfPresent(Int.self, forKey: .repeatClock)
         if let next = try c.decodeIfPresent(Date.self, forKey: .nextDate) {
             nextDate = next
         } else {
@@ -179,6 +223,7 @@ extension MoneyRecurring: Codable {
         try c.encode(rule, forKey: .rule); try c.encode(anchorDay, forKey: .anchorDay); try c.encode(nextDate, forKey: .nextDate)
         try c.encodeIfPresent(until, forKey: .until)
         try c.encodeIfPresent(repeatTimeZoneID, forKey: .repeatTimeZoneID)
+        try c.encodeIfPresent(repeatClock, forKey: .repeatClock)
     }
 }
 
@@ -194,7 +239,8 @@ extension MoneyRecurring {
                   baseAmount: entry.currency != ledger.baseCurrency && account?.currency != ledger.baseCurrency ? entry.baseAmount : nil,
                   bookID: entry.bookID, categoryID: entry.categoryID, notes: entry.notes, tags: entry.tags,
                   rule: rule, anchorDay: calendar?.component(.day, from: entry.date) ?? 0,
-                  nextDate: MoneyEntry.timestamp(entry.date), until: until, repeatTimeZoneID: repeatTimeZoneID)
+                  nextDate: MoneyEntry.timestamp(entry.date), until: until, repeatTimeZoneID: repeatTimeZoneID,
+                  repeatClock: repeatTimeZoneID == nil ? nil : calendar.map { Dates.clock(of: MoneyEntry.timestamp(entry.date), calendar: $0) })
     }
 }
 
@@ -207,6 +253,7 @@ extension FinanceData {
     private mutating func replaceBill(_ bill: MoneyRecurring) {
         guard let index = recurring?.firstIndex(where: { $0.id == bill.id }) else { return }
         recurring?[index] = bill
+        if bill.repeatClock != nil { version = max(version, 4) }
     }
     private mutating func removeBill(_ id: UUID) {
         recurring?.removeAll { $0.id == id }
@@ -220,7 +267,7 @@ extension FinanceData {
         try bill.validate(in: self)
         if let issue = recurringCategoryTypeIssue(bill) { throw TaskBackup.invalid(issue) }
         recurring = recurringBills + [bill]
-        if bill.repeatTimeZoneID != nil { version = max(version, 3) }
+        if bill.repeatTimeZoneID != nil { version = max(version, bill.repeatClock == nil ? 3 : 4) }
     }
 
     /// Editing a bill edits its rule only: the pending list follows immediately and confirmed entries never change.
@@ -232,7 +279,7 @@ extension FinanceData {
         if bill.kind != expected.kind || bill.categoryID != expected.categoryID,
            let issue = recurringCategoryTypeIssue(bill) { throw TaskBackup.invalid(issue) }
         replaceBill(bill)
-        if bill.repeatTimeZoneID != nil { version = max(version, 3) }
+        if bill.repeatTimeZoneID != nil { version = max(version, bill.repeatClock == nil ? 3 : 4) }
     }
 
     /// Turns an existing income or expense into the first, already recorded occurrence of a new bill.
@@ -252,7 +299,8 @@ extension FinanceData {
         var bill = MoneyRecurring(repeating: entry, rule: MoneyRecurring.inferredRule(from: series.isEmpty ? [entry.date] : series), until: nil, in: self)
         let latest = max(series.max() ?? entry.date, entry.date)
         if let calendar = bill.recurrenceCalendar,
-           let next = Dates.nextRepeat(bill.nextDate, rule: bill.rule, anchorDay: bill.anchorDay, after: latest, calendar: calendar) {
+           let next = Dates.nextRepeat(bill.nextDate, rule: bill.rule, anchorDay: bill.anchorDay, after: latest,
+                                        calendar: calendar, clock: bill.effectiveRepeatClock) {
             bill.nextDate = MoneyEntry.timestamp(next)
         }
         return bill
@@ -334,17 +382,17 @@ extension FinanceData {
             var ended = false
             while recorded.contains(bill.entryID(for: bill.nextDate)) {
                 try requireRecurrenceCalendar(bill)
-                guard let next = bill.followingDate else { ended = true; break }
-                let date = MoneyEntry.timestamp(next)
-                guard date > bill.nextDate else {
+                let previous = bill.nextDate
+                guard bill.advance() else { ended = true; break }
+                guard bill.nextDate > previous else {
                     throw TaskBackup.invalid(L("周期账单的下一期未向后推进，未应用同步结果。", "The recurring schedule did not advance. Sync changes were not applied."))
                 }
-                bill.nextDate = date
                 advanced += 1
             }
             if !ended { running.append(bill) }
         }
         recurring = running.isEmpty ? nil : running
+        if running.contains(where: { $0.repeatClock != nil }) { version = max(version, 4) }
         if advanced > 0 { recurringPostingLog.notice("Advanced past \(advanced, privacy: .public) recorded recurring occurrences after merge") }
     }
 
@@ -369,14 +417,14 @@ extension FinanceData {
         if existing == nil || existing?.deletedAt != nil {
             try updateEntry(posted, expected: existing, baseCurrency: baseCurrency)
         }
-        if let next = bill.followingDate { bill.nextDate = MoneyEntry.timestamp(next); replaceBill(bill) } else { removeBill(billID) }
+        if bill.advance() { replaceBill(bill) } else { removeBill(billID) }
     }
 
     /// Skips the occurrence scheduled on `scheduled` without recording anything.
     mutating func skipOccurrence(of billID: UUID, scheduled: Date, expected: MoneyRecurring? = nil) throws {
         var bill = try checkedOccurrence(billID, scheduled: scheduled, expected: expected)
         try requireRecurrenceCalendar(bill)
-        if let next = bill.followingDate { bill.nextDate = MoneyEntry.timestamp(next); replaceBill(bill) } else { removeBill(billID) }
+        if bill.advance() { replaceBill(bill) } else { removeBill(billID) }
     }
 
     // UI actions supply the rule they displayed; single-snapshot data operations may omit it.

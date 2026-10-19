@@ -460,14 +460,14 @@ import SwiftData
             legacy.entries = [planned]
             try rejects("old ledger version cannot hide pending data from older clients") { try legacy.validate() }
             legacy.entries = []
-            try require(try legacy.merging(original).version == 3, "merging a pending ledger upgrades its format")
+            try require(try legacy.merging(original).version == 4, "merging a pending ledger upgrades its format")
             try legacy.updateEntry(planned, expected: nil, baseCurrency: "CNY"); try legacy.validate()
             try require(legacy.version == 2, "saving the first plan upgrades an older ledger")
             let pendingStore = try Store.make(url: directory.appendingPathComponent("Pending.store"))
             try FinanceStore.stage(original, in: pendingStore.mainContext); try Store.save(pendingStore.mainContext)
             let pendingBackup = try TaskBackup.capture(pendingStore.mainContext)
             let pendingRoundTrip = try TaskBackup.decode(pendingBackup.encoded())
-            try require(pendingRoundTrip.version == 14 && pendingRoundTrip.finance == original, "pending survives storage and portable backup without entering balances")
+            try require(pendingRoundTrip.version == 15 && pendingRoundTrip.finance == original, "pending survives storage and portable backup without entering balances")
         }
     }
 }

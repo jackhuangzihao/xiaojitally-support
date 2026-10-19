@@ -184,14 +184,9 @@ struct FinanceRecurringEditor: View {
         }
         return L("修改只改规则，待入账会立刻按新规则显示；已经入账的不受影响。", "Changes edit the rule only. The pending list follows at once; recorded entries are unaffected.")
     }
-    /// The next date as a whole day picker; its time of day is kept.
+    /// The next date as a whole day picker; the rule's intended time is kept.
     private var nextDay: Binding<Date> {
-        Binding(get: { bill.nextDate }, set: { day in
-            guard let calendar = bill.recurrenceCalendar else { return }
-            let time = calendar.dateComponents([.hour, .minute], from: bill.nextDate)
-            guard let date = calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day) else { return }
-            bill.reschedule(to: date)
-        })
+        Binding(get: { bill.nextDate }, set: { day in bill.reschedule(toDay: day) })
     }
     private var foreignAccount: Bool { account.map { $0.currency != bill.currency } ?? false }
 

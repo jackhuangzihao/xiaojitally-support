@@ -71,10 +71,12 @@ extension TaskEditor {
             // Validate the final range, with no observer applying a second time shift.
             end = template.end ?? newDate.addingTimeInterval(3600)
             date = newDate; hasDate = template.start != nil; hasTime = template.timed; hasEnd = template.end != nil
+            startClockIntent = ClockIntent(newDate)
         }
         if !keepDue, let copiedDue = template.due,
            Dates.deadlineAllowed(due: copiedDue, dueTimed: template.dueTimed, scheduled: hasDate ? (effectiveEnd ?? date) : nil, scheduledTimed: hasTime) {
             hasDue = true; due = copiedDue; dueHasTime = template.dueTimed
+            dueClockIntent = ClockIntent(copiedDue)
         }
         if !keepReminder, template.reminderPreset != .none {
             // Avoid the preset observer replacing a copied custom reminder with the previous draft's reminder.

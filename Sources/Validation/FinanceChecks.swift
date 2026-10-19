@@ -12,13 +12,13 @@ import SwiftData
         }
         try FinanceConversionChecks.referenceRates(require: require, rejects: rejects)
         try CalendarChecks.emptyPlanSlots(require: require)
-        for version in [0, 4] {
+        for version in [0, 5] {
             var unsupported = FinanceData.initial; unsupported.version = version
             do {
                 try unsupported.validate()
                 try require(false, "unsupported ledger format must be rejected")
             } catch {
-                try require(error.localizedDescription.contains("\(version)") && error.localizedDescription.contains("1–3"),
+                try require(error.localizedDescription.contains("\(version)") && error.localizedDescription.contains("1–4"),
                             "unsupported format explains the actual and supported versions")
             }
         }
@@ -156,7 +156,7 @@ import SwiftData
         lightweight.finance = try FinanceStore.payload(context).map { try JSONDecoder().decode(FinanceData.self, from: $0) }
         try require(try TaskBackup.decode(lightweight.encoded()).finance == value, "background-decoded ledger joins the full portable backup")
         let before = try TaskBackup.capture(context)
-        try require(before.version == 14 && before.finance == value, "full backup contains finance")
+        try require(before.version == 15 && before.finance == value, "full backup contains finance")
         let backup = try TaskBackup.decode(before.encoded())
         try require(backup.finance == value, "portable backup exact round trip")
         let fresh = try Store.make(url: directory.appendingPathComponent("Restored.store"))

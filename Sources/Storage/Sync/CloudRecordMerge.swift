@@ -208,9 +208,9 @@ extension CloudMerge {
         let label = L("周期账单：", "Recurring bill: ") + local.title + " / " + cloud.title
         // Amounts and the account, and the rule and its day, only make sense together; each set merges as one.
         struct Money: Equatable { var kind: MoneyKind, amount: Decimal, currency: String, accountID: UUID?, accountAmount: Decimal, baseAmount: Decimal? }
-        struct Schedule: Equatable { var rule: String, anchorDay: Int, until: Date?, repeatTimeZoneID: String?, nextDate: Date }
+        struct Schedule: Equatable { var rule: String, anchorDay: Int, until: Date?, repeatTimeZoneID: String?, repeatClock: Int?, nextDate: Date }
         func money(_ b: MoneyRecurring) -> Money { Money(kind: b.kind, amount: b.amount, currency: b.currency, accountID: b.accountID, accountAmount: b.accountAmount, baseAmount: b.baseAmount) }
-        func schedule(_ b: MoneyRecurring) -> Schedule { Schedule(rule: b.rule, anchorDay: b.anchorDay, until: b.until, repeatTimeZoneID: b.repeatTimeZoneID, nextDate: b.nextDate) }
+        func schedule(_ b: MoneyRecurring) -> Schedule { Schedule(rule: b.rule, anchorDay: b.anchorDay, until: b.until, repeatTimeZoneID: b.repeatTimeZoneID, repeatClock: b.repeatClock, nextDate: b.nextDate) }
         var result = base
         func field<T: Equatable>(_ path: WritableKeyPath<MoneyRecurring, T>) throws {
             result[keyPath: path] = try value(local[keyPath: path], cloud[keyPath: path], base[keyPath: path],
@@ -222,6 +222,7 @@ extension CloudMerge {
         result.accountID = amounts.accountID; result.accountAmount = amounts.accountAmount; result.baseAmount = amounts.baseAmount
         let rules = try value(schedule(local), schedule(cloud), schedule(base), label: label, choice: choice, report: report, review: review, key: key)
         result.rule = rules.rule; result.anchorDay = rules.anchorDay; result.until = rules.until; result.repeatTimeZoneID = rules.repeatTimeZoneID
+        result.repeatClock = rules.repeatClock
         result.nextDate = rules.nextDate
         return result
     }

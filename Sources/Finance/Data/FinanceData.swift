@@ -1,7 +1,7 @@
 import Foundation
 
 struct FinanceData: Codable, Equatable {
-    var version = 3
+    var version = 4
     var baseCurrency = "CNY"
     var accounts: [MoneyAccount] = []
     var books: [MoneyBook] = []

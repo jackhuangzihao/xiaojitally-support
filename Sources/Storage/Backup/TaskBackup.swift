@@ -6,7 +6,7 @@ import OSLog
 struct TaskBackup: Codable {
     var format = "jianshi-backup"
     // Old clients reject this version before merging, instead of silently removing new metadata.
-    var version = 14
+    var version = 15
     var finance: FinanceData? = nil
     var weekTitles: [WeekTitleRecord]? = nil
     var syncChanges: SyncChanges.Revisions? = nil
@@ -28,6 +28,8 @@ struct TaskBackup: Codable {
         var repeatRule: String; var repeatAnchorDay: Int; var nextOccurrenceID: UUID?
         var repeatUntil: Date? = nil
         var repeatTimeZoneID: String? = nil
+        var repeatClock: Int? = nil
+        var repeatReminderOffset: Int? = nil
         var deletedAt: Date?; var subtasks: [Subtask]; var listID: UUID?
 
         init(_ task: TaskItem) {
@@ -39,6 +41,8 @@ struct TaskBackup: Codable {
             repeatRule = task.repeatRule; repeatAnchorDay = task.repeatAnchorDay; nextOccurrenceID = task.nextOccurrenceID
             repeatUntil = task.repeatUntil
             repeatTimeZoneID = task.repeatTimeZoneID
+            repeatClock = task.repeatClock
+            repeatReminderOffset = task.repeatReminderOffset
             deletedAt = task.deletedAt; subtasks = task.subtasks; listID = task.list?.id
         }
         func model(list: TaskList?) -> TaskItem {
@@ -57,6 +61,8 @@ struct TaskBackup: Codable {
             task.repeatRule = repeatRule; task.repeatAnchorDay = repeatAnchorDay; task.nextOccurrenceID = nextOccurrenceID
             task.repeatUntil = repeatRule == "none" ? nil : repeatUntil
             task.repeatTimeZoneID = repeatTimeZoneID
+            task.repeatClock = repeatClock
+            task.repeatReminderOffset = repeatReminderOffset
             task.deletedAt = deletedAt; task.subtasks = subtasks
         }
         var nextCopyDate: Date? {
@@ -69,7 +75,7 @@ struct TaskBackup: Codable {
             let task = model(list: nil)
             task.id = UUID(); task.createdAt = Date(); task.isDone = false; task.completedAt = nil; task.deletedAt = nil
             task.subtasks = subtasks.map { Subtask(title: $0.title) }
-            task.repeatRule = "none"; task.repeatUntil = nil; task.repeatTimeZoneID = nil; task.nextOccurrenceID = nil
+            task.repeatRule = "none"; task.repeatUntil = nil; task.repeatTimeZoneID = nil; task.repeatClock = nil; task.repeatReminderOffset = nil; task.nextOccurrenceID = nil
             let originalDate = task.calendarDate
             let sourceTimed = task.clockDate != nil
             let preset = task.resolvedReminderPreset
@@ -89,9 +95,14 @@ struct TaskBackup: Codable {
     }
     static func invalid(_ message: String) -> NSError { NSError(domain: "Jianshi.Backup", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     func validate() throws {
-        guard format == "jianshi-backup", (1...14).contains(version) else { throw Self.invalid(L("不是受支持的小记备份版本，请更新 App 后重试。", "Unsupported Tally backup format or version. Update the app and retry.")) }
+        guard format == "jianshi-backup", (1...15).contains(version) else { throw Self.invalid(L("不是受支持的小记备份版本，请更新 App 后重试。", "Unsupported Tally backup format or version. Update the app and retry.")) }
         guard tasks.allSatisfy({ $0.repeatTimeZoneID == nil || (version >= 14 && Dates.recurrenceCalendar(timeZoneID: $0.repeatTimeZoneID) != nil) }) else {
             throw Self.invalid(L("重复时区无效或数据版本过旧。", "Invalid recurrence time zone or outdated data format."))
+        }
+        // Only format 15 knows the intended time. It is ignored without a time zone, so a leftover value is harmless.
+        guard tasks.allSatisfy({ ($0.repeatClock.map { version >= 15 && Dates.validClock($0) } ?? true)
+            && ($0.repeatReminderOffset.map { version >= 15 && Dates.validReminderOffset($0) } ?? true) }) else {
+            throw Self.invalid(L("重复任务的原定时刻无效或数据版本过旧。", "Invalid intended repeat time or outdated data format."))
         }
         try finance?.validate()
         try SyncChanges.validate(syncChanges)
@@ -156,7 +167,7 @@ struct TaskBackup: Codable {
             result.weekTitles = (existing.weekTitles ?? []) + (weekTitles ?? []).filter { !weeks.contains($0.week) }
         }
         result.syncChanges = try SyncChanges.Resolution(local: existing, cloud: self, base: nil).revisions(for: result)
-        result.version = 14
+        result.version = 15
         try result.validate() // Validate the complete merged graph and records before changing live models.
         return result
     }

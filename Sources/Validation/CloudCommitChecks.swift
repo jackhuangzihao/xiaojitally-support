@@ -201,7 +201,7 @@ actor FaultingCommitStore: CloudCommitStore {
         let headRecord = CKRecord(recordType: "TallyHead", recordID: .init(recordName: "head", zoneID: CloudKitRecordTransport.zoneID))
         headRecord["round"] = compatibleHead.round
         headRecord.encryptedValues["commit"] = try CloudCommitProtocol.encode(compatibleHead)
-        for format in [14, 15, CloudCommitProtocol.format] {
+        for format in [14, 15, 16, CloudCommitProtocol.format] {
             headRecord["format"] = Int64(format)
             try check(try CloudKitCommitStore.cursor(headRecord).head == compatibleHead,
                       "reading an older immutable head preserves its commit, round and legacy seal")
@@ -226,11 +226,13 @@ actor FaultingCommitStore: CloudCommitStore {
         try await rejects("explicit reupload cannot replace a cloud that still exists") { try await cached.allowReupload() }
         try check(FileManager.default.fileExists(atPath: cache.path), "versioned cache is persisted")
         try check(try await CloudCommitTransport(store: cacheStore, cacheURL: cache).fetch().items == items, "cache survives process recreation")
-        var olderCache = try JSONSerialization.jsonObject(with: Data(contentsOf: cache)) as! [String: Any]
-        olderCache["format"] = 15
-        try JSONSerialization.data(withJSONObject: olderCache).write(to: cache)
-        try check(try await CloudCommitTransport(store: cacheStore, cacheURL: cache).fetch().items == items,
-                  "old cache is safely refetched after a recurrence protocol upgrade")
+        for olderFormat in [15, 16] {
+            var olderCache = try JSONSerialization.jsonObject(with: Data(contentsOf: cache)) as! [String: Any]
+            olderCache["format"] = olderFormat
+            try JSONSerialization.data(withJSONObject: olderCache).write(to: cache)
+            try check(try await CloudCommitTransport(store: cacheStore, cacheURL: cache).fetch().items == items,
+                      "old format \(olderFormat) cache is safely refetched after a recurrence protocol upgrade")
+        }
         try Data("broken cache".utf8).write(to: cache)
         try check(try await CloudCommitTransport(store: cacheStore, cacheURL: cache).fetch().items == items, "damaged cache refetches without losing data")
         for recreated in [false, true] {
