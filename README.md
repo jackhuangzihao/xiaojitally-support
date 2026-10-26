@@ -422,10 +422,16 @@ iPhone 和 Mac 的 71 均已归档、导出、上传并完成 Apple 处理，在
 
 - 唯一开发源：本 `README.md` 所在的 Git 仓库根目录。
 - 打开此目录的 `Jianshi.xcodeproj`；整理前的 `软件/Tally` 和 `软件/简事` 不再作为开发入口。
-- 项目配套资料位于仓库上一级的 `发布资料/`、`宣传素材/`、`网站/`、`检查证据/`、`历史归档/` 和 `设计原型/`；目录说明见 `../目录说明.md`。
-- 本地 Git 已记录 `baseline-1.0-68`。应用源码发布在 [jackhuangzihao/TallyNest](https://github.com/jackhuangzihao/TallyNest)，默认分支为 `main`。支持与隐私网站继续由独立的 [xiaojitally-support](https://github.com/jackhuangzihao/xiaojitally-support) 仓库发布，以保留现有 App Store 支持和隐私网址。
+- 本机配套资料位于仓库上一级的 `发布资料/`、`宣传素材/`、`检查证据/`、`历史归档/` 和 `设计原型/`，不随本仓库发布。上一级 `网站/` 中的旧副本仅作历史参考；当前网站源文件以本仓库为准。
+- 本地 Git 已记录 `baseline-1.0-68`。TallyNest 的 App 源码、支持网站和隐私页面统一维护于 [jackhuangzihao/xiaojitally-support](https://github.com/jackhuangzihao/xiaojitally-support)，默认分支为 `main`。保留此仓库名称是为了维持 App 和 App Store 已使用的支持及隐私网址。
 - Git 不包含用户数据库、导出备份、证书、私钥、编译产物或发布包；`Checks/Fixtures` 中明示的合成测试库除外。
 - 不使用旧构建打开新版真实数据。需要对比旧代码时，在独立测试标识及合成数据环境运行。
+
+## 支持与隐私网站
+
+网站源文件与 App 源码位于同一仓库：中文页面为 `index.html`、`privacy.html`，英文页面位于 `en/`；样式为 `style.css`，图片位于 `assets/` 及根目录的 `app-icon.png`。
+
+GitHub Pages 从 `main` 分支根目录发布，保留 `.nojekyll`。推送此分支会触发网站发布；网站修改应在本仓库完成，不再编辑上一级的历史网站副本。现有中英文支持和隐私网址保持不变。网站发布不会上传或更新 App Store 的应用构建。
 
 ## 构建与运行
 

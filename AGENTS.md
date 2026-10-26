@@ -8,6 +8,8 @@
 
 - 主开发仓库：本 `AGENTS.md` 所在的 Git 仓库根目录。
 - 工程入口：`Jianshi.xcodeproj`；产品名称：“小记”；历史名称：“简事”。
+- App 与支持／隐私网站统一维护于本仓库。网站入口为根目录的 `index.html`、`privacy.html` 及 `en/`，共用 `style.css`、`assets/` 和 `app-icon.png`；上一级 `网站/` 中的旧副本仅作历史参考。
+- GitHub 仓库为 `jackhuangzihao/xiaojitally-support`。GitHub Pages 从 `main` 根目录发布，推送此分支会更新网站；保留 `.nojekyll` 和现有公开网址，并遵守下方远程操作与发布授权规则。
 - 不在整理前的 `软件/Tally`、`软件/简事` 或其他历史副本中开发，不自动恢复、同步或覆盖这些副本。
 - 经用户批准，可以在此仓库的独立 Git worktree 中开发；必须明确工作目录与基线。
 - 应以 `Tally` 或已批准的 worktree 为开发工作目录。不能假定从父目录启动时会自动加载本文件。
