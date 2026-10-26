@@ -1,25 +1,20 @@
-<h1><img src="assets/app-icon.png" alt="小记 App 图标" width="48" height="48"> TallyNest / 小记</h1>
+<p align="center">
+  <img src="assets/readme/hero.jpg" alt="小记 TallyNest：把待办和记账放在一起。iPhone、iPad 和 Mac 通用，展示真实界面与示例数据。" width="100%">
+</p>
 
-把待办和记账放在一起，适用于 iPhone、iPad 和 Mac。
+<p align="center">
+  <a href="https://jackhuangzihao.github.io/xiaojitally-support/">支持网站</a> ·
+  <a href="https://jackhuangzihao.github.io/xiaojitally-support/privacy.html">隐私政策</a> ·
+  <a href="https://jackhuangzihao.github.io/xiaojitally-support/en/">English website</a>
+</p>
 
-[支持网站](https://jackhuangzihao.github.io/xiaojitally-support/) · [隐私政策](https://jackhuangzihao.github.io/xiaojitally-support/privacy.html) · [English support](https://jackhuangzihao.github.io/xiaojitally-support/en/) · [Privacy policy](https://jackhuangzihao.github.io/xiaojitally-support/en/privacy.html)
+<p align="center">无需注册小记账号 · 本机保存与可选 iCloud 同步 · 无广告、无跨应用广告追踪</p>
 
-无需注册小记账号；记录保存在本机，可选个人 iCloud 同步；无广告、不做跨应用广告追踪。
+<p align="center">
+  <img src="assets/readme/linked-entry.jpg" alt="待办与记账联动：在买咖啡豆任务中查看 68 元账单，账单中也保留着对应的任务标签。" width="100%">
+</p>
 
-## 界面预览
-
-<table>
-  <tr>
-    <td width="75%" align="center"><img src="assets/readme/mac-tasks.jpg" alt="Mac 待办界面：展开“买咖啡豆”任务，查看关联的 68 元账单" width="100%"></td>
-    <td width="25%" align="center"><img src="assets/readme/iphone-finance.jpg" alt="iPhone 记账界面：68 元咖啡豆支出带有对应任务标签" width="100%"></td>
-  </tr>
-  <tr>
-    <td align="center">Mac · 在任务中查看关联账单</td>
-    <td align="center">iPhone · 在账单中查看关联任务</td>
-  </tr>
-</table>
-
-同一笔“买咖啡豆 ¥68”，在待办和账单中相互关联。截图使用示例数据。
+截图使用示例数据。[查看 Mac 完整界面](assets/readme/mac-tasks.jpg) · [查看 iPhone 完整界面](assets/readme/iphone-finance.jpg)
 
 ## 主要功能
 
