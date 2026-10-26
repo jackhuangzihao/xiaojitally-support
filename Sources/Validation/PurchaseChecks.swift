@@ -162,6 +162,62 @@ import SwiftUI
         }
     }
 
+    private static func mixedEntitlements(require: (Bool, String) throws -> Void) async throws {
+        typealias Record = Result<ProGrant, PurchaseFailure>
+        func read(_ records: [Record]) async throws -> [ProGrant] {
+            let stream = AsyncStream<Record> { continuation in
+                for record in records { continuation.yield(record) }
+                continuation.finish()
+            }
+            return try await StoreKitPurchaseClient.verifiedGrants(from: stream) { try $0.get() }
+        }
+        let lifetime = ProGrant(product: .lifetime, expires: nil)
+        let annual = ProGrant(product: .annual, expires: Date().addingTimeInterval(3600))
+        let expired = ProGrant(product: .monthly, expires: Date().addingTimeInterval(-3600))
+        let revoked = ProGrant(product: .lifetime, expires: nil, revoked: true)
+        for valid in [lifetime, annual] {
+            for failure in [PurchaseFailure.verification, .unavailable] {
+                let mixtures: [[Record]] = [[.failure(failure), .success(valid)], [.success(valid), .failure(failure)]]
+                for records in mixtures {
+                    let grants = try await read(records)
+                    try require(grants == [valid], "a failed record cannot discard valid Pro in either order")
+                    let client = Client(); client.rights = grants
+                    let store = PurchaseStore(client: client)
+                    await store.refresh()
+                    try require(store.isPro && store.accessConfirmed && store.verificationError == nil,
+                                "a fresh launch recognizes verified Pro despite a bad record")
+                }
+            }
+        }
+        let incomplete: [[Record]] = [[.failure(.verification)], [.failure(.unavailable), .success(expired)],
+                                     [.success(revoked), .failure(.verification)]]
+        for records in incomplete {
+            do {
+                _ = try await read(records)
+                try require(false, "incomplete verification must not confirm a free plan")
+            } catch PurchaseFailure.verification {
+                try require(true, "incomplete verification remains unknown without active verified Pro")
+            }
+        }
+        let empty = try await read([])
+        try require(empty.isEmpty, "a successful empty read confirms no entitlement")
+        let inactive = try await read([.success(expired), .success(revoked)])
+        try require(inactive == [expired, revoked] && !ProAccess.hasPro(inactive, at: Date()),
+                    "verified expiry and refund still remove Pro")
+        let both = try await read([.success(annual), .failure(.verification), .success(lifetime)])
+        try require(both == [annual, lifetime], "all valid rights survive a failed middle record")
+        let cancelled = Task { @MainActor in
+            let stream = AsyncStream<Record> { $0.yield(.success(lifetime)); $0.finish() }
+            return try await StoreKitPurchaseClient.verifiedGrants(from: stream) { _ in throw CancellationError() }
+        }
+        do {
+            _ = try await cancelled.value
+            try require(false, "cancellation must not be treated as a failed record")
+        } catch is CancellationError {
+            try require(true, "cancellation propagates without changing rights")
+        }
+    }
+
     static func run() async throws {
         var count = 0
         func require(_ condition: Bool, _ message: String) throws {
@@ -174,6 +230,7 @@ import SwiftUI
             }
             throw TaskBackup.invalid("Purchase: asynchronous delivery timed out")
         }
+        try await mixedEntitlements(require: require)
         #if JIANSHI_APP_STORE
         try require(!PurchaseStore.shared.developerUnlocked, "App Store build cannot inherit developer unlock")
         #endif

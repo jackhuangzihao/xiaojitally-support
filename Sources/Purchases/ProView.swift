@@ -9,13 +9,13 @@ struct ProView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text("Tally Pro").font(.largeTitle.bold())
+                    Text(L("小记 Pro", "TallyNest Pro")).font(.largeTitle.bold())
                     Text(L("进阶财务分析，和更多管理空间。", "Explore financial trends and organise more."))
                     status
                     VStack(alignment: .leading, spacing: 12) {
                         Label(L("跨期趋势、统计日历、分类历史分析", "Trends across periods, statistics calendar and category history"), systemImage: "chart.xyaxis.line")
                         Label(L("清单、账户、账本、周期账单和预算不受免费额度限制", "Lists, accounts, books, recurring bills and budgets beyond the free limits"), systemImage: "square.stack")
-                        Label(L("一次购买，iPhone、iPad 和 Mac 通用", "One purchase for iPhone, iPad and Mac"), systemImage: "laptopcomputer.and.iphone")
+                        Label(L("同一 App Store 账号，iPhone、iPad 和 Mac 通用", "Use the same App Store account on iPhone, iPad and Mac"), systemImage: "laptopcomputer.and.iphone")
                     }.font(.callout)
                     if !store.developerUnlocked && !store.lifetime {
                         ForEach(store.offers) { offer in

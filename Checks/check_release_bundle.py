@@ -35,6 +35,7 @@ reasons = {item['NSPrivacyAccessedAPIType']: set(item['NSPrivacyAccessedAPITypeR
            for item in data['NSPrivacyAccessedAPITypes']}
 assert reasons['NSPrivacyAccessedAPICategoryUserDefaults'] == {'CA92.1'}
 assert reasons['NSPrivacyAccessedAPICategorySystemBootTime'] == {'35F9.1'}
+assert reasons['NSPrivacyAccessedAPICategoryFileTimestamp'] == {'C617.1'}
 for path in app.rglob('extract.actionsdata'):
     metadata = json.loads(path.read_text())
     assert not metadata.get('actions'), f'Unexpected registered actions: {path}'

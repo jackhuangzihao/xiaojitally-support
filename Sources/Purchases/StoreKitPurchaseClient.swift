@@ -1,4 +1,5 @@
 import StoreKit
+import OSLog
 
 struct PurchaseDelivery: Sendable {
     let grant: ProGrant
@@ -29,6 +30,7 @@ enum PurchaseFailure: LocalizedError {
 }
 
 @MainActor final class StoreKitPurchaseClient: PurchaseClient {
+    private static let log = Logger(subsystem: "local.jianshi", category: "Purchases")
     private var products: [ProProduct: Product] = [:]
 
     func offers() async throws -> [PurchaseOffer] {
@@ -45,26 +47,51 @@ enum PurchaseFailure: LocalizedError {
     }
 
     func entitlements() async throws -> [ProGrant] {
-        var grants: [ProGrant] = []
-        for await result in StoreKit.Transaction.currentEntitlements {
+        try await Self.verifiedGrants(from: StoreKit.Transaction.currentEntitlements) { result in
             guard case .verified(let transaction) = result else { throw PurchaseFailure.verification }
-            guard let id = ProProduct(rawValue: transaction.productID), !transaction.isUpgraded else { continue }
+            guard let id = ProProduct(rawValue: transaction.productID), !transaction.isUpgraded else { return nil }
             var grant = Self.grant(transaction, product: id)
             if id != .lifetime, !grant.active, transaction.revocationDate == nil {
                 // A grace-period transaction can have an expired paid period. Verify the renewal info too.
-                let product = try await product(id)
+                let product = try await self.product(id)
                 if let subscription = product.subscription {
+                    var failedVerification = false
                     for status in try await subscription.status where status.state == .inGracePeriod {
                         guard case .verified(let renewal) = status.renewalInfo,
-                              case .verified(let current) = status.transaction else { throw PurchaseFailure.verification }
+                              case .verified(let current) = status.transaction else {
+                            failedVerification = true
+                            Self.log.error("Unverified subscription status ignored")
+                            continue
+                        }
                         if current.id == transaction.id, let end = renewal.gracePeriodExpirationDate {
                             grant = ProGrant(product: id, expires: end)
                         }
                     }
+                    if failedVerification && !grant.active { throw PurchaseFailure.verification }
                 }
             }
-            grants.append(grant)
+            return grant
         }
+    }
+
+    /// A bad record must not hide valid Pro; an incomplete read must not confirm a free plan.
+    static func verifiedGrants<Results: AsyncSequence>(from results: Results,
+        resolve: (Results.Element) async throws -> ProGrant?) async throws -> [ProGrant] {
+        var grants: [ProGrant] = []
+        var failedRead = false
+        for try await result in results {
+            try Task.checkCancellation()
+            do {
+                if let grant = try await resolve(result) { grants.append(grant) }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                failedRead = true
+                Self.log.error("Entitlement record could not be verified; continuing with other records")
+            }
+        }
+        try Task.checkCancellation()
+        if failedRead && !grants.contains(where: \.active) { throw PurchaseFailure.verification }
         return grants
     }
 

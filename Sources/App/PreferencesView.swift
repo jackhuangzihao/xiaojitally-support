@@ -34,7 +34,7 @@ struct PreferencesView: View {
                     Text(L("深色", "Dark")).tag("dark")
                 }
                 }
-                Section("Tally Pro") {
+                Section(L("小记 Pro", "TallyNest Pro")) {
                     ProUpgradeButton(title: PurchaseStore.shared.isPro ? L("管理 Pro", "Manage Pro") : L("升级 Pro", "Upgrade to Pro"))
                     Button(L("恢复购买", "Restore purchases")) { Task { await PurchaseStore.shared.restore() } }
                         .disabled(PurchaseStore.shared.busy || PurchaseStore.shared.developerUnlocked)
