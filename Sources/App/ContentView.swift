@@ -336,7 +336,7 @@ struct ContentView: View {
         if lists.isEmpty {
             if commit({ [L("工作", "Work"), L("生活", "Personal"), L("学习", "Study")].enumerated().forEach { index, name in
                 let list = TaskList(name: name)
-                list.id = TaskItem.syncIdentity("tally-default-list-\(index)")
+                list.id = ListTree.defaultListIDs[index]
                 list.createdAt = Date(timeIntervalSince1970: Double(index))
                 context.insert(list)
             } }) {

@@ -104,6 +104,12 @@ import UniformTypeIdentifiers
         }
         #endif
         #if (os(macOS) && JIANSHI_APP_STORE) || targetEnvironment(simulator)
+        if CommandLine.arguments.contains("--purchase-ui-fixture") {
+            guard Bundle.main.bundleIdentifier?.hasPrefix("local.jianshi.sandboxcheck.") == true else { exit(1) }
+            // Data-free preview: do not initialize the model container or CloudSync.
+            storage = .failure(TaskBackup.invalid("Synthetic purchase preview"))
+            return
+        }
         if CommandLine.arguments.contains("--sync-conflict-ui-fixture") {
             do { try SyncConflictUIFixture.requireSandbox() }
             catch { print("SYNC UI FIXTURE FAILED: \(error)"); exit(1) }
@@ -135,7 +141,7 @@ import UniformTypeIdentifiers
         }
         if CommandLine.arguments.contains("--self-check") {
             Task { @MainActor in
-                do { try SelfCheck.run(); _ = try await CloudRecordChecks.run(); _ = try await SyncHistoryChecks.backgroundPreparation(); exit(0) }
+                do { try SelfCheck.run(); try await PurchaseChecks.run(); _ = try await CloudRecordChecks.run(); _ = try await SyncHistoryChecks.backgroundPreparation(); exit(0) }
                 catch { print("SELF-CHECK FAILED: \(error)"); exit(1) }
             }
             RunLoop.main.run(); exit(1)
@@ -180,7 +186,9 @@ import UniformTypeIdentifiers
     var body: some Scene {
         WindowGroup {
             #if (os(macOS) && JIANSHI_APP_STORE) || targetEnvironment(simulator)
-            if CommandLine.arguments.contains("--sync-conflict-ui-fixture") {
+            if CommandLine.arguments.contains("--purchase-ui-fixture") {
+                PurchaseUIFixture()
+            } else if CommandLine.arguments.contains("--sync-conflict-ui-fixture") {
                 SyncConflictUIFixture()
                     .tint(.accentColor)
                     .preferredColorScheme(UISettings.colorScheme(appearance))
@@ -237,6 +245,10 @@ private struct StoreWindow: View {
             .id(Store.recovery.generation)
             .onChange(of: phase, initial: true) { _, phase in
                 CloudSync.shared.setSceneActive(phase == .active, id: syncSceneID)
+                if phase == .active {
+                    PurchaseStore.shared.start()
+                    Task { await PurchaseStore.shared.refresh() }
+                }
             }
             .onDisappear { CloudSync.shared.setSceneActive(false, id: syncSceneID) }
             .task(id: Store.recovery.generation) {

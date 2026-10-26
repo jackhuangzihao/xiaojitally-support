@@ -47,6 +47,7 @@ struct ListEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                if original == nil { ProQuotaNotice(quota: .lists, count: lists.count) }
                 TextField(L("清单名称", "List name"), text: $name).onSubmit(save)
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
@@ -101,7 +102,6 @@ struct ListEditor: View {
                     }
                 }
                 Text(L("清单可包含任务和子清单；选择上级即可建立组中组。", "Lists can contain tasks and child lists. Choose a parent to nest them.")).font(.caption).foregroundStyle(.secondary)
-                if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
             }.formStyle(.grouped).navigationTitle(original == nil ? L("新建清单", "New list") : L("编辑清单", "Edit list"))
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
@@ -117,6 +117,9 @@ struct ListEditor: View {
         #endif
         .onAppear { if initialDraft == nil { initialDraft = draftState }; keepDraft() }
         .onChange(of: draftState) { _, _ in keepDraft() }
+        .alert(L("无法保存", "Unable to save"), isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button(L("知道了", "OK"), role: .cancel) {}
+        } message: { Text(errorMessage ?? "") }
         .modifier(UnsavedEditorGuard(hasChanges: { !didSave && (restoredDraft || initialDraft.map { $0 != draftState } == true) }))
         .modifier(SaveRecoveryGuard())
         .modifier(CloudSyncEditingGuard())
@@ -148,6 +151,7 @@ struct ListEditor: View {
             existing = try EditorVersion.list(original, in: context)
             _ = try EditorVersion.selectedList(parentID, in: context)
             currentLists = try context.fetch(FetchDescriptor<TaskList>())
+            if existing == nil { try PurchaseStore.shared.requireCreation(.lists, count: currentLists.count) }
         } catch { errorMessage = error.localizedDescription; return }
         guard emoji.isEmpty || TaskList.validEmoji(emoji) else { errorMessage = L("请选择一个 emoji 作为图标，或恢复默认图标。", "Choose one emoji or use the default icon."); return }
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)

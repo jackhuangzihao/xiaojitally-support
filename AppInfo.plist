@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>TallyPrivacyPolicyURL</key>
+	<string>https://jackhuangzihao.github.io/xiaojitally-support/privacy.html</string>
+	<key>TallyPrivacyPolicyEnglishURL</key>
+	<string>https://jackhuangzihao.github.io/xiaojitally-support/en/privacy.html</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>CFBundleURLTypes</key>

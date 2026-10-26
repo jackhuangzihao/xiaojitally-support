@@ -247,14 +247,16 @@ struct FinanceEntryEditor: View {
             }
         }
         .modifier(EditorPresentationReady {
-            // The parent sheet must finish appearing before restoring its nested rule editor.
-            if generation == Store.recovery.generation { editingRecurring = drafts.financeRecurring?.request }
+            // Restore the inner sheet only after its parent is ready to present it.
+            guard generation == Store.recovery.generation else { return }
+            if let kept = drafts.entityDraft(parentEntryID: draft.id) { entity = kept.request }
+            else { editingRecurring = drafts.financeRecurring?.request }
         })
         .onChange(of: records.first?.payload) { _, _ in reload() }
         .onChange(of: fingerprint) { _, _ in if loaded { keepDraft() } }
         .onDisappear {
             saveTask?.cancel()
-            if generation == Store.recovery.generation && Store.recovery.failure == nil { drafts.finance = nil }
+            if generation == Store.recovery.generation && Store.recovery.failure == nil && entity == nil && editingRecurring == nil { drafts.finance = nil }
         }
         .task(id: rateQuery) {
             if loaded && (expected == nil || confirmingPending) && needsRate && automaticRates { await fetchAndFillRates() }
@@ -320,7 +322,7 @@ struct FinanceEntryEditor: View {
             }
             if !rates.isEmpty { applyRates(rates) }
         }
-        .sheet(item: $entity, onDismiss: reload) { item in FinanceEntityEditor(kind: item.kind, id: item.existingID, income: item.income, parentID: item.parentID, data: ledger) }
+        .sheet(item: $entity, onDismiss: reload) { item in FinanceEntityEditor(kind: item.kind, id: item.existingID, income: item.income, parentID: item.parentID, data: ledger, parentEntryID: draft.id) }
         .sheet(item: $editingRecurring, onDismiss: reload) { request in
             FinanceRecurringEditor(bill: request.bill, ledger: ledger, source: request.source,
                                    draft: drafts.financeRecurring)
@@ -359,7 +361,7 @@ struct FinanceEntryEditor: View {
             chosenByUser.insert(.category)
             focus = desiredAmountFocus
         } addCategory: { parentID in
-            entity = EntityRequest(kind: .category, income: income, parentID: parentID)
+            entity = drafts.entityDraft(parentEntryID: draft.id)?.request ?? EntityRequest(kind: .category, income: income, parentID: parentID)
         }
     }
     private var transferFields: some View {
@@ -478,6 +480,7 @@ struct FinanceEntryEditor: View {
     private var repeatSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(L("重复", "Repeat"), systemImage: "repeat").font(.callout.weight(.medium))
+            if repeating { ProQuotaNotice(quota: .recurringBills, count: ledger.recurringBills.filter { !$0.hasEnded }.count) }
             RecurringScheduleControls(rule: $repeatRule, until: $repeatUntil, start: draft.date, repeatTimeZoneID: repeatTimeZoneID)
             Text(repeating
                  ? L("保存为周期账单：上面的日期是第一期。每一期到日期后出现在待入账里，确认后才计入余额和统计。",
@@ -581,7 +584,7 @@ struct FinanceEntryEditor: View {
                     ForEach(activeAccounts) { a in Text(a.name + " · " + Money.display(accountBalances[a.id, default: 0], a.currency, hidden: hidden)).tag(Optional(a.id)) }
                 }.pickerStyle(.inline).labelsHidden()
                 Divider()
-                Button(L("新增账户…", "New account…")) { entity = EntityRequest(kind: .account) }
+                Button(L("新增账户…", "New account…")) { entity = drafts.entityDraft(parentEntryID: draft.id)?.request ?? EntityRequest(kind: .account) }
             } label: {
                 entryChipLabel(L("账户", "Account"), value: account?.name ?? L("不计入账户", "No account"), symbol: account?.iconSymbol ?? "wallet.pass", emoji: account?.emoji)
             }
@@ -595,7 +598,7 @@ struct FinanceEntryEditor: View {
                 ForEach(ledger.books.filter { !$0.archived || $0.id == draft.bookID }) { Text($0.name).tag(Optional($0.id)) }
             }.pickerStyle(.inline).labelsHidden()
             Divider()
-            Button(L("新建账本…", "New book…")) { entity = EntityRequest(kind: .book) }
+            Button(L("新建账本…", "New book…")) { entity = drafts.entityDraft(parentEntryID: draft.id)?.request ?? EntityRequest(kind: .book) }
         } label: {
             entryChipLabel(L("账本", "Book"), value: ledger.book(draft.bookID)?.name ?? L("选择账本", "Choose a book"), symbol: ledger.book(draft.bookID)?.iconSymbol ?? "book.closed", emoji: ledger.book(draft.bookID)?.emoji)
         }
@@ -869,6 +872,10 @@ struct FinanceEntryEditor: View {
                 isSaving = false; saveTask = nil
             }
             do {
+                if repeating {
+                    let live = try FinanceStore.read(context) ?? .initial
+                    await PurchaseStore.shared.confirmCreation([(.recurringBills, live.recurringBills.filter { !$0.hasEnded }.count)])
+                }
                 try await SyncChanges.withPreparedHistory(in: context) { try persist(again: again) }
                 saved = true
             } catch is CancellationError {
@@ -889,6 +896,7 @@ struct FinanceEntryEditor: View {
             let bill = MoneyRecurring(repeating: e, rule: repeatRule, until: repeatUntil, in: ledger, repeatTimeZoneID: repeatTimeZoneID)
             try FinanceStore.update(context) { value in
                 try value.requireEntryCurrencies(e, from: ledger)
+                try PurchaseStore.shared.requireCreation(.recurringBills, count: value.recurringBills.filter { !$0.hasEnded }.count)
                 try value.addRecurring(bill)
             }
             Self.postingLog.info("Recurring bill created; rule=\(bill.rule, privacy: .public)")

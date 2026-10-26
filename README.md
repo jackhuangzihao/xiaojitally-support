@@ -1,10 +1,50 @@
 # TallyNest / 小记
 
-SwiftUI + SwiftData 的 iPhone、iPad 和 Mac 待办与财务应用。当前本地开发版本：**1.0（80），尚未上传**。此前分发版本为 **1.0（79）**（用户确认；本地保留 iOS 与 macOS 归档）。线上可测试状态以 App Store Connect 为准；修改代码不会自动更新 TestFlight。
+把待办和记账放在一起的 iPhone、iPad 与 Mac 应用，使用 SwiftUI 和 SwiftData 构建。
+
+[支持网站](https://jackhuangzihao.github.io/xiaojitally-support/) · [隐私政策](https://jackhuangzihao.github.io/xiaojitally-support/privacy.html) · [English support](https://jackhuangzihao.github.io/xiaojitally-support/en/) · [Privacy policy](https://jackhuangzihao.github.io/xiaojitally-support/en/privacy.html)
+
+## 主要功能
+
+- **待办与记账联动**：为任务关联账单，在安排事情时一起记录相关收支。
+- **日历与任务管理**：日／周／月视图、交互排期、清单、重复任务与提醒。
+- **账本与统计**：收入、支出、转账、账户、分类、预算、周期账单与财务统计。
+- **多设备与备份**：通过个人 iCloud 账号同步，支持本地备份、导出与恢复。
+
+支持 iOS / iPadOS 17 及以上、macOS 14 及以上。工程入口为 `Jianshi.xcodeproj`；目录和代码中的 `Jianshi` 是历史名称。
+
+## 当前状态
+
+截至 2026-10-26，作者已确认提交 App Store 审核；提交审核不代表已获批或已正式上架。当前工程版本为 **1.0（80）**，实际审核和下载状态以 App Store 为准。
+
+应用包含 StoreKit 内购实现，提供月付、年付与买断 Pro。源码许可与 App Store 中的购买权益分别适用；源码公开不会为他人授予官方 App 的付费权益。构建与运行方式见下方对应章节。
+
+## 源码许可
+
+本项目采用 **[PolyForm Noncommercial License 1.0.0](LICENSE)**，属于源码公开、非商业授权项目，不属于 OSI 定义的开源软件。
+
+- 允许在许可范围内进行非商业学习、研究、使用、修改与再分发。
+- 不授予商业复用权，包括将本项目或衍生作品用于收费产品、商业服务等商业用途；商业使用须另外取得版权所有者授权。许可原文对慈善、教育、公共研究等列明机构的使用另有明确许可，具体范围以原文为准。
+- 再分发时必须保留许可文本或其网址，以及 `Required Notice:` 版权声明。
+- 版权所有者仍可自行商业发行本应用，包括通过 App Store 和内购收费。
+
+[LICENSE](LICENSE) 包含英文原文和中文参考译文，以英文原文为准。除另有声明外，许可覆盖本项目的源码与素材；第三方组件、平台资源及其权利不因本项目许可而改变。
+
+---
+
+下方带日期的开发与发布记录保留当时状态，其中“尚未上传”“后台未配置”等描述不代表当前审核进度。
+
+## 内购发布准备 · 2026-10-21
+
+- 正式商品 ID 为 `local.jianshi.personal.pro.monthly`、`local.jianshi.personal.pro.annual` 和 `local.jianshi.personal.pro.lifetime`。月付／年付属于同一订阅组、相同服务级别；买断为非消耗型项目。`.storekit` 仅供本地测试，不会在 GitHub 或 App Store Connect 自动创建商品。
+- 免费保留日／周／月视图与交互排期、任务关联账单、iCloud 同步和备份，任务与账单总数不限。免费额度为总共 5 个清单（含 3 个预设）、5 个未归档账户、2 个未归档账本、3 条未结束周期账单，以及 1 个设有预算的账本；已归档的预算账本也计入。统计免费查看本月与上个月。到期后已有超额项目和预算仍可编辑，只限制新增超额项目及 Pro 分析。
+- App 隐私链接按应用语言选择 GitHub Pages 中／英文页面。2026-10-22 已获准发布网站提交 `a131eef`：中英文支持／隐私页面、样式和图片均已公开访问并与发布文件逐字节核对。网站上线不表示内购后台配置、真机购买或正式开售已完成。
+- App Store Connect 已只读核对：两端位于同一 App 记录，但内购项目和订阅组尚未创建；英文隐私网址与部分商店资料未填，付费协议／法律实体及欧盟交易商状态仍待你处理。没有保存后台设置。
+- 详细填写值、网站发布缺项及双设备验收见[发布准备清单](资料/使用与发布说明/Mac商店准备.md)。应用继续不迁移真实数据、不替换当前应用、不合并应用 main、不上传 App；本次仅推送网站独立仓库，未推送应用源码。
 
 ## 1.0（80）· 发布前定版，尚未上传 · 2026-10-20
 
-- 汇总 79 版之后的同步、保存、恢复和重复规则修复；当前仍为本地版本 1.0（80）。没有上传 TestFlight 或 App Store，也未新增收费功能。
+- 汇总 79 版之后的同步、保存、恢复和重复规则修复；当前仍为本地版本 1.0（80）。没有上传 TestFlight 或 App Store。月付／年付／买断 Pro 已在独立分支本地实现，尚未正式开售。
 - 当前格式为 **备份 15、记账 4、云提交协议 17**，升级前数据库副本标记为 **schema-v5**。数据库新增可选的重复时区、原定时刻和自定义提醒间隔；格式升级用于阻止旧端丢弃新信息。下方历史条目按当时状态保留，当前格式以本节为准。
 - 新建重复规则使用创建时区，夏令时空缺只顺延当期，后续恢复原定时刻。任务编辑保留日期和时间的选择含义，修正修改顺序、来回修改时间、异地打开及草稿恢复造成的提醒或下一期偏移。旧规则缺失的时区和历史原定时间不猜测还原；旧全天日期的全面迁移没有执行。
 - 补强周期账单确认、改期、失败后重试及嵌套编辑器恢复。已经入账的流水保留，并发修改后续安排时按完整安排核对；失败时保留本次会话草稿，重新载入后由用户核对并再次保存，不自动重放失败操作。
@@ -383,13 +423,15 @@ iPhone 和 Mac 的 71 均已归档、导出、上传并完成 Apple 处理，在
 - 唯一开发源：`.`。
 - 打开此目录的 `Jianshi.xcodeproj`；整理前的 `软件/Tally` 和 `软件/简事` 不再作为开发入口。
 - 项目配套资料位于仓库上一级的 `发布资料/`、`宣传素材/`、`网站/`、`检查证据/`、`历史归档/` 和 `设计原型/`；目录说明见 `../目录说明.md`。
-- 本地 Git 已记录 `baseline-1.0-68`。Git 用于提交、比较和回退；GitHub 是可选的远程托管服务。本项目目前没有配置远程仓库。
+- 本地 Git 已记录 `baseline-1.0-68`。应用源码发布在 [jackhuangzihao/TallyNest](https://github.com/jackhuangzihao/TallyNest)，默认分支为 `main`。支持与隐私网站继续由独立的 [xiaojitally-support](https://github.com/jackhuangzihao/xiaojitally-support) 仓库发布，以保留现有 App Store 支持和隐私网址。
 - Git 不包含用户数据库、导出备份、证书、私钥、编译产物或发布包；`Checks/Fixtures` 中明示的合成测试库除外。
 - 不使用旧构建打开新版真实数据。需要对比旧代码时，在独立测试标识及合成数据环境运行。
 
 ## 构建与运行
 
-需要 macOS、Xcode（含 iOS SDK 与模拟器）和系统 Python 3。
+需要 macOS、Xcode（含 iOS SDK 与模拟器）和系统 Python 3。打开克隆目录中的 `Jianshi.xcodeproj`，从下列 scheme 选择目标。
+
+自行签名运行前，需使用自己的开发者团队，并对应配置应用标识、App Group 和 iCloud 容器；仓库中的原项目标识不授予作者账号或云容器的访问权。StoreKit 本地测试配置位于 `Checks/StoreKit/TallyPro.storekit`，不会自动创建或配置 App Store Connect 商品。仓库不包含开发者私钥、签名证书或商店账号凭据。
 
 - 本地调试：选择 `Jianshi` scheme 和目标设备。
 - App Store 构建：选择 `Jianshi-AppStore` scheme；Mac 的该 scheme 以非调试方式运行，归档使用 AppStore 配置。

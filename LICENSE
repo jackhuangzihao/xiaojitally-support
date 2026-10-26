@@ -1,0 +1,162 @@
+Required Notice: Copyright 2026 Zihao Huang (JackHuangZihao@gmail.com)
+
+小记（TallyNest）中未另行声明许可的源码与素材按 PolyForm Noncommercial License 1.0.0 授权。
+以下先列英文原文，后附中文参考译文；两者如有出入，以英文原文为准。
+
+Unless otherwise noted, the source code and assets of TallyNest are licensed
+under the PolyForm Noncommercial License 1.0.0. The English text below is the governing version;
+the Chinese translation that follows is provided for reference only.
+
+---
+
+# PolyForm Noncommercial License 1.0.0
+
+<https://polyformproject.org/licenses/noncommercial/1.0.0>
+
+## Acceptance
+
+In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
+
+## Copyright License
+
+The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose.  However, you may only distribute the software according to [Distribution License](#distribution-license) and make changes or new works based on the software according to [Changes and New Works License](#changes-and-new-works-license).
+
+## Distribution License
+
+The licensor grants you an additional copyright license to distribute copies of the software.  Your license to distribute covers distributing the software with changes and new works permitted by [Changes and New Works License](#changes-and-new-works-license).
+
+## Notices
+
+You must ensure that anyone who gets a copy of any part of the software from you also gets a copy of these terms or the URL for them above, as well as copies of any plain-text lines beginning with `Required Notice:` that the licensor provided with the software.  For example:
+
+> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
+
+## Changes and New Works License
+
+The licensor grants you an additional copyright license to make changes and new works based on the software for any permitted purpose.
+
+## Patent License
+
+The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
+
+## Noncommercial Purposes
+
+Any noncommercial purpose is a permitted purpose.
+
+## Personal Uses
+
+Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
+
+## Noncommercial Organizations
+
+Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
+
+## Fair Use
+
+You may have "fair use" rights for the software under the law. These terms do not limit them.
+
+## No Other Rights
+
+These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else.  These terms do not imply any other licenses.
+
+## Patent Defense
+
+If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
+
+## Violations
+
+The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice.  Otherwise, all your licenses end immediately.
+
+## No Liability
+
+***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
+
+## Definitions
+
+The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
+
+**You** refers to the individual or entity agreeing to these terms.
+
+**Your company** is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.  **Control** means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise.  Control can be direct or indirect.
+
+**Your licenses** are all the licenses granted to you for the software under these terms.
+
+**Use** means anything you do with the software requiring one of your licenses.
+
+---
+
+# PolyForm 非商业许可证 1.0.0（中文参考译文）
+
+<https://polyformproject.org/licenses/noncommercial/1.0.0>
+
+本译文仅供参考，不具法律效力；如与英文原文有出入，以英文原文为准。
+
+## 接受条款
+
+要获得本条款下的任何许可，你必须同意以下条款，并将其视为你所获全部许可的严格义务和条件。
+
+## 版权许可
+
+许可方授予你一项版权许可：凡出于允许目的、原本会侵犯许可方对本软件版权的行为，你都可以对本软件实施。但你只能按照「分发许可」分发本软件，并只能按照「修改与新作品许可」修改本软件或基于本软件创作新作品。
+
+## 分发许可
+
+许可方另授予你一项版权许可，允许你分发本软件的副本。该分发许可也涵盖分发经「修改与新作品许可」允许的修改版本和新作品。
+
+## 声明
+
+你必须确保：任何从你这里获得本软件任何部分副本的人，同时获得本条款的副本或上方的条款网址，以及许可方随软件提供的、所有以 `Required Notice:` 开头的纯文本行。例如：
+
+> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
+
+## 修改与新作品许可
+
+许可方另授予你一项版权许可，允许你出于任何允许目的修改本软件，或基于本软件创作新作品。
+
+## 专利许可
+
+许可方授予你一项专利许可，涵盖许可方能够许可或日后能够许可的、你使用本软件时将会侵犯的专利权利要求。
+
+## 非商业目的
+
+任何非商业目的都属于允许目的。
+
+## 个人用途
+
+为促进公共知识而进行的研究、实验和测试，以及个人学习、私人娱乐、业余项目、爱好活动或宗教活动等个人用途，只要没有任何预期的商业用途，均属于允许目的。
+
+## 非商业组织
+
+任何慈善组织、教育机构、公共研究机构、公共安全或卫生组织、环境保护组织或政府机构的使用，无论其资金来源或因资金产生的义务如何，均属于允许目的。
+
+## 合理使用
+
+依据法律，你可能对本软件享有"合理使用"的权利，本条款不限制这些权利。
+
+## 无其他权利
+
+本条款不允许你将任何许可再许可或转让给他人，也不妨碍许可方向他人授予许可。本条款不暗含任何其他许可。
+
+## 专利防御
+
+如果你以书面形式主张本软件侵犯或促成侵犯任何专利，你依本条款获得的专利许可立即终止。如果你的公司提出此类主张，你为公司开展工作时所享有的专利许可立即终止。
+
+## 违约
+
+当你第一次收到书面通知，被告知违反了本条款，或对本软件做了许可范围之外的事情时，如果你在收到通知后 32 天内完全遵守本条款，并采取切实措施纠正过去的违约行为，你的许可仍可继续有效；否则，你的全部许可立即终止。
+
+## 免责
+
+***在法律允许的最大范围内，本软件按"现状"提供，不附带任何保证或条件；无论基于何种法律主张，许可方均不对因本条款或因本软件的使用或性质而产生的任何损害向你承担责任。***
+
+## 定义
+
+**许可方**是提供本条款的个人或实体；**本软件**是许可方依本条款提供的软件。
+
+**你**指同意本条款的个人或实体。
+
+**你的公司**指你为之工作的任何法人、个体经营者或其他组织，以及控制该组织、受该组织控制或与该组织受共同控制的所有组织。**控制**指拥有某实体几乎全部资产，或通过表决、合同或其他方式指挥其管理和政策的权力；控制可以是直接的，也可以是间接的。
+
+**你的许可**指依本条款授予你的、关于本软件的全部许可。
+
+**使用**指你对本软件所做的、需要依赖你的某项许可才能进行的任何事情。

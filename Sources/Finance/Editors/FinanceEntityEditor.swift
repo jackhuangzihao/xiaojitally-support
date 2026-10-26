@@ -25,6 +25,7 @@ struct FinanceEntityDraft {
     var assetRate = ""
     var assetCurrency = "CNY"
     var parentID: UUID? = nil
+    var request: EntityRequest { EntityRequest(kind: kind, existingID: id, income: income, parentID: parentID) }
 }
 struct FinanceEntityEditor: View {
     static let symbols = ["fork.knife", "cup.and.saucer", "takeoutbag.and.cup.and.straw", "cart", "bag", "basket", "tshirt", "tram", "car", "bus", "fuelpump", "airplane",
@@ -34,6 +35,8 @@ struct FinanceEntityEditor: View {
     @AppStorage("appLanguage") private var language = "system"
     @Environment(EditorDrafts.self) private var drafts
     @State private var generation = Store.recovery.generation
+    @State private var draftOwner = UUID()
+    @State private var isClosing = false
     @State private var ready = false
     @State private var initialInputs: [String]?
     @State private var confirmDiscard = false
@@ -47,6 +50,7 @@ struct FinanceEntityEditor: View {
     @State private var isSaving = false
     @State private var saveTask: Task<Void, Never>?
     @FocusState private var textFocused: Bool
+    let parentEntryID: UUID?
     let kind: FinanceEntityKind
     let id: UUID?
     @State private var original: FinanceData
@@ -73,7 +77,8 @@ struct FinanceEntityEditor: View {
     @State private var confirmOpening = false
     @State private var reconciliation: MoneyEntry?
     @State private var error: String?
-    init(kind: FinanceEntityKind, id: UUID? = nil, income: Bool = false, parentID: UUID? = nil, data: FinanceData) {
+    init(kind: FinanceEntityKind, id: UUID? = nil, income: Bool = false, parentID: UUID? = nil, data: FinanceData, parentEntryID: UUID? = nil) {
+        self.parentEntryID = parentEntryID
         self.kind = kind; self.id = id; _original = State(initialValue: data)
         let account = data.accounts.first { $0.id == id }, book = data.books.first { $0.id == id }, category = data.categories.first { $0.id == id }
         _name = State(initialValue: kind == .account ? account?.name ?? "" : kind == .book ? book?.name ?? "" : category?.label ?? "")
@@ -132,6 +137,10 @@ struct FinanceEntityEditor: View {
     }
     private var monthlyBudgetField: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let count = ProAccess.budgetCreationCount(for: id, budgetedBookIDs: Set(original.books.filter { $0.budget != nil }.map(\.id))) {
+                ProQuotaNotice(quota: .budgets, count: count, detail: ProAccess.budgetHolders(excluding: id, books: original.books)
+                    .map { L("已由\($0)使用；已归档的账本也计算在内。", "Used by \($0). Archived books count too.") })
+            }
             Text(L("每月预算", "Monthly budget") + " · " + original.baseCurrency)
                 .font(.subheadline.weight(.medium))
             TextField(L("输入预算金额（可不填）", "Enter budget amount (optional)"), text: $budget)
@@ -156,6 +165,8 @@ struct FinanceEntityEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                if id == nil, kind == .account { ProQuotaNotice(quota: .accounts, count: original.accounts.filter { !$0.archived }.count) }
+                if id == nil, kind == .book { ProQuotaNotice(quota: .books, count: original.books.filter { !$0.archived }.count) }
                 if kind == .account {
                     Text(L("账户是钱放在哪里，例如银行卡或现金。所有账本共用账户余额。", "An account is where you keep money, such as a bank account or cash. Its balance is shared across books."))
                         .font(.callout).foregroundStyle(.secondary)
@@ -252,14 +263,13 @@ struct FinanceEntityEditor: View {
                         Button(L("删除", "Delete"), role: .destructive) { confirmRemoval = true }
                     }
                 }
-                if let error { Text(error).font(.callout).foregroundStyle(.red) }
             }.formStyle(.grouped).scrollDismissesKeyboard(.interactively)
             .navigationTitle(kind == .account ? L("账户", "Account") : kind == .book ? L("账本", "Book") : L("分类", "Category"))
             .toolbar {
                 #if os(iOS)
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button(L("完成", "Done")) { textFocused = false } }
                 #endif
-                ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { if dirty { confirmDiscard = true } else { dismiss() } }.keyboardShortcut(.cancelAction) }
+                ToolbarItem(placement: .cancellationAction) { Button(L("取消", "Cancel")) { if dirty { confirmDiscard = true } else { closeEditor() } }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) { Button(L("保存", "Save")) { save() }.keyboardShortcut("s", modifiers: .command).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
             }
         }
@@ -267,6 +277,9 @@ struct FinanceEntityEditor: View {
         .frame(minWidth: 440, idealWidth: 480, minHeight: kind == .account ? 520 : 370, idealHeight: kind == .account ? 610 : 450)
         #endif
         .sheet(item: $reconciliation) { entry in FinanceEntryEditor(entry: entry, expected: nil) }
+        .alert(L("操作未完成", "Action not completed"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button(L("知道了", "OK"), role: .cancel) {}
+        } message: { Text(error ?? "") }
         .confirmationDialog(L("更正期初余额？", "Correct the opening balance?"), isPresented: $confirmOpening, titleVisibility: .visible) {
             Button(L("确认更正", "Confirm correction")) { save(confirmedOpening: true) }
             Button(L("取消", "Cancel"), role: .cancel) {}
@@ -285,8 +298,10 @@ struct FinanceEntityEditor: View {
                  : L("此项目没有关联账单。删除后无法直接撤销，可从备份恢复。", "This item has no linked entries. Restore a backup to undo deletion."))
         }
         .onAppear {
+            guard !isClosing, generation == Store.recovery.generation else { return }
             if initialInputs == nil { initialInputs = inputs }
-            if let kept = drafts.financeEntity, kept.kind == kind, kept.id == id {
+            let kept = drafts.beginEntityDraft(owner: draftOwner, kind: kind, id: id, parentEntryID: parentEntryID)
+            if !ready, let kept {
                 original = kept.original
                 name = kept.name; currency = kept.currency; opening = kept.opening; symbol = kept.symbol; archived = kept.archived; accountID = kept.accountID
                 emoji = kept.emoji; bankName = kept.bankName; assetRate = kept.assetRate; assetCurrency = kept.assetCurrency; parentID = kept.parentID; income = kept.income; if !kept.color.isEmpty { color = kept.color }; if !kept.type.isEmpty { type = kept.type }; budget = kept.budget
@@ -294,6 +309,12 @@ struct FinanceEntityEditor: View {
             correctingOpening = used && opening != Money.text(original.accounts.first { $0.id == id }?.opening ?? 0)
             ready = true; keepEntityDraft()
         }
+        .modifier(EditorPresentationReady {
+            if generation == Store.recovery.generation, kind == .account,
+               let kept = drafts.finance, kept.entry.kind == .adjustment, kept.entry.accountID == id {
+                reconciliation = kept.entry
+            }
+        })
         .onChange(of: [name, currency, opening, symbol, emoji, color, type, budget, bankName, assetRate, parentID?.uuidString ?? "", "\(archived)-\(income)-\(accountID?.uuidString ?? "")"]) { _, _ in if ready { keepEntityDraft() } }
         .onChange(of: income) { _, _ in
             if let parentID, original.category(parentID)?.isIncome != income { self.parentID = nil }
@@ -302,38 +323,45 @@ struct FinanceEntityEditor: View {
         .interactiveDismissDisabled(dirty || isSaving)
         .modifier(UnsavedEditorGuard(hasChanges: { dirty }))
         .confirmationDialog(L("放弃未保存的修改？", "Discard unsaved changes?"), isPresented: $confirmDiscard, titleVisibility: .visible) {
-            Button(L("放弃修改", "Discard changes"), role: .destructive) { dismiss() }
+            Button(L("放弃修改", "Discard changes"), role: .destructive) { closeEditor() }
             Button(L("继续编辑", "Keep editing"), role: .cancel) {}
         }
         .overlay { if isSaving { ProgressView(L("正在保存…", "Saving…")).padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
         .onDisappear {
             saveTask?.cancel()
-            if generation == Store.recovery.generation && Store.recovery.failure == nil { drafts.financeEntity = nil }
+            if reconciliation == nil { drafts.clearEntityDraft(owner: draftOwner, generation: generation, parentEntryID: parentEntryID) }
         }
         .modifier(SaveRecoveryGuard())
         .modifier(CloudSyncEditingGuard())
     }
     private func keepEntityDraft() {
-        drafts.financeEntity = FinanceEntityDraft(original: original, kind: kind, id: id, name: name, currency: currency, opening: opening, symbol: symbol, archived: archived, accountID: accountID,
-                                                  income: income, color: color, type: type, budget: budget, emoji: emoji, bankName: bankName, assetRate: assetRate, assetCurrency: assetCurrency, parentID: parentID)
+        guard !isClosing else { return }
+        drafts.keepEntityDraft(FinanceEntityDraft(original: original, kind: kind, id: id, name: name, currency: currency, opening: opening, symbol: symbol, archived: archived, accountID: accountID,
+                                                  income: income, color: color, type: type, budget: budget, emoji: emoji, bankName: bankName, assetRate: assetRate, assetCurrency: assetCurrency, parentID: parentID),
+                               owner: draftOwner, generation: generation, parentEntryID: parentEntryID)
+    }
+    private func closeEditor() {
+        isClosing = true
+        drafts.clearEntityDraft(owner: draftOwner, generation: generation, parentEntryID: parentEntryID)
+        dismiss()
     }
     private func remove() {
         guard let id else { return }
         do {
             try FinanceStore.update(context) { try $0.remove(kind, id: id, expected: original) }
             didSave = true
-            dismiss()
-        } catch { self.error = error.localizedDescription }
+            closeEditor()
+        } catch { self.error = Store.recovery.failure == nil ? error.localizedDescription : nil }
     }
     private func reconcile() {
         guard let id else { return }
         do {
             let data = try FinanceStore.read(context) ?? .initial
             reconciliation = data.reconciliationEntry(for: id)
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = Store.recovery.failure == nil ? error.localizedDescription : nil }
     }
     private func save(confirmedOpening: Bool = false) {
-        guard !didSave, !isSaving else { return }
+        guard !didSave, !isSaving, !isClosing else { return }
         keepEntityDraft()
         isSaving = true
         let saveID = PendingEditorSaves.shared.begin()
@@ -343,10 +371,23 @@ struct FinanceEntityEditor: View {
                 isSaving = false; saveTask = nil
             }
             do {
+                if kind == .account || kind == .book {
+                    let live = try FinanceStore.read(context) ?? .initial
+                    var quotas: [(ProQuota, Int)] = []
+                    if id == nil {
+                        quotas.append(kind == .account ? (.accounts, live.accounts.filter { !$0.archived }.count)
+                                      : (.books, live.books.filter { !$0.archived }.count))
+                    }
+                    if kind == .book, !budget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       let count = ProAccess.budgetCreationCount(for: id, budgetedBookIDs: Set(live.books.filter { $0.budget != nil }.map(\.id))) {
+                        quotas.append((.budgets, count))
+                    }
+                    await PurchaseStore.shared.confirmCreation(quotas)
+                }
                 try await SyncChanges.withPreparedHistory(in: context) { persist(confirmedOpening: confirmedOpening) }
             } catch is CancellationError {
                 // A closed or replaced editor must not commit later.
-            } catch { self.error = error.localizedDescription }
+            } catch { self.error = Store.recovery.failure == nil ? error.localizedDescription : nil }
         }
     }
     private func persist(confirmedOpening: Bool) {
@@ -364,6 +405,7 @@ struct FinanceEntityEditor: View {
             try FinanceStore.update(context) { data in
                 switch kind {
                 case .account:
+                    if id == nil { try PurchaseStore.shared.requireCreation(.accounts, count: data.accounts.filter { !$0.archived }.count) }
                     let value = MoneyAccount(id: id ?? UUID(), name: title, currency: currency, opening: try Money.parse(opening, currency: currency, signed: true), archived: archived, emoji: emoji.isEmpty ? nil : emoji, symbol: symbol.isEmpty ? nil : symbol, type: type, bankName: bankName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : bankName.trimmingCharacters(in: .whitespacesAndNewlines))
                     try data.updateAccount(value, expected: original.accounts.first { $0.id == id }, allowOpeningCorrection: confirmedOpening)
                     let rateText = assetRate.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -374,6 +416,8 @@ struct FinanceEntityEditor: View {
                         try data.setManualRate(from: currency, to: assetCurrency, text: rateText)
                     }
                 case .book:
+                    if id == nil { try PurchaseStore.shared.requireCreation(.books, count: data.books.filter { !$0.archived }.count) }
+                    try PurchaseStore.shared.requireBudget(budgetValue, for: id, books: data.books)
                     let value = MoneyBook(id: id ?? UUID(), name: title, defaultAccountID: accountID, archived: archived, budget: budgetValue, emoji: emoji.isEmpty ? nil : emoji, symbol: symbol.isEmpty ? nil : symbol)
                     try data.updateBook(value, expected: original.books.first { $0.id == id }, baseCurrency: original.baseCurrency)
                 case .category:
@@ -385,7 +429,28 @@ struct FinanceEntityEditor: View {
                 }
             }
             didSave = true
-            dismiss()
-        } catch { self.error = error.localizedDescription }
+            closeEditor()
+        } catch { self.error = Store.recovery.failure == nil ? error.localizedDescription : nil }
+    }
+}
+
+// Finance adapters keep the StoreKit client independent of ledger models and storage.
+extension ProAccess {
+    /// “日常”、“旅行（已归档）”: the other books holding budgets, archived ones marked.
+    static func budgetHolders(excluding bookID: UUID?, books: [MoneyBook]) -> String? {
+        let names = books.filter { $0.budget != nil && $0.id != bookID }
+            .map { "“" + $0.name + "”" + ($0.archived ? L("（已归档）", " (archived)") : "") }
+        return names.isEmpty ? nil : names.joined(separator: L("、", ", "))
+    }
+}
+
+extension PurchaseStore {
+    func requireBudget(_ budget: Decimal?, for bookID: UUID?, books: [MoneyBook]) throws {
+        let budgeted = Set(books.filter { $0.budget != nil }.map(\.id))
+        guard budget != nil, let count = ProAccess.budgetCreationCount(for: bookID, budgetedBookIDs: budgeted) else { return }
+        do { try requireCreation(.budgets, count: count) }
+        catch is ProLimitError {
+            throw ProLimitError(quota: .budgets, holders: ProAccess.budgetHolders(excluding: bookID, books: books))
+        }
     }
 }

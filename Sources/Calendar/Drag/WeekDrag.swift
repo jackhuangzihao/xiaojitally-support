@@ -155,6 +155,7 @@ import UIKit
                     onDrop(range.date(at: minute, dayIndex: day, weekOffset: offset), offset)
                 }
             }
+            guard taskID == task.id else { return }
             resizeRange = range
             occupied = PlanBlock.occupied(others, excluding: task.id)
         }

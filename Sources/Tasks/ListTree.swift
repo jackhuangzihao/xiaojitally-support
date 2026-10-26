@@ -3,6 +3,9 @@ import SwiftData
 
 /// Lists can contain tasks as well as child lists. Parent identifiers keep old stores compatible.
 enum ListTree {
+    /// Stable identities of the three lists created on first launch, shared by every device.
+    static let defaultListIDs = (0..<3).map { TaskItem.syncIdentity("tally-default-list-\($0)") }
+
     static func before(_ a: TaskList, _ b: TaskList) -> Bool {
         if a.sortOrder != b.sortOrder { return a.sortOrder < b.sortOrder }
         if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }

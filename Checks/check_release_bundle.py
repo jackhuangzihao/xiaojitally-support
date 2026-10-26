@@ -5,6 +5,7 @@ import plistlib
 import re
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 if not __debug__:
     raise RuntimeError('Run without Python optimisation; release assertions must remain enabled')
@@ -24,6 +25,9 @@ info = plistlib.loads((app / ('Contents/Info.plist' if mac else 'Info.plist')).r
 if args.build:
     assert info['CFBundleVersion'] == args.build, 'Unexpected build number'
 assert info['ITSAppUsesNonExemptEncryption'] is False
+for key in ('TallyPrivacyPolicyURL', 'TallyPrivacyPolicyEnglishURL'):
+    policy = urlparse(info.get(key, ''))
+    assert policy.scheme == 'https' and policy.hostname and not policy.username and not policy.password, f'Missing or invalid public privacy URL: {key}'
 data = plistlib.loads(manifest.read_bytes())
 assert data['NSPrivacyTracking'] is False
 assert data['NSPrivacyCollectedDataTypes'] == []
@@ -36,6 +40,7 @@ for path in app.rglob('extract.actionsdata'):
     assert not metadata.get('actions'), f'Unexpected registered actions: {path}'
     assert not metadata.get('entities'), f'Unexpected registered entities: {path}'
     assert not metadata.get('queries'), f'Unexpected registered queries: {path}'
+assert not list(app.rglob('*.storekit')), 'Local StoreKit configuration must not ship in the app'
 assert not list(app.rglob('JianshiWidget.appex')), 'Disabled widget extension remains embedded'
 if args.production:
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)

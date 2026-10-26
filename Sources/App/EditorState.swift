@@ -95,7 +95,11 @@ struct UnsavedEditorGuard: ViewModifier {
 }
 
 @MainActor @Observable final class EditorDrafts {
-    var financeEntity: FinanceEntityDraft?
+    // Separate the root account editor from any entity opened inside its balance entry.
+    private var entityDrafts: [UUID?: FinanceEntityDraft] = [:]
+    private var entityOwners: [UUID?: UUID] = [:]
+    var financeEntity: FinanceEntityDraft? { entityDrafts[nil] ?? entityDrafts.values.first }
+    func entityDraft(parentEntryID: UUID? = nil) -> FinanceEntityDraft? { entityDrafts[parentEntryID] }
     var finance: FinanceDraft?
     var financeRecurring: FinanceRecurringDraft?
     var hasFinanceDraft: Bool { finance != nil || financeEntity != nil || financeRecurring != nil }
@@ -103,6 +107,26 @@ struct UnsavedEditorGuard: ViewModifier {
     var financePresentationGeneration: Int?
     var financePresentationActive: Bool { financePresentationGeneration == Store.recovery.generation }
     var financeNavigationBlocked: Bool { hasFinanceDraft || financePresentationActive }
+
+    func beginEntityDraft(owner: UUID, kind: FinanceEntityKind, id: UUID?, parentEntryID: UUID? = nil) -> FinanceEntityDraft? {
+        let kept = entityDrafts[parentEntryID]
+        guard kept == nil || (kept?.kind == kind && kept?.id == id) else { return nil }
+        entityOwners[parentEntryID] = owner
+        return kept
+    }
+
+    func keepEntityDraft(_ draft: FinanceEntityDraft, owner: UUID, generation: Int, parentEntryID: UUID? = nil) {
+        guard entityOwners[parentEntryID] == owner, generation == Store.recovery.generation else { return }
+        entityDrafts[parentEntryID] = draft
+    }
+
+    func clearEntityDraft(owner: UUID, generation: Int, parentEntryID: UUID? = nil) {
+        // A delayed sheet dismissal must not clear a newer editor or a recovery draft.
+        guard entityOwners[parentEntryID] == owner, generation == Store.recovery.generation,
+              Store.recovery.failure == nil else { return }
+        entityDrafts[parentEntryID] = nil
+        entityOwners[parentEntryID] = nil
+    }
 
     func clearRecurringDraft(id: UUID, generation: Int) {
         // A disappearing retired editor must not clear the recovered window's draft.

@@ -192,6 +192,107 @@ import AppKit
         }
     }
 
+    static func financeEntityDrafts(require: (Bool, String) throws -> Void) throws {
+        let drafts = EditorDrafts()
+        var ledger = FinanceData.initial
+        ledger.books[0].budget = 100
+        let book = ledger.books[0]
+        var draft = FinanceEntityDraft(original: ledger, kind: .book, id: book.id, name: book.name,
+            currency: ledger.baseCurrency, opening: "0", symbol: "", archived: false, accountID: nil, budget: "200")
+        // Cover both callback orders: reopen before/after the previous sheet disappears.
+        for _ in 0..<3 {
+            for disappearsFirst in [false, true] {
+                let oldOwner = UUID(), newOwner = UUID(), generation = Store.recovery.generation
+                try require(drafts.beginEntityDraft(owner: oldOwner, kind: .book, id: book.id) == nil,
+                            "a fresh budget editor has no completed or discarded draft")
+                drafts.keepEntityDraft(draft, owner: oldOwner, generation: generation)
+                drafts.clearEntityDraft(owner: oldOwner, generation: generation)
+                if disappearsFirst { drafts.clearEntityDraft(owner: oldOwner, generation: generation) }
+                try require(drafts.beginEntityDraft(owner: newOwner, kind: .book, id: book.id) == nil,
+                            "rapid reopen cannot restore the previous editor's baseline")
+                var fresh = draft; fresh.original.books[0].budget = 200; fresh.budget = "250"
+                drafts.keepEntityDraft(fresh, owner: newOwner, generation: generation)
+                drafts.keepEntityDraft(draft, owner: oldOwner, generation: generation)
+                drafts.clearEntityDraft(owner: oldOwner, generation: generation)
+                try require(drafts.financeEntity?.budget == "250" && drafts.financeEntity?.original.books[0].budget == 200,
+                            "late change and dismissal callbacks cannot replace or clear the new budget draft")
+                drafts.clearEntityDraft(owner: newOwner, generation: generation)
+                drafts.keepEntityDraft(fresh, owner: newOwner, generation: generation)
+                try require(drafts.financeEntity == nil, "a closing editor cannot recreate its discarded draft")
+            }
+        }
+        // Account → balance entry → book retains each level, including delayed dismissal callbacks.
+        let rootOwner = UUID(), innerOwner = UUID(), entryID = UUID()
+        let currentGeneration = Store.recovery.generation
+        var rootDraft = draft; rootDraft.kind = .account; rootDraft.name = "Outer account input"
+        _ = drafts.beginEntityDraft(owner: rootOwner, kind: .account, id: rootDraft.id)
+        drafts.keepEntityDraft(rootDraft, owner: rootOwner, generation: currentGeneration)
+        _ = drafts.beginEntityDraft(owner: innerOwner, kind: .book, id: draft.id, parentEntryID: entryID)
+        drafts.keepEntityDraft(draft, owner: innerOwner, generation: currentGeneration, parentEntryID: entryID)
+        try require(drafts.entityDraft()?.name == rootDraft.name && drafts.entityDraft(parentEntryID: entryID)?.budget == "200",
+                    "nested entity input cannot overwrite its outer account draft")
+        try require(drafts.entityDraft(parentEntryID: entryID)?.request.existingID == book.id,
+                    "nested presentation restores the original identity")
+        let unrelatedOwner = UUID()
+        _ = drafts.beginEntityDraft(owner: unrelatedOwner, kind: .category, id: nil, parentEntryID: entryID)
+        drafts.keepEntityDraft(rootDraft, owner: unrelatedOwner, generation: currentGeneration, parentEntryID: entryID)
+        drafts.clearEntityDraft(owner: unrelatedOwner, generation: currentGeneration, parentEntryID: entryID)
+        try require(drafts.entityDraft(parentEntryID: entryID)?.kind == .book,
+                    "a different editor cannot claim or erase an interrupted inner draft")
+        drafts.clearEntityDraft(owner: innerOwner, generation: currentGeneration, parentEntryID: entryID)
+        try require(drafts.entityDraft(parentEntryID: entryID) == nil && drafts.entityDraft()?.name == rootDraft.name,
+                    "closing the inner editor preserves its outer draft")
+        drafts.clearEntityDraft(owner: rootOwner, generation: currentGeneration)
+        try require(!drafts.hasFinanceDraft, "explicit closing releases every retained entity draft")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Tally-EntityDraft-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("test.store")
+        let container = try Store.make(url: url)
+        try FinanceStore.update(container.mainContext) { $0 = ledger }
+        let entry = MoneyEntry()
+        drafts.finance = FinanceDraft(ledger: ledger, entry: entry, expected: nil, amount: "004321.00",
+            actual: "", received: "", fee: "", converted: "", convertedFee: "", balance: 0)
+        var owner = UUID(), generation = Store.recovery.generation
+        _ = drafts.beginEntityDraft(owner: owner, kind: .book, id: book.id)
+        draft.budget = "00250.00"
+        drafts.keepEntityDraft(draft, owner: owner, generation: generation)
+        for _ in 0..<2 {
+            let schema = Schema([TaskItem.self, TaskList.self, FinanceLedger.self, CloudSyncState.self, CalendarWeekTitle.self])
+            let readOnly = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: url,
+                allowsSave: false, cloudKitDatabase: .none)])
+            readOnly.mainContext.autosaveEnabled = false
+            var failed = false
+            do { try FinanceStore.update(readOnly.mainContext) { $0.books[0].budget = 250 } }
+            catch { failed = true }
+            try require(failed && Store.recovery.failure != nil, "entity draft recovery uses a real isolated save failure")
+            drafts.clearEntityDraft(owner: owner, generation: generation)
+            try require(drafts.financeEntity?.budget == "00250.00", "save failure preserves exact budget input")
+            try require(Store.recovery.reload(), "entity draft failure reloads only the isolated database")
+            let previousOwner = owner, previousGeneration = generation
+            owner = UUID(); generation = Store.recovery.generation
+            let kept = drafts.beginEntityDraft(owner: owner, kind: .book, id: book.id)
+            try require(kept?.budget == "00250.00" && kept?.original == ledger, "recovery adopts input and its original version together")
+            drafts.keepEntityDraft(draft, owner: owner, generation: generation)
+            drafts.clearEntityDraft(owner: previousOwner, generation: previousGeneration)
+            drafts.keepEntityDraft(draft, owner: previousOwner, generation: previousGeneration)
+            try require(drafts.financeEntity?.budget == "00250.00" && drafts.finance?.amount == "004321.00",
+                        "retired nested editor callbacks preserve both inner and outer recovery drafts")
+            try require(try FinanceStore.read(Store.recovery.container!.mainContext) == ledger,
+                        "failed budget save leaves the committed ledger unchanged")
+        }
+        var updated = book; updated.budget = 250
+        try FinanceStore.update(Store.recovery.container!.mainContext) {
+            try $0.updateBook(updated, expected: drafts.financeEntity!.original.books[0], baseCurrency: ledger.baseCurrency)
+        }
+        drafts.clearEntityDraft(owner: owner, generation: generation)
+        try require(drafts.financeEntity == nil && drafts.finance?.amount == "004321.00",
+                    "successful inner save clears only its own draft")
+        let reopened = try Store.make(url: url)
+        try require(try FinanceStore.read(reopened.mainContext)?.books[0].budget == 250,
+                    "retry commits the recovered budget and survives reopening")
+    }
+
     static func suggestionTemplates(date: (Int, Int, Int) -> Date, require: (Bool, String) throws -> Void) throws {
         do {
             let source = TaskItem(title: "Template", scheduledAt: date(2026, 9, 10))

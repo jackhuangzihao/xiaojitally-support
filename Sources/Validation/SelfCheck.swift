@@ -13,7 +13,8 @@ import AppKit
         let sizes = ["workspace": size(ContentView.self) { $0.body },
                      "day card": size(DayTimelineCard.self) { $0.body },
                      "task editor": size(TaskEditor.self) { $0.body },
-                     "list editor": size(ListEditor.self) { $0.body }]
+                     "list editor": size(ListEditor.self) { $0.body },
+                     "purchase page": size(ProView.self) { $0.body }]
         print("Interface view sizes (bytes): \(sizes)")
         guard sizes.values.allSatisfy({ $0 < 16_384 }) else {
             throw TaskBackup.invalid("Interface exceeds the 16 KB per-component stack budget: \(sizes)")
@@ -37,6 +38,7 @@ import AppKit
         try CalendarChecks.daylightSavingTimeline(require: require)
         try TaskLifecycleChecks.notificationPlans(date: date, require: require)
         try TaskLifecycleChecks.reminderNavigation(require: require)
+        try TaskLifecycleChecks.financeEntityDrafts(require: require)
         try TaskLifecycleChecks.suggestionTemplates(date: date, require: require)
         try TaskLifecycleChecks.taskOrdering(date: date, require: require)
         try CalendarChecks.calendarBuckets(require: require)

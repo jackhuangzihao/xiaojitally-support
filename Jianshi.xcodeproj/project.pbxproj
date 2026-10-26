@@ -144,6 +144,12 @@
 		60253A8BDF090CC4D7CD426F /* CloudMigrationChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07537F887011D556714C6781 /* CloudMigrationChecks.swift */; };
 		B76423EE50474FACA82A7819 /* CloudRetentionChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B7DF32BA4BEF1FAED630CB /* CloudRetentionChecks.swift */; };
 		D81014000000000000000001 /* RecurrenceTimeZoneChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = D81014000000000000000002 /* RecurrenceTimeZoneChecks.swift */; };
+		C3A517CB743BA81117BE21A3 /* ProAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE98B4DFB6FFA50FFD730BC4 /* ProAccess.swift */; };
+		C93E19E27CA33C898CF4261C /* ProView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E298444A4BEAA0E37932AFF8 /* ProView.swift */; };
+		AAFB9EA980A6200FC7BF9667 /* PurchaseCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72D4E201B609437BA33054D4 /* PurchaseCatalog.swift */; };
+		5B14ED9474B38BC813D9EB1B /* PurchaseStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49161567A9DF6DA635FC485A /* PurchaseStore.swift */; };
+		2399F5E02EF06A8F0BBAA0F9 /* StoreKitPurchaseClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3166C4F464BA230C2FE99CB /* StoreKitPurchaseClient.swift */; };
+		CD9E9212C5DD603CDDFE52EB /* PurchaseChecks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDF292F7A28808B4E0CBB2A0 /* PurchaseChecks.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -285,6 +291,12 @@
 		07537F887011D556714C6781 /* CloudMigrationChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudMigrationChecks.swift; sourceTree = "<group>"; };
 		53B7DF32BA4BEF1FAED630CB /* CloudRetentionChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudRetentionChecks.swift; sourceTree = "<group>"; };
 		D81014000000000000000002 /* RecurrenceTimeZoneChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurrenceTimeZoneChecks.swift; sourceTree = "<group>"; };
+		EE98B4DFB6FFA50FFD730BC4 /* ProAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProAccess.swift; sourceTree = "<group>"; };
+		E298444A4BEAA0E37932AFF8 /* ProView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProView.swift; sourceTree = "<group>"; };
+		72D4E201B609437BA33054D4 /* PurchaseCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseCatalog.swift; sourceTree = "<group>"; };
+		49161567A9DF6DA635FC485A /* PurchaseStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseStore.swift; sourceTree = "<group>"; };
+		D3166C4F464BA230C2FE99CB /* StoreKitPurchaseClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreKitPurchaseClient.swift; sourceTree = "<group>"; };
+		DDF292F7A28808B4E0CBB2A0 /* PurchaseChecks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseChecks.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -304,6 +316,7 @@
 				60B2CA4259FE87DE7508D9EB /* App */,
 				D563E36C1EDE2FC6AB72E9A0 /* Calendar */,
 				04B0090E83339F149333D89E /* Finance */,
+				0BE31D53C4FFAB879462AE2F /* Purchases */,
 				3DD42518BB15813F615C5921 /* Shared */,
 				CF14182B447F7EA95BBCF9B2 /* Storage */,
 				92C8607F276C289C14A49358 /* Tasks */,
@@ -418,6 +431,7 @@
 				7F152FB33F53E0AE69B6B588 /* CalendarChecks.swift */,
 				8725C0A890E6720183086FE3 /* CalendarDragChecks.swift */,
 				E5BE043B38F7E9CFAF90FE98 /* CalendarGridChecks.swift */,
+				DDF292F7A28808B4E0CBB2A0 /* PurchaseChecks.swift */,
 				5062033C7173C815D6945F49 /* EditingChecks.swift */,
 				1BC53E8867C679F14AD33165 /* FinanceChecks.swift */,
 				F6B7C2B371FD3AAA9AD38395 /* FinanceConversionChecks.swift */,
@@ -574,6 +588,18 @@
 				2805AA7E6CA787A28442C9D1 /* FinanceFixture.swift */,
 			);
 			path = Fixtures;
+			sourceTree = "<group>";
+		};
+		0BE31D53C4FFAB879462AE2F /* Purchases */ = {
+			isa = PBXGroup;
+			children = (
+				EE98B4DFB6FFA50FFD730BC4 /* ProAccess.swift */,
+				E298444A4BEAA0E37932AFF8 /* ProView.swift */,
+				72D4E201B609437BA33054D4 /* PurchaseCatalog.swift */,
+				49161567A9DF6DA635FC485A /* PurchaseStore.swift */,
+				D3166C4F464BA230C2FE99CB /* StoreKitPurchaseClient.swift */,
+			);
+			path = Purchases;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -743,6 +769,12 @@
 				1AEE198625C0F737A48ECB81 /* TaskRules.swift in Sources */,
 				8F6D624396C1985949CA846B /* EditingChecks.swift in Sources */,
 				3647594D772B55D604E073CC /* CalendarGridChecks.swift in Sources */,
+				CD9E9212C5DD603CDDFE52EB /* PurchaseChecks.swift in Sources */,
+				2399F5E02EF06A8F0BBAA0F9 /* StoreKitPurchaseClient.swift in Sources */,
+				5B14ED9474B38BC813D9EB1B /* PurchaseStore.swift in Sources */,
+				AAFB9EA980A6200FC7BF9667 /* PurchaseCatalog.swift in Sources */,
+				C93E19E27CA33C898CF4261C /* ProView.swift in Sources */,
+				C3A517CB743BA81117BE21A3 /* ProAccess.swift in Sources */,
 				8E11CD5899C7C57D8DBBD689 /* FinanceChecks.swift in Sources */,
 				16D36CC4DECF212943F94B04 /* SelfCheck.swift in Sources */,
 				D81014000000000000000001 /* RecurrenceTimeZoneChecks.swift in Sources */,
@@ -871,6 +903,7 @@
 				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) JIANSHI_DEVELOPER_PRO";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -905,6 +938,7 @@
 				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) JIANSHI_DEVELOPER_PRO";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -1017,7 +1051,7 @@
 				PRODUCT_NAME = "小记";
 				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
-				"SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]" = "$(inherited) JIANSHI_APP_STORE";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) JIANSHI_APP_STORE";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

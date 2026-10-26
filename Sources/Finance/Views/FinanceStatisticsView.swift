@@ -38,14 +38,22 @@ extension FinanceHome {
         guard statsCalendar, let date = statsSelectedDate, date >= range.start, date < range.end else { return nil }
         return Dates.calendar.dateInterval(of: statsUnit, for: date)
     }
-    private var categoryStatsRange: DateInterval { selectedStatsRange ?? range }
+    private var categoryStatsRange: DateInterval {
+        PurchaseStore.shared.isPro ? (selectedStatsRange ?? range)
+            : ProAccess.freeStatisticsMonth(for: anchor, now: Date(), calendar: Dates.calendar)
+    }
     private var categoryRangeLabel: String {
         let span = categoryStatsRange
         if selectedStatsRange != nil { return Dates.label(span.start, pattern: statsUnit == .month ? "yyyy年M月" : "M月d日") }
         if period != .week { return Dates.label(span.start, pattern: period == .year ? "yyyy年" : "yyyy年M月") }
         return Dates.label(span.start, pattern: "M月d日") + " – " + Dates.label(span.end.addingTimeInterval(-1), pattern: "M月d日")
     }
-    var statisticsPage: some View {
+    @ViewBuilder var statisticsPage: some View {
+        if PurchaseStore.shared.isPro { proStatisticsPage }
+        else if PurchaseStore.shared.accessConfirmed { freeStatisticsPage }
+        else { ProStatusPending() }
+    }
+    private var proStatisticsPage: some View {
         let span = range, days = rateHistory?.sortedDays
         let entries = statsEntries(span)
         let spent = statsSum(entries, income: false, days: days), earned = statsSum(entries, income: true, days: days)
@@ -122,6 +130,46 @@ extension FinanceHome {
         .onChange(of: span.start) { _, _ in statsSelectedDate = nil; rankingExpansion.key = nil }
         .onChange(of: period) { _, _ in statsSelectedDate = nil; rankingExpansion.key = nil }
         .task(id: "\(statsCurrency)-\(data.baseCurrency)-\(Int(earliest.timeIntervalSince1970 / 86400))") { await loadRates(since: earliest) }
+    }
+    private var freeStatisticsPage: some View {
+        let months = ProAccess.freeStatisticsMonths(now: Date(), calendar: Dates.calendar)
+        let span = ProAccess.freeStatisticsMonth(for: anchor, now: Date(), calendar: Dates.calendar)
+        let showingPrevious = span.start == months.previous.start
+        let entries = statsEntries(span)
+        let days = rateHistory?.sortedDays
+        let spent = statsSum(entries, income: false, days: days)
+        let earned = statsSum(entries, income: true, days: days)
+        let rows = categoryRows(entries)
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                Text(Dates.label(span.start, pattern: "yyyy年M月")).font(.title3.bold())
+                // The free plan switches between two fixed months; it never moves to an older or future one.
+                Picker(L("月份", "Month"), selection: Binding(get: { showingPrevious },
+                                                             set: { anchor = $0 ? months.previous.start : Date() })) {
+                    Text(L("上个月", "Last month")).tag(true)
+                    Text(L("本月", "This month")).tag(false)
+                }.pickerStyle(.segmented).labelsHidden()
+                ViewThatFits(in: .horizontal) {
+                    HStack { bookSelector; Spacer(); statsCurrencyMenu }
+                    VStack(alignment: .leading) { bookSelector; statsCurrencyMenu }
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    summaryFigure(totalLabel(L("支出", "Spending"), spent), totalDisplay(spent, currency: statsCurrency), tint: .primary)
+                    statsFigures(spent: spent, earned: earned)
+                    rateNote(entries, estimates: spent.estimateDates.union(earned.estimateDates))
+                    if spent.missing + earned.missing > 0 { missingAmounts(spent.missingDates + earned.missingDates) }
+                }.padding().cardSurface()
+                ProUpgradeButton(title: L("Pro · 更早月份、跨期趋势与统计日历", "Pro · Earlier months, trends and statistics calendar"))
+                Picker(L("方向", "Direction"), selection: $statsIncome) {
+                    Text(L("支出", "Spending")).tag(false)
+                    Text(L("收入", "Income")).tag(true)
+                }.pickerStyle(.segmented)
+                Text(L("分类汇总", "Categories")).font(.headline)
+                if rows.isEmpty { Text(L("这个月暂无记录", "No entries this month")).foregroundStyle(.secondary) }
+                else { ranking(rows) }
+            }.padding(compact ? 16 : 24)
+        }
+        .task(id: "\(statsCurrency)-\(Int(span.start.timeIntervalSince1970))") { await loadRates(since: span.start) }
     }
     /// Income and period net beside the spending total; an unconverted value shows in orange.
     @ViewBuilder private func statsFigures(spent: MoneyStatisticsTotal, earned: MoneyStatisticsTotal) -> some View {
@@ -298,7 +346,12 @@ extension FinanceHome {
                                totalDisplay: { totalDisplay($0, currency: statsCurrency, subtotal: true) }) { row in
             let category: MoneyCategory? = { if case .category(let id) = row.id { return data.category(id) }; return nil }()
             subcategoryRanking(row.id)
-            categoryHistory(row.id, tint: data.tint(category))
+            if PurchaseStore.shared.isPro {
+                categoryHistory(row.id, tint: data.tint(category))
+            } else {
+                Button(L("查看此分类账单", "View category entries")) { drill(row.id) }
+                    .buttonStyle(.borderless).padding()
+            }
         }
     }
     @ViewBuilder private func subcategoryRanking(_ key: MoneyCategoryKey) -> some View {

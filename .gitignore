@@ -19,6 +19,7 @@ __pycache__/
 *.mobileprovision
 *.provisionprofile
 *.store*
+!Checks/StoreKit/TallyPro.storekit
 *.sqlite*
 !Checks/Fixtures/schema-52/store.sqlite
 !Checks/Fixtures/schema-68/store.sqlite

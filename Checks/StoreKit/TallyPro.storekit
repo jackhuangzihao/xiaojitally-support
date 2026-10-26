@@ -1,0 +1,97 @@
+{
+  "identifier": "0BDA30A4-557E-49B8-85B8-DA9F70702626",
+  "nonRenewingSubscriptions": [],
+  "products": [
+    {
+      "displayPrice": "59.99",
+      "familyShareable": false,
+      "internalID": "tally-pro-lifetime",
+      "localizations": [
+        {
+          "description": "Finance insights and expanded limits.",
+          "displayName": "Tally Pro lifetime",
+          "locale": "en_US"
+        },
+        {
+          "description": "进阶财务分析与更多管理空间，三端通用。",
+          "displayName": "小记 Pro 买断",
+          "locale": "zh_CN"
+        }
+      ],
+      "productID": "local.jianshi.personal.pro.lifetime",
+      "referenceName": "Tally Pro lifetime",
+      "type": "NonConsumable"
+    }
+  ],
+  "settings": {
+    "_failTransactionsEnabled": false,
+    "_locale": "en_US",
+    "_storefront": "USA",
+    "_storeKitErrors": []
+  },
+  "subscriptionGroups": [
+    {
+      "id": "CFA70A37",
+      "localizations": [],
+      "name": "Tally Pro",
+      "subscriptions": [
+        {
+          "displayPrice": "2.99",
+          "familyShareable": false,
+          "internalID": "tally-pro-monthly",
+          "localizations": [
+            {
+              "description": "Finance insights and expanded limits.",
+              "displayName": "Tally Pro monthly",
+              "locale": "en_US"
+            },
+            {
+              "description": "进阶财务分析与更多管理空间，三端通用。",
+              "displayName": "小记 Pro 月付",
+              "locale": "zh_CN"
+            }
+          ],
+          "productID": "local.jianshi.personal.pro.monthly",
+          "referenceName": "Tally Pro monthly",
+          "type": "RecurringSubscription",
+          "adHocOffers": [],
+          "codeOffers": [],
+          "groupNumber": 1,
+          "introductoryOffer": null,
+          "recurringSubscriptionPeriod": "P1M",
+          "subscriptionGroupID": "CFA70A37"
+        },
+        {
+          "displayPrice": "19.99",
+          "familyShareable": false,
+          "internalID": "tally-pro-annual",
+          "localizations": [
+            {
+              "description": "Finance insights and expanded limits.",
+              "displayName": "Tally Pro annual",
+              "locale": "en_US"
+            },
+            {
+              "description": "进阶财务分析与更多管理空间，三端通用。",
+              "displayName": "小记 Pro 年付",
+              "locale": "zh_CN"
+            }
+          ],
+          "productID": "local.jianshi.personal.pro.annual",
+          "referenceName": "Tally Pro annual",
+          "type": "RecurringSubscription",
+          "adHocOffers": [],
+          "codeOffers": [],
+          "groupNumber": 1,
+          "introductoryOffer": null,
+          "recurringSubscriptionPeriod": "P1Y",
+          "subscriptionGroupID": "CFA70A37"
+        }
+      ]
+    }
+  ],
+  "version": {
+    "major": 3,
+    "minor": 0
+  }
+}

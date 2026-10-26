@@ -193,6 +193,7 @@ struct FinanceRecurringEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                if source != nil { ProQuotaNotice(quota: .recurringBills, count: ledger.recurringBills.filter { !$0.hasEnded }.count) }
                 if let issue = ledger.recurringIssue(bill) {
                     Section { Label(issue, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
                 }
@@ -279,7 +280,10 @@ struct FinanceRecurringEditor: View {
         guard !didSave else { return }
         keepDraft()
         do {
-            try FinanceStore.update(context) { try currentDraft.apply(to: &$0) }
+            try FinanceStore.update(context) { data in
+                if source != nil { try PurchaseStore.shared.requireCreation(.recurringBills, count: data.recurringBills.filter { !$0.hasEnded }.count) }
+                try currentDraft.apply(to: &data)
+            }
             didSave = true
             recurringLog.notice("Recurring bill updated; rule=\(bill.rule, privacy: .public)")
             close()

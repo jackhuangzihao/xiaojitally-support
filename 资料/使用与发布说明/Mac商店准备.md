@@ -1,3 +1,89 @@
+# 发布准备 · iPhone / iPad / Mac · 2026-10-21
+
+当前本地构建及数据格式以[README](../../README.md)顶部为准。以下为当前 Pro 发布准备；文末旧版本记录仅作历史参考。2026-10-22 已按授权发布中英文网站；应用仍仅作发布准备，不提交审核、上传构建、替换应用或操作真实数据。
+
+## 网站与应用链接（2026-10-22 公开核验）
+
+| 用途 | 地址 | 本次公开核验 |
+| --- | --- | --- |
+| 中文支持 | https://jackhuangzihao.github.io/xiaojitally-support/index.html | HTTP 200，已更新并核对发布文件 |
+| 中文隐私 | https://jackhuangzihao.github.io/xiaojitally-support/privacy.html | HTTP 200，已更新 iCloud／内购说明 |
+| 英文支持 | https://jackhuangzihao.github.io/xiaojitally-support/en/index.html | HTTP 200，已发布并核对文件 |
+| 英文隐私 | https://jackhuangzihao.github.io/xiaojitally-support/en/privacy.html | HTTP 200，已发布并核对文件 |
+
+应用的 `TallyPrivacyPolicyURL` 与 `TallyPrivacyPolicyEnglishURL` 使用上述隐私地址。App 会按自身语言选择对应页面；英文缺项时保留中文配置回退。包检查只验证配置，不代替公网访问与内容检查。网站四页于 2026-10-22 发布并通过公开访问核验，网站提交为 `a131eefcb19d863b6ba10053d00855766e2fb8f9`。**网站上线仍不能代替内购配置、正式签名与真机购买验收，不视为已正式开售**。
+
+本地网站位于仓库旁 `Tally项目/网站/tally-github-pages/`，不是应用 Git 仓库的一部分。修改前另有独立 Git 备份。只发布这些静态网页和所需样式／图片，不向公开网站仓库推送应用源码、备份、测试日志、账号凭据或 `.storekit` 文件。
+
+## App Store Connect 填写值
+
+GitHub Pages 只托管网页。下面的三个真实商品要在 App Store Connect 配置；本轮已登录并只读核验，未创建商品或保存后台设置。应用与本地测试配置定义了预期的商品 ID，后台尚未创建。
+
+### 后台实查结果（2026-10-21；2026-10-22 再查协议前置条件）
+
+核对对象为 `TallyNest`（Apple ID `6817347328`，Bundle ID `local.jianshi.personal`）。iOS 和 macOS 的 1.0 版本在同一 App 记录下，均为“准备提交”。
+
+| 项目 | 实查状态／下一步 |
+| --- | --- |
+| 买断内购 | 列表为空，显示“创建”；需创建非消耗型买断商品 |
+| 月付／年付 | 尚无订阅组，显示“创建”；需创建订阅组及两个订阅 |
+| 中文隐私网址 | 已填 GitHub Pages 中文地址；公开网站已于 2026-10-22 更新 |
+| 英语（澳大利亚）隐私网址 | 显示“–”，尚未填写；英文网页现已上线，待后台补填 |
+| 隐私问卷 | 当前声明“其他诊断数据／用于 App 功能／与用户身份关联”；需与最终收集行为逐项核对后更新，不能因代码隐私清单为空就直接照填“不收集” |
+| 英语（澳大利亚）商店资料 | iOS 描述、关键词、支持网址、版权和审核联系资料为空；App 信息中的副标题仍为中文，需补英文 |
+| 审核登录说明 | iOS“需要登录”已勾选但用户名／密码为空。当前 App 不要求小记账号，核对后应取消该勾选，并在备注解释可选 iCloud 及 Apple 内购 |
+| 商务 | 表格仅有免费 App 协议“有效（新协议可用）”；页面要求先更新法律实体，再签付费 App 协议。未核验或修改银行／税务详情 |
+| 开发者协议 | 页面提示许可协议更新，需账户持有人在开发者账户自行查阅并接受；本轮未代为接受 |
+| 欧盟地区 | 交易商状态尚需完成；计划在欧盟销售时由账号持有人按实际身份完成验证 |
+
+以上均为查看结果，不表示相关问题已在后台修复。Mac 版本的各语言产品页资料本轮未逐项核验，仍需填写及复查。英文副标题可参考 `Tasks, calendar & finances`，正式提交前由你确认名称与文案。
+
+隐私问卷依据：[Apple 的数据收集定义与 Apple 服务说明](https://developer.apple.com/app-store/app-privacy-details/)。目前源码未发现第三方诊断上传 SDK，网络请求包含 ECB 汇率、私有 CloudKit 和 StoreKit。还需核对最终分发配置及你实际接收／使用的诊断数据；本轮不发布隐私回答。
+
+### 商品填写值
+
+| 项目 | 类型／期限 | 必须一致的商品 ID | 本地测试参考价（USD） |
+| --- | --- | --- | --- |
+| 月付 Pro | 自动续订订阅／1 个月 | `local.jianshi.personal.pro.monthly` | 2.99 |
+| 年付 Pro | 自动续订订阅／1 年 | `local.jianshi.personal.pro.annual` | 19.99 |
+| 买断 Pro | 非消耗型／一次购买 | `local.jianshi.personal.pro.lifetime` | 59.99 |
+
+这些价格来自当前 `.storekit` 测试文件，**不表示商店已定价**；由你核对并选择正式价格档位与销售地区。应用显示 Apple 返回的当地价格。不要照抄 `.storekit` 内部 ID 或订阅组 ID，后台会生成自己的 ID。
+
+1. 在“商务”检查付费 App 协议、税务、银行资料，确保协议有效。协议及银行税务信息由账号持有人自行确认和提交。
+2. 打开正确的 App 记录，核对 iOS 与 macOS 是同一通用购买 App 的平台版本，两端使用相同的上述商品 ID；仅使用同一个 iCloud 账号不能代替此配置。
+3. 在“订阅”中新建或核对 `Tally Pro` 订阅组。月付和年付提供相同权益，放在同组、同一服务级别（1）；分别选择 1 个月和 1 年。
+4. 在“App 内购买项目”新建或核对买断，类型选择“非消耗型”。商品 ID 与类型创建后不能任意修改，已有同 ID 商品应复用并检查。
+5. 为三个商品补齐英文和简体中文、价格、销售地区、审核截图与备注。确认所有必要字段已完成。审核截图应来自实际购买页，不用隔离测试控制页或含“Test price”的截图冒充正式展示。
+6. 家人共享本地测试配置为关闭；如计划开启，先确认权益方案并补充共享／撤销验收。月付、年付和买断都通过同一 App Store 购买账号跨平台恢复；购买买断不会自动取消已有订阅。
+7. 在应用资料填写支持／隐私网址，核对 App 隐私回答、分级、各语言描述和截图；网页上线后再核对每个链接。不要把代码里的隐私清单当成后台资料已经填写。
+8. 首次内购随应用版本一起加入同一审核提交；本轮不执行提交。正式签名、Production CloudKit、匹配的 dSYM 和最终归档需要单独验收。
+
+可用的商品本地化文案（名称最多 30 字符；以下简介均不超过内购项目的 45 字符限制）：
+
+| 商品 | 英文名称 | 中文名称 |
+| --- | --- | --- |
+| 月付 | Tally Pro monthly | 小记 Pro 月付 |
+| 年付 | Tally Pro annual | 小记 Pro 年付 |
+| 买断 | Tally Pro lifetime | 小记 Pro 买断 |
+
+- 英文简介：`Finance insights and expanded limits.`
+- 中文简介：`进阶财务分析与更多管理空间，三端通用。`
+- 订阅组显示名称可填英文 `Tally Pro`／中文 `小记 Pro`。
+- 审核备注建议：Pro 的月付、年付和买断提供相同权益；入口在设置 → Pro；包含恢复购买和管理订阅；日／周／月排期、任务关联账单、iCloud 同步免费。任务／账单总量不限。超额现有项目在到期后保留并可编辑。
+
+## 最终验收边界
+
+本地 StoreKit、模拟器和合成数据检查不等于真实商店配置已完成。网站已发布；待后台配置完成后，再安排单独授权的两端 TestFlight／真机验收：三种购买、恢复、到期、失败重试、退款／撤销，以及手机购买后同一 App Store 购买账号在 Mac 恢复（反向也检查）。
+
+真实 iCloud 双设备同步、Production 结构及 79 升级到 80 的真实账号验收仍需单独授权与可验证备份；同一云账号的设备应统一更新，不能让 79 继续读写新格式。此次不执行这些步骤。
+
+参考：[Apple 内购配置概览](https://developer.apple.com/help/app-store-connect/configure-in-app-purchase-settings/overview-for-configuring-in-app-purchases/)、[订阅级别](https://developer.apple.com/help/app-store-connect/reference/in-app-purchases-and-subscriptions/auto-renewable-subscription-information/)、[内购本地化字段](https://developer.apple.com/help/app-store-connect/reference/in-app-purchases-and-subscriptions/in-app-purchase-information/)、[首次内购提交](https://developer.apple.com/help/app-store-connect/manage-submissions-to-app-review/submit-an-in-app-purchase)。
+
+---
+
+以下为历史版本说明，不能作为当前版本已完成发布验收的依据。
+
 # 当前版本：0.2.0（36）· 2026-09-28
 
 > 整理说明（2026-10-05）：本文保留原有说明。文中构建、源码、备份等相对路径以桌面“软件/简事”工程根目录为起点；当前版本与运行方式以根目录 README.md 为准。
