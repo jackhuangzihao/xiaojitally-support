@@ -420,7 +420,7 @@ iPhone 和 Mac 的 71 均已归档、导出、上传并完成 Apple 处理，在
 
 ## 工程与版本记录
 
-- 唯一开发源：`.`。
+- 唯一开发源：本 `README.md` 所在的 Git 仓库根目录。
 - 打开此目录的 `Jianshi.xcodeproj`；整理前的 `软件/Tally` 和 `软件/简事` 不再作为开发入口。
 - 项目配套资料位于仓库上一级的 `发布资料/`、`宣传素材/`、`网站/`、`检查证据/`、`历史归档/` 和 `设计原型/`；目录说明见 `../目录说明.md`。
 - 本地 Git 已记录 `baseline-1.0-68`。应用源码发布在 [jackhuangzihao/TallyNest](https://github.com/jackhuangzihao/TallyNest)，默认分支为 `main`。支持与隐私网站继续由独立的 [xiaojitally-support](https://github.com/jackhuangzihao/xiaojitally-support) 仓库发布，以保留现有 App Store 支持和隐私网址。
