@@ -31,6 +31,14 @@
 
 基础待办与记账、任务关联账单、iCloud 同步和备份免费；Pro（月付、年付或买断）提供更多管理额度与进阶统计，同一 App Store 账号可在 iPhone、iPad 和 Mac 恢复。免费额度与订阅说明见[支持网站](https://jackhuangzihao.github.io/xiaojitally-support/)。
 
+## 测试与反馈
+
+- **申请测试**：通过[支持网站](https://jackhuangzihao.github.io/xiaojitally-support/#contact-heading)或邮件 [jackhuangzihao@gmail.com](mailto:jackhuangzihao@gmail.com) 联系，说明使用的平台和系统版本。可用构建、名额及邀请以实际回复为准。
+- **问题反馈 / Bug report**：使用[问题反馈表单](https://github.com/jackhuangzihao/xiaojitally-support/issues/new?template=bug_report.yml)，提供 App 版本、设备与系统、复现步骤和预期结果。
+- **功能建议 / Feature request**：使用[功能建议表单](https://github.com/jackhuangzihao/xiaojitally-support/issues/new?template=feature_request.yml)，说明使用场景和希望解决的问题。
+
+GitHub Issues 中的内容会公开。请先遮盖截图里的个人信息，不要上传完整账本、备份文件、购买凭证或账号信息；涉及隐私的情况请先通过邮件联系。
+
 ## 构建与维护
 
 应用使用 SwiftUI 和 SwiftData 构建。需要 macOS、Xcode 和系统 Python 3。打开 `Jianshi.xcodeproj`；日常调试使用 `Jianshi` scheme，商店构建使用 `Jianshi-AppStore`。自行签名需要自己的开发者团队和对应的应用／iCloud 标识。

@@ -1,0 +1,58 @@
+name: 问题反馈 / Bug report
+description: 报告可以复现的问题，帮助定位和修复。Report a reproducible problem.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！这里是公开页面，请勿提交完整账本、备份、购买凭证或账号信息。截图请先遮盖个人信息；涉及隐私时，先通过 [支持网站](https://jackhuangzihao.github.io/xiaojitally-support/#contact-heading) 联系开发者。
+        This issue is public. Remove personal information from screenshots and do not attach financial backups, receipts or account details.
+  - type: input
+    id: version
+    attributes:
+      label: App 版本 / App version
+      placeholder: "例如：1.0（81）"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台 / Platform
+      options:
+        - iPhone
+        - iPad
+        - Mac
+        - 多设备 / Multiple devices
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 设备与系统 / Device and OS
+      description: 填写设备型号和 iOS、iPadOS 或 macOS 版本，不需要序列号。
+      placeholder: Device model and OS version; no serial number needed.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 尽量使用示例任务或示例账单描述操作。
+      placeholder: |
+        1. 打开…… / Open…
+        2. 点击…… / Select…
+        3. 出现…… / Observe…
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 实际与预期结果 / Actual and expected behavior
+      description: 分别说明实际发生了什么，以及你期望的结果。
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 补充信息 / Additional information
+      description: 可选。仅提供已脱敏的截图或相关错误文字，避免粘贴完整日志。

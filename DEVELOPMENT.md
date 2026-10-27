@@ -17,15 +17,58 @@
 
 GitHub Pages 从 `main` 分支根目录发布，保留 `.nojekyll`。推送此分支会触发网站发布；网站修改应在本仓库完成，不再编辑上一级的历史网站副本。现有中英文支持和隐私网址保持不变。网站发布不会上传或更新 App Store 的应用构建。
 
+仓库分享封面保存在 [social-preview.jpg](assets/readme/social-preview.jpg)（1280 × 640）。更换后还需在 GitHub 仓库 `Settings → General → Social preview` 上传该图；只推送图片文件不会自动更新分享封面。
+
 ## 构建与运行
 
-需要 macOS、Xcode（含 iOS SDK 与模拟器）和系统 Python 3。打开克隆目录中的 `Jianshi.xcodeproj`，从下列 scheme 选择目标。
+已验证的工具环境为 **Xcode 26.6（17F113）**、macOS 和系统 Python 3；工程使用 Swift 5 语言模式。部署目标为 iOS / iPadOS 17、macOS 14。完整检查还需要安装对应的 iPhone 模拟器运行时。
+
+### 获取与打开工程
+
+```sh
+git clone https://github.com/jackhuangzihao/xiaojitally-support.git
+cd xiaojitally-support
+open Jianshi.xcodeproj
+```
+
+Xcode 的 `Settings → Locations → Command Line Tools` 应选择正在使用的 Xcode。可用 `xcodebuild -version` 核对；首次运行 Xcode 时，先由使用者完成必要的系统安装和许可步骤。
 
 自行签名运行前，需使用自己的开发者团队，并对应配置应用标识、App Group 和 iCloud 容器；仓库中的原项目标识不授予作者账号或云容器的访问权。StoreKit 本地测试配置位于 `Checks/StoreKit/TallyPro.storekit`，不会自动创建或配置 App Store Connect 商品。仓库不包含开发者私钥、签名证书或商店账号凭据。
 
 - 本地调试：选择 `Jianshi` scheme 和目标设备。
 - App Store 构建：选择 `Jianshi-AppStore` scheme；Mac 的该 scheme 以非调试方式运行，归档使用 AppStore 配置。
 - 日常自检无需分发签名、App Store Connect 登录或云端数据。不要为消除警告关闭并发检查。
+
+### 先验证源码能否编译（无需分发签名）
+
+以下命令与统一检查中的 Mac 编译参数一致，使用临时目录和独立检查身份，只编译、不启动应用：
+
+```sh
+tally_build_dir="$(mktemp -d "${TMPDIR:-/tmp}/tally-source-build.XXXXXX")"
+xcodebuild -project Jianshi.xcodeproj \
+  -scheme Jianshi-AppStore -configuration AppStore \
+  -destination 'generic/platform=macOS' \
+  -derivedDataPath "$tally_build_dir" \
+  CODE_SIGNING_ALLOWED=NO \
+  PRODUCT_BUNDLE_IDENTIFIER=local.jianshi.sandboxcheck.readme \
+  SWIFT_STRICT_CONCURRENCY=complete ONLY_ACTIVE_ARCH=NO build
+```
+
+看到 `BUILD SUCCEEDED` 表示源码编译通过。该产物用于检查，不能直接当成正式安装包或商店版运行；应用内自检请使用下方的统一隔离检查入口。
+
+### 使用自己的开发者身份签名运行
+
+在自己的克隆或 fork 中修改配置，使用新标识与官方 App 区分。以下是需要保持一致的位置；不要把团队标识误当成私钥或使用作者的云容器测试。
+
+| 配置 | Xcode / 文件位置 | 需要核对的内容 |
+| --- | --- | --- |
+| 开发者团队与应用标识 | `Jianshi` target 的 `Signing & Capabilities`；[project.pbxproj](Jianshi.xcodeproj/project.pbxproj) | 各构建配置的 `DEVELOPMENT_TEAM`、`PRODUCT_BUNDLE_IDENTIFIER` 使用自己的团队与唯一标识。 |
+| iCloud 权限 | [JianshiCloud.entitlements](JianshiCloud.entitlements)、[JianshiMac.entitlements](JianshiMac.entitlements)、[JianshiStore.entitlements](JianshiStore.entitlements) | `com.apple.developer.icloud-container-identifiers` 使用自己配置的 CloudKit 容器；核对目标平台实际使用的权限文件。 |
+| 运行时云容器 | [CloudSync.swift](Sources/Storage/Sync/CloudSync.swift) 的 `CloudSync.containerID` | 必须与上述 iCloud 权限里的容器标识一致；只改签名页不会同步修改这里。 |
+| App Group 与小组件 | [JianshiMac.entitlements](JianshiMac.entitlements)、[Widget.entitlements](Widget/Widget.entitlements)、[WidgetShared.swift](Sources/Shared/WidgetShared.swift) 的 `WidgetSnapshot.group` | 如使用相关能力，组标识必须属于自己的团队并保持一致。当前小组件未启用，单独改组标识不会启用小组件。 |
+| 应用内购买 | [StoreKit 本地配置](Checks/StoreKit/TallyPro.storekit)、[ProAccess.swift](Sources/Purchases/ProAccess.swift) | 本地配置只用于 StoreKit 测试；正式购买还需自己的 App Store Connect 商品、签名及匹配商品标识。 |
+
+完成自己的签名与能力配置后，再选 `Jianshi` scheme 和自己的测试设备运行，并只使用合成示例数据。首次启动保持 iCloud 同步关闭；真实账号同步需要另外核对自己的容器与数据备份。正式发布按本文“发布检查”执行。
 
 ## 一次运行完整检查
 
